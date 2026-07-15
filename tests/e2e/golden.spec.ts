@@ -70,6 +70,26 @@ test('mapped triggers and pulses render deterministically (mapping layer)', asyn
   await expect(page.locator('canvas')).toHaveScreenshot('lissajous-mapped-f120.png')
 })
 
+test('recorded session replays to identical pixels (session layer)', async ({ page }) => {
+  await boot(page, 42)
+  await page.evaluate(() => {
+    window.__viz!.startRecording()
+    window.__viz!.queueEvent({ type: 'key', key: '4', edge: 'down' })
+    window.__viz!.renderFrames(30)
+    window.__viz!.queueEvent({ type: 'trigger', index: 1 })
+    window.__viz!.queueEvent({ type: 'key', key: ' ', edge: 'down' })
+    window.__viz!.renderFrames(90)
+  })
+  await page.evaluate(() => {
+    const doc = window.__viz!.stopRecording()
+    window.__viz!.loadSession(doc)
+    window.__viz!.renderFrames(120)
+  })
+  // Same golden as the mapping-layer test above: proves replaying the recorded
+  // session reproduces the original live performance pixel-for-pixel.
+  await expect(page.locator('canvas')).toHaveScreenshot('lissajous-mapped-f120.png')
+})
+
 test('beat-driven expressions render deterministically (audio events)', async ({ page }) => {
   await boot(page, 42)
   await page.evaluate(() => {

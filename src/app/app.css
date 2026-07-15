@@ -211,6 +211,45 @@ body {
   line-height: 1.5;
 }
 
+.session-controls {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.session-button {
+  padding: 10px 12px;
+  border: 1px solid #3a3a4a;
+  border-radius: 6px;
+  background: #14141c;
+  color: #cfcfe0;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.session-button:hover:not(:disabled) {
+  border-color: #5eead4;
+  color: #5eead4;
+}
+
+.session-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.session-file {
+  flex: 1;
+  margin-bottom: 0;
+  font-size: 13px;
+}
+
+.session-status {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #9a9ab0;
+}
+
 @media (max-width: 720px) {
   .app {
     flex-direction: column;

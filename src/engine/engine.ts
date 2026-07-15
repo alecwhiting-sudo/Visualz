@@ -8,6 +8,10 @@ import { DslState } from '../dsl/state'
 import type { SceneRuntime } from '../scenes/types'
 import { MappingRuntime } from '../mapping/runtime'
 import { DEFAULT_MAPPINGS } from '../mapping/defaults'
+import type { SourceEvent } from '../mapping/types'
+import { SessionRecorder } from '../session/recorder'
+import { SessionPlayer, type PlayerTarget } from '../session/player'
+import type { SessionDoc } from '../session/types'
 
 interface Binding {
   src: string
@@ -44,6 +48,23 @@ export class Engine {
   private bindings = new Map<string, Binding>()
   private inputSignals = new Map<string, number>()
 
+  private recorder: SessionRecorder | null = null
+  private player: SessionPlayer | null = null
+  /**
+   * Routes replayed events into the live pipeline while bypassing recording —
+   * queueInput goes straight to `mappings.queue` (not `this.queueInput`) so a
+   * replayed session never re-records itself; setBinding/clearBinding reuse the
+   * engine methods (they need DSL compilation) but that's safe because replay
+   * only ever runs with `recorder` null.
+   */
+  private readonly playerTarget: PlayerTarget = {
+    queueInput: (e) => this.mappings.queue(e),
+    setInputSignal: (name, value) => this.inputSignals.set(name, value),
+    setParam: (name, value) => this.scene.setParam(name, value),
+    setBinding: (param, src) => this.setBinding(param, src),
+    clearBinding: (param) => this.clearBinding(param),
+  }
+
   constructor(canvas: HTMLCanvasElement, scene: SceneRuntime, opts: EngineOptions) {
     this.transport = new Transport(opts.mode, opts.fps ?? 60)
     this.gpu = new Gpu(canvas, { width: opts.width, height: opts.height })
@@ -78,12 +99,26 @@ export class Engine {
   renderFrames(n: number): void {
     if (this.transport.mode !== 'render') throw new Error('renderFrames() is render-mode only')
     for (let i = 0; i < n; i++) {
+      if (this.player) this.player.applyUpTo(this.transport.frame, this.playerTarget)
       const frame = this.transport.step()
       this.updateAndRender(frame.time, frame)
     }
   }
 
+  /**
+   * The sanctioned entry point for key/trigger input (ARCHITECTURE.md §3.4):
+   * records the event (if a recording is armed) and forwards it to the mapping
+   * layer. Frontends (keyboard, touch pads) and the test harness call this
+   * rather than `mappings.queue` directly, so every live input is captured for
+   * session replay.
+   */
+  queueInput(e: SourceEvent): void {
+    if (this.recorder) this.recorder.recordInput(this.transport.frame, e)
+    this.mappings.queue(e)
+  }
+
   setParam(name: string, value: number): void {
+    if (this.recorder) this.recorder.recordParam(this.transport.frame, name, value)
     this.scene.setParam(name, value)
   }
 
@@ -93,6 +128,7 @@ export class Engine {
    * numbers for expressions/scenes to read, published before bindings each frame.
    */
   setInputSignal(name: string, value: number): void {
+    if (this.recorder) this.recorder.recordInputSignal(this.transport.frame, name, value)
     this.inputSignals.set(name, value)
   }
 
@@ -103,10 +139,12 @@ export class Engine {
    */
   setBinding(param: string, src: string): void {
     const compiled = compile(src, `${this.scene.meta.id}.${param}`)
+    if (this.recorder) this.recorder.recordBinding(this.transport.frame, param, src)
     this.bindings.set(param, { src, compiled, state: new DslState() })
   }
 
   clearBinding(param: string): void {
+    if (this.recorder) this.recorder.recordBinding(this.transport.frame, param, null)
     this.bindings.delete(param)
   }
 
@@ -114,7 +152,79 @@ export class Engine {
     return this.bindings.get(param)?.src
   }
 
+  /** True while a session recording is in progress (`startRecording()` ran, `stopRecording()` hasn't). */
+  get isRecording(): boolean {
+    return this.recorder !== null
+  }
+
+  /** Snapshots current engine state and starts recording every input/param/binding change. */
+  startRecording(): void {
+    const params: Record<string, number> = {}
+    for (const p of this.scene.params) params[p.name] = this.scene.getParam(p.name)
+    const bindings: Record<string, string> = {}
+    for (const [param, b] of this.bindings) bindings[param] = b.src
+    this.recorder = new SessionRecorder({
+      seed: this.seed,
+      fps: this.transport.fps,
+      sceneId: this.scene.meta.id,
+      params,
+      bindings,
+    })
+  }
+
+  /** Stops recording and returns the finished session doc, or null if nothing was recording. */
+  stopRecording(): SessionDoc | null {
+    if (!this.recorder) return null
+    const doc = this.recorder.finish(this.transport.frame)
+    this.recorder = null
+    return doc
+  }
+
+  /**
+   * Deterministic replay (ARCHITECTURE.md §3.5): resets transport, bus, mapping
+   * state, input signals, and bindings to cold-start, re-initializes the scene
+   * with the session's seed and initial params/bindings, then arms a player that
+   * feeds the recorded event log back through the pipeline as frames advance
+   * (see `renderFrames`/`tick`).
+   */
+  loadSession(doc: SessionDoc): void {
+    this.transport.reset()
+    this.bus.clear()
+    this.mappings.reset()
+    this.events.reset()
+    this.inputSignals.clear()
+    this.bindings.clear()
+
+    this.scene.dispose()
+    this.scene.init(this.gpu, doc.seed)
+    for (const [name, value] of Object.entries(doc.scene.params)) {
+      this.scene.setParam(name, value)
+    }
+    for (const [param, src] of Object.entries(doc.bindings)) {
+      this.setBinding(param, src)
+    }
+
+    this.player = new SessionPlayer(doc)
+  }
+
+  /** Disarms the active replay player (no-op if none is armed). */
+  clearSession(): void {
+    this.player = null
+  }
+
+  /** True once an armed player has applied every recorded event (false if none is armed). */
+  get replayDone(): boolean {
+    return this.player !== null && this.player.done
+  }
+
+  /** Stops the loop and releases scene GPU resources — call before discarding an engine. */
+  dispose(): void {
+    this.stop()
+    this.scene.dispose()
+  }
+
   private tick(time: number): void {
+    if (this.player) this.player.applyUpTo(this.transport.frame, this.playerTarget)
     const frame = this.transport.advanceTo(time)
     this.updateAndRender(time, frame)
   }
