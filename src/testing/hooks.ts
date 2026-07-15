@@ -162,7 +162,21 @@ export function bootTestMode(root: HTMLElement): void {
   canvas.style.imageRendering = 'pixelated'
   root.appendChild(canvas)
 
-  const engine = new Engine(canvas, sceneEntry.create(), {
+  const scene = sceneEntry.create()
+
+  // Test-mode-only sim-grid override (docs/GRAYSCOTT.md §9 accepted flag #2):
+  // ?grid=128 bakes a smaller Gray-Scott ping-pong texture than the 256²
+  // ship default, keeping golden-test runtime bounded on SwiftShader. Not
+  // part of SceneRuntime — only scenes that specifically expose a
+  // `setGridSize` (currently just grayscott) respond; every other scene
+  // ignores an unknown/absent ?grid=. MUST run before `Engine`'s constructor
+  // calls `scene.init()` — there is no resize-in-place path.
+  const grid = params.get('grid')
+  if (grid !== null && 'setGridSize' in scene && typeof (scene as { setGridSize?: unknown }).setGridSize === 'function') {
+    ;(scene as { setGridSize: (n: number) => void }).setGridSize(Number(grid))
+  }
+
+  const engine = new Engine(canvas, scene, {
     mode: 'render',
     seed,
     width,

@@ -21,7 +21,7 @@ export interface ParamSchema {
 export interface SceneMeta {
   id: string
   name: string
-  family: 'geometry' | 'particles'
+  family: 'geometry' | 'particles' | 'simulation'
 }
 
 export interface ShaderStage {

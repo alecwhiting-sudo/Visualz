@@ -3,6 +3,7 @@ import { FlowFieldScene } from './builtin/flowfield'
 import { LorenzScene } from './builtin/lorenz'
 import { JuliaScene } from './builtin/julia'
 import { KaleidoScene } from './builtin/kaleido'
+import { GrayScottScene } from './builtin/grayscott'
 import type { SceneRuntime } from './types'
 
 /**
@@ -19,4 +20,5 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
   lorenz: { name: 'Lorenz Attractor', create: () => new LorenzScene() },
   julia: { name: 'Julia Warp', create: () => new JuliaScene() },
   kaleido: { name: 'Kaleidoscope', create: () => new KaleidoScene() },
+  grayscott: { name: 'Reaction-Diffusion', create: () => new GrayScottScene() },
 }
