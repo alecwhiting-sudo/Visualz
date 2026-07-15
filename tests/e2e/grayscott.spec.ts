@@ -155,7 +155,16 @@ test('onset droplet injection diverges the field from the unpulsed baseline', as
 // least 300 frames (4800 substeps).
 test('silence does not kill the pattern at f96 or f300', async ({ page }) => {
   await boot(page)
-  await page.evaluate(() => window.__viz!.renderFrames(96))
+  // TRUE silence: demo signals publish nonzero bass/onset by default, which
+  // would feed-modulate the sim and mask a silence-death regression (review
+  // finding). Input signals publish after demo signals each frame, so pinning
+  // them to 0 here really zeroes what the scene reads.
+  await page.evaluate(() => {
+    for (const name of ['rms', 'bass', 'mid', 'high', 'onset', 'beat', 'onsetStrength']) {
+      window.__viz!.setInputSignal(name, 0)
+    }
+    window.__viz!.renderFrames(96)
+  })
   expect(await litPixelCount(page)).toBeGreaterThan(2000)
   await page.evaluate(() => window.__viz!.renderFrames(204)) // now at frame 300
   expect(await page.evaluate(() => window.__viz!.frame())).toBe(300)
