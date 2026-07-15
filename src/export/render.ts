@@ -1,5 +1,5 @@
 import { Engine } from '../engine/engine'
-import { LissajousScene } from '../scenes/builtin/lissajous'
+import { SCENES } from '../scenes/registry'
 import { pixelHash } from '../gpu/readback'
 import type { SessionDoc } from '../session/types'
 import { createVideoSink, type EncodedResult, type ExportAudio, type ExportVideoOpts, type VideoSink } from './encode'
@@ -26,8 +26,11 @@ export async function renderSessionToVideo(
   opts: ExportVideoOpts & { collectHashes?: boolean; audio?: ExportAudio },
   onProgress?: (p: ExportProgress) => void,
 ): Promise<EncodedResult & { frameHashes?: string[] }> {
+  const sceneEntry = SCENES[doc.scene.id]
+  if (!sceneEntry) throw new Error(`unknown scene ${doc.scene.id}`)
+
   const canvas = new OffscreenCanvas(opts.width, opts.height)
-  const engine = new Engine(canvas, new LissajousScene(), {
+  const engine = new Engine(canvas, sceneEntry.create(), {
     mode: 'render',
     seed: doc.seed,
     width: opts.width,

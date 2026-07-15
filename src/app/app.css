@@ -204,6 +204,24 @@ body {
   pointer-events: none;
 }
 
+.scene-select {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.scene-select select {
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: #14141c;
+  border: 1px solid #3a3a4a;
+  border-radius: 6px;
+  color: #cfcfe0;
+  font: inherit;
+  font-size: 13px;
+}
+
 .keyboard-hint {
   margin-top: 10px;
   font-size: 11px;

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Engine } from '../engine/engine'
-import { LissajousScene } from '../scenes/builtin/lissajous'
+import { SCENES } from '../scenes/registry'
 import { attachKeyboard } from '../mapping/keyboard'
 import { serializeSession, parseSession } from '../session/serialize'
 import type { SessionDoc } from '../session/types'
@@ -11,10 +11,15 @@ import './app.css'
 const SIGNAL_NAMES = ['rms', 'bass', 'mid', 'high', 'beat', 'onset']
 const KEYBOARD_HINT = '1-6 freqX · q/w/e freqY · space pulse drift · f/g flash/fade trail'
 
+const DEFAULT_SCENE_ID = 'lissajous'
+
 /** Creates and starts the normal live-mode engine on a canvas (factored out so
- * it can be re-invoked after a session replay finishes). */
-function createLiveEngine(canvas: HTMLCanvasElement): Engine {
-  const e = new Engine(canvas, new LissajousScene(), {
+ * it can be re-invoked after a session replay finishes, or after switching
+ * scenes from the panel dropdown). */
+function createLiveEngine(canvas: HTMLCanvasElement, sceneId: string): Engine {
+  const entry = SCENES[sceneId]
+  if (!entry) throw new Error(`unknown scene ${sceneId}`)
+  const e = new Engine(canvas, entry.create(), {
     mode: 'live',
     seed: 42,
     width: 960,
@@ -45,6 +50,7 @@ export function App() {
   const detachKeyboardRef = useRef<(() => void) | null>(null)
   const meterIntervalRef = useRef<number | null>(null)
   const [engine, setEngine] = useState<Engine | null>(null)
+  const [sceneId, setSceneId] = useState(DEFAULT_SCENE_ID)
   const [levels, setLevels] = useState<Record<string, number>>({})
   const [trackName, setTrackName] = useState<string | null>(null)
   const [recording, setRecording] = useState(false)
@@ -72,13 +78,30 @@ export function App() {
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || engineRef.current) return
-    attachLiveEngine(createLiveEngine(canvas))
+    attachLiveEngine(createLiveEngine(canvas, sceneId))
     return () => {
       detachLiveEngine()
       engineRef.current?.dispose()
       engineRef.current = null
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only; scene switches go through onSceneChange
   }, [])
+
+  /** Scene dropdown handler: tears down the live engine and rebuilds it against
+   * the newly chosen scene (a fresh instance — SceneRuntime has no scene-swap
+   * hook, so this is a full dispose/recreate, same shape as onLoadSession's
+   * live/replay handoff). */
+  const onSceneChange = (id: string) => {
+    const canvas = canvasRef.current
+    if (!canvas || !SCENES[id]) return
+    detachLiveEngine()
+    engineRef.current?.dispose()
+    engineRef.current = null
+    setEngine(null)
+    setRecording(false)
+    setSceneId(id)
+    attachLiveEngine(createLiveEngine(canvas, id))
+  }
 
   const onFile = async (file: File | undefined) => {
     if (!file || !engineRef.current) return
@@ -128,17 +151,27 @@ export function App() {
     // Any failure from here on (an uncompilable binding in a hand-edited session
     // throws DslError from loadSession or mid-replay from a binding event) must
     // land back in a working live engine, never a dead canvas.
+    // The scene selected before this replay attempt — restoreLive() falls back
+    // to it if the session's scene id turns out to be invalid.
+    const previousSceneId = sceneId
+
     const restoreLive = () => {
       engineRef.current?.dispose()
       engineRef.current = null
       setReplay(null)
       const liveCanvas = canvasRef.current
-      if (liveCanvas) attachLiveEngine(createLiveEngine(liveCanvas))
+      // Read directly rather than from the `sceneId` state closure: restoreLive
+      // can fire synchronously (bad scene id) before a queued setSceneId below
+      // has re-rendered this closure with the new value.
+      const restoreSceneId = SCENES[doc.scene.id] ? doc.scene.id : previousSceneId
+      if (liveCanvas) attachLiveEngine(createLiveEngine(liveCanvas, restoreSceneId))
     }
 
     let replayEngine: Engine
     try {
-      replayEngine = new Engine(canvas, new LissajousScene(), {
+      const entry = SCENES[doc.scene.id]
+      if (!entry) throw new Error(`unknown scene ${doc.scene.id}`)
+      replayEngine = new Engine(canvas, entry.create(), {
         mode: 'render',
         seed: doc.seed,
         width: 960,
@@ -147,6 +180,9 @@ export function App() {
       })
       engineRef.current = replayEngine
       replayEngine.loadSession(doc)
+      // So the dropdown reflects reality once the replay finishes (rather than
+      // snapping back to whatever was selected before Load & replay was clicked).
+      setSceneId(doc.scene.id)
     } catch (err) {
       setSessionError(err instanceof Error ? err.message : String(err))
       restoreLive()
@@ -302,6 +338,20 @@ export function App() {
 
         {engine && (
           <section>
+            <label className="scene-select">
+              Scene
+              <select
+                value={sceneId}
+                disabled={replay !== null || exporting !== null}
+                onChange={(ev) => onSceneChange(ev.target.value)}
+              >
+                {Object.entries(SCENES).map(([id, entry]) => (
+                  <option key={id} value={id}>
+                    {entry.name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <h2>{engine.scene.meta.name}</h2>
             {engine.scene.params.map((p) => (
               <Knob key={p.name} engine={engine} schema={p} />

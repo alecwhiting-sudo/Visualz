@@ -217,6 +217,9 @@ export class Engine {
    * (see `renderFrames`/`tick`).
    */
   loadSession(doc: SessionDoc): void {
+    if (doc.scene.id !== this.scene.meta.id) {
+      throw new Error(`Session scene "${doc.scene.id}" does not match constructed scene "${this.scene.meta.id}"`)
+    }
     this.audio.stop() // demo-signal replay must never read a live analyser
     this.recorder = null // replay must not re-record itself (playerTarget relies on this)
     this.transport.reset()

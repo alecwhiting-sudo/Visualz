@@ -1,5 +1,5 @@
 import { Engine } from '../engine/engine'
-import { LissajousScene } from '../scenes/builtin/lissajous'
+import { SCENES } from '../scenes/registry'
 import type { SourceEvent } from '../mapping/types'
 import type { SessionDoc } from '../session/types'
 import { pixelHash } from '../gpu/readback'
@@ -139,18 +139,32 @@ export function bootTestMode(root: HTMLElement): void {
   // aspect-awareness hard rule in CLAUDE.md needs real snapshot coverage.
   const width = Number(params.get('w') ?? '640')
   const height = Number(params.get('h') ?? '360')
+  // Scene selector (docs/PARTICLES.md's "accepted flags" #1): defaults to
+  // lissajous for every pre-existing test. Unknown ids fail loudly rather than
+  // silently falling back, so a typo'd golden test doesn't boot the wrong scene.
+  const sceneId = params.get('scene') ?? 'lissajous'
+  const sceneEntry = SCENES[sceneId]
+  if (!sceneEntry) throw new Error(`unknown scene ${sceneId}`)
 
   const canvas = document.createElement('canvas')
   canvas.style.imageRendering = 'pixelated'
   root.appendChild(canvas)
 
-  const engine = new Engine(canvas, new LissajousScene(), {
+  const engine = new Engine(canvas, sceneEntry.create(), {
     mode: 'render',
     seed,
     width,
     height,
     fps: 30,
   })
+
+  // Test-mode-only particle-count override (docs/PARTICLES.md §9): golden tests
+  // for the particles family bake a smaller ladder rung than the 65536 default
+  // to keep SwiftShader CI runtime bounded. Harmless on scenes without a
+  // `count` param (setParam just stores an unused value). Applied before the
+  // first renderFrames() call, so frame 1 already renders at the requested count.
+  const count = params.get('count')
+  if (count !== null) engine.setParam('count', Number(count))
 
   window.__viz = {
     renderFrames: (n) => engine.renderFrames(n),
