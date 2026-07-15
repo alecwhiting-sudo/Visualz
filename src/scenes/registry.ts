@@ -4,6 +4,8 @@ import { JuliaScene } from './builtin/julia'
 import { MandelDiveScene } from './builtin/mandeldive'
 import { KaleidoScene } from './builtin/kaleido'
 import { GrayScottScene } from './builtin/grayscott'
+import { MorphogenScene } from './builtin/morphogen'
+import { TunnelScene } from './builtin/tunnel'
 import { CompositeScene, type CompositeChild } from './composite'
 import type { SceneRuntime } from './types'
 
@@ -14,6 +16,10 @@ import type { SceneRuntime } from './types'
 const juliaChild: CompositeChild = { id: 'julia', label: 'Julia Warp', create: () => new JuliaScene() }
 const flowfieldChild: CompositeChild = { id: 'flowfield', label: 'Flow Field', create: () => new FlowFieldScene() }
 const grayscottChild: CompositeChild = { id: 'grayscott', label: 'Reaction-Diffusion', create: () => new GrayScottScene() }
+const mandelDiveChild: CompositeChild = { id: 'mandeldive', label: 'Mandel Dive', create: () => new MandelDiveScene() }
+const kaleidoChild: CompositeChild = { id: 'kaleido', label: 'Kaleidoscope', create: () => new KaleidoScene() }
+const tunnelChild: CompositeChild = { id: 'tunnel', label: 'Audio Tunnel', create: () => new TunnelScene() }
+const morphChild: CompositeChild = { id: 'morph', label: 'Morphogen', create: () => new MorphogenScene() }
 
 /**
  * The scene registry: every scene id a session/URL/UI can reference, and how to
@@ -35,6 +41,8 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
   mandeldive: { name: 'Mandel Dive', create: () => new MandelDiveScene() },
   kaleido: { name: 'Kaleidoscope', create: () => new KaleidoScene() },
   grayscott: { name: 'Reaction-Diffusion', create: () => new GrayScottScene() },
+  morph: { name: 'Morphogen', create: () => new MorphogenScene() },
+  tunnel: { name: 'Audio Tunnel', create: () => new TunnelScene() },
   'blend-julia-flow': {
     name: 'Julia × Flow field',
     create: () =>
@@ -51,6 +59,24 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
         { id: 'blend-rd-flow', name: 'Reaction × Flow field', family: 'simulation' },
         grayscottChild,
         flowfieldChild,
+      ),
+  },
+  'blend-mandel-kaleido': {
+    name: 'Mandel × Kaleido',
+    create: () =>
+      new CompositeScene(
+        { id: 'blend-mandel-kaleido', name: 'Mandel × Kaleido', family: 'geometry' },
+        mandelDiveChild,
+        kaleidoChild,
+      ),
+  },
+  'blend-tunnel-morph': {
+    name: 'Tunnel × Morphogen',
+    create: () =>
+      new CompositeScene(
+        { id: 'blend-tunnel-morph', name: 'Tunnel × Morphogen', family: 'geometry' },
+        tunnelChild,
+        morphChild,
       ),
   },
 }
