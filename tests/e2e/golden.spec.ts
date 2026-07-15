@@ -69,3 +69,15 @@ test('mapped triggers and pulses render deterministically (mapping layer)', asyn
   })
   await expect(page.locator('canvas')).toHaveScreenshot('lissajous-mapped-f120.png')
 })
+
+test('beat-driven expressions render deterministically (audio events)', async ({ page }) => {
+  await boot(page, 42)
+  await page.evaluate(() => {
+    // Bindings read the detector's demo-mode onset/beat/beatPhase signals like any
+    // other signal (engine.ts publishes them before the bindings loop runs).
+    window.__viz!.setBinding('trail', '0.05 + 0.25 * env(0.005, 0.15, beat)')
+    window.__viz!.setBinding('freqY', '2 + 2*step(0.5, beatPhase)')
+    window.__viz!.renderFrames(120)
+  })
+  await expect(page.locator('canvas')).toHaveScreenshot('lissajous-beat-f120.png')
+})

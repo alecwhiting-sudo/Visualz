@@ -2,6 +2,7 @@ import { Transport, type TransportMode } from '../core/transport'
 import { SignalBus } from '../core/signals'
 import { Gpu } from '../gpu/context'
 import { AudioEngine, publishDemoSignals } from '../audio/engine'
+import { AudioEventDetector } from '../audio/events'
 import { compile, type CompiledExpr } from '../dsl/compile'
 import { DslState } from '../dsl/state'
 import type { SceneRuntime } from '../scenes/types'
@@ -33,6 +34,7 @@ export class Engine {
   readonly bus = new SignalBus()
   readonly gpu: Gpu
   readonly audio = new AudioEngine()
+  readonly events = new AudioEventDetector()
   readonly scene: SceneRuntime
   readonly seed: number
   readonly mappings: MappingRuntime
@@ -123,6 +125,11 @@ export class Engine {
     } else {
       publishDemoSignals(this.bus, time)
     }
+    const ev = this.events.update(frame.dt, frame.time, this.bus, !this.audio.isPlaying)
+    this.bus.set('onset', ev.onset ? 1 : 0)
+    this.bus.set('beat', ev.beat ? 1 : 0)
+    this.bus.set('beatPhase', ev.beatPhase)
+    this.bus.set('onsetStrength', ev.onsetStrength)
     for (const [name, value] of this.inputSignals) {
       this.bus.set(name, value)
     }

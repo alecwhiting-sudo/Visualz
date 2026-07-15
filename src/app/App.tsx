@@ -4,7 +4,7 @@ import { LissajousScene } from '../scenes/builtin/lissajous'
 import { attachKeyboard } from '../mapping/keyboard'
 import './app.css'
 
-const SIGNAL_NAMES = ['rms', 'bass', 'mid', 'high']
+const SIGNAL_NAMES = ['rms', 'bass', 'mid', 'high', 'beat', 'onset']
 const KEYBOARD_HINT = '1-6 freqX · q/w/e freqY · space pulse drift · f/g flash/fade trail'
 
 export function App() {
