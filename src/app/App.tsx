@@ -57,6 +57,10 @@ export function App() {
   const [replay, setReplay] = useState<{ frame: number; total: number } | null>(null)
   const [exporting, setExporting] = useState<{ frame: number; total: number } | null>(null)
   const [sessionError, setSessionError] = useState<string | null>(null)
+  // The most recently recorded session, kept in memory so Replay/Export/Save work
+  // directly after Stop — no round-trip through the file system (essential on
+  // iPhone, where re-picking a just-saved file is clumsy).
+  const [lastSession, setLastSession] = useState<SessionDoc | null>(null)
 
   /** Wires up live-only side effects (signal meter polling, keyboard) for an engine. */
   const attachLiveEngine = (e: Engine) => {
@@ -119,7 +123,7 @@ export function App() {
     if (e.isRecording) {
       const doc = e.stopRecording()
       setRecording(false)
-      if (doc) downloadSession(doc)
+      if (doc) setLastSession(doc)
     } else {
       e.startRecording()
       setRecording(true)
@@ -136,7 +140,11 @@ export function App() {
       setSessionError(err instanceof Error ? err.message : String(err))
       return
     }
+    replaySession(doc)
+  }
 
+  const replaySession = (doc: SessionDoc) => {
+    setSessionError(null)
     const canvas = canvasRef.current
     if (!canvas) return
 
@@ -222,7 +230,11 @@ export function App() {
       setSessionError(err instanceof Error ? err.message : String(err))
       return
     }
+    await exportVideo(doc)
+  }
 
+  const exportVideo = async (doc: SessionDoc) => {
+    setSessionError(null)
     setExporting({ frame: 0, total: doc.durationFrames })
     try {
       // Carry the currently-loaded track's audio into the export, if any — a file
@@ -254,7 +266,7 @@ export function App() {
         <label className="file">
           <input
             type="file"
-            accept="audio/*"
+            accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.flac"
             onChange={(ev) => onFile(ev.target.files?.[0])}
           />
           {trackName ?? 'Load audio file (demo signals until then)'}
@@ -286,7 +298,7 @@ export function App() {
             <label className="file session-file">
               <input
                 type="file"
-                accept="application/json"
+                accept="application/json,.json"
                 disabled={replay !== null || exporting !== null}
                 onChange={(ev) => {
                   const file = ev.target.files?.[0]
@@ -294,14 +306,12 @@ export function App() {
                   onLoadSession(file)
                 }}
               />
-              Load & replay
+              Replay from file…
             </label>
-          </div>
-          <div className="session-controls">
             <label className="file session-file">
               <input
                 type="file"
-                accept="application/json"
+                accept="application/json,.json"
                 disabled={replay !== null || exporting !== null}
                 onChange={(ev) => {
                   const file = ev.target.files?.[0]
@@ -309,9 +319,37 @@ export function App() {
                   onExportVideo(file)
                 }}
               />
-              Export video
+              Export from file…
             </label>
           </div>
+          {lastSession && (
+            <div className="session-controls">
+              <button
+                type="button"
+                className="session-button"
+                disabled={replay !== null || exporting !== null}
+                onClick={() => replaySession(lastSession)}
+              >
+                Replay
+              </button>
+              <button
+                type="button"
+                className="session-button"
+                disabled={replay !== null || exporting !== null}
+                onClick={() => exportVideo(lastSession)}
+              >
+                Export video
+              </button>
+              <button
+                type="button"
+                className="session-button"
+                disabled={replay !== null || exporting !== null}
+                onClick={() => downloadSession(lastSession)}
+              >
+                Save
+              </button>
+            </div>
+          )}
           {replay && (
             <p className="session-status">
               replaying… frame {replay.frame}/{replay.total}
