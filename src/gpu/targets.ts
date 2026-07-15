@@ -17,6 +17,41 @@ export interface FloatCaps {
   reason?: string
 }
 
+/** A render destination a scene draws into: the canvas default framebuffer or
+ *  an offscreen texture target. Scenes derive viewport and aspect from it. */
+export interface RenderSurface {
+  readonly width: number
+  readonly height: number
+  /** Bind as the current render destination and set the full viewport. */
+  bind(): void
+}
+
+/**
+ * The canvas's default framebuffer as a `RenderSurface` (live view, goldens,
+ * export). `width`/`height` are live getters — the canvas can resize.
+ */
+export class DefaultSurface implements RenderSurface {
+  private readonly gpu: Gpu
+
+  constructor(gpu: Gpu) {
+    this.gpu = gpu
+  }
+
+  get width(): number {
+    return this.gpu.width
+  }
+
+  get height(): number {
+    return this.gpu.height
+  }
+
+  bind(): void {
+    const gl = this.gpu.gl
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.viewport(0, 0, this.gpu.width, this.gpu.height)
+  }
+}
+
 /**
  * RGBA32F color-renderability gated by `EXT_color_buffer_float` (present on iOS
  * 15+ Safari, desktop browsers, and ANGLE-SwiftShader/CI). Also runtime-probes
@@ -40,21 +75,35 @@ export function checkFloatRenderable(gpu: Gpu): FloatCaps {
   return ok ? { ok: true } : { ok: false, reason: 'RGBA32F not framebuffer-complete on this driver' }
 }
 
+export type FloatTargetFormat = 'rgba32f' | 'rgba8'
+
 /**
- * One RGBA32F texture + its own framebuffer. NEAREST/CLAMP_TO_EDGE, no mips —
- * particle state is read back with `texelFetch`, never sampled/filtered.
+ * One texture (RGBA32F by default) + its own framebuffer. NEAREST/CLAMP_TO_EDGE,
+ * no mips — particle state is read back with `texelFetch`, never sampled/filtered.
+ * Also usable as a `RenderSurface` (e.g. an offscreen target a combiner scene
+ * renders a child scene into) via `bind()`.
  */
-export class FloatTarget {
+export class FloatTarget implements RenderSurface {
   readonly texture: WebGLTexture
   readonly fbo: WebGLFramebuffer
   readonly size: number
+  readonly format: FloatTargetFormat
   private readonly gl: WebGL2RenderingContext
 
-  /** `initial` must be `size*size*4` floats (RGBA per texel), or omitted for zeros. */
-  constructor(gpu: Gpu, size: number, initial?: Float32Array) {
+  /**
+   * `initial` must be `size*size*4` floats (RGBA per texel), or omitted for
+   * zeros — Float32Array-only, so it's invalid (throws) when `format` is
+   * 'rgba8'. `format` defaults to 'rgba32f' (existing callers unchanged).
+   */
+  constructor(gpu: Gpu, size: number, initial?: Float32Array, format: FloatTargetFormat = 'rgba32f') {
     const gl = gpu.gl
     this.gl = gl
     this.size = size
+    this.format = format
+
+    if (format === 'rgba8' && initial) {
+      throw new Error('FloatTarget: `initial` is Float32Array-only and invalid with format "rgba8"')
+    }
 
     const tex = gl.createTexture()
     if (!tex) throw new Error('Failed to create GPGPU state texture')
@@ -63,9 +112,13 @@ export class FloatTarget {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, size, size)
-    const data = initial ?? new Float32Array(size * size * 4)
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, size, size, gl.RGBA, gl.FLOAT, data)
+    if (format === 'rgba8') {
+      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, size, size)
+    } else {
+      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, size, size)
+      const data = initial ?? new Float32Array(size * size * 4)
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, size, size, gl.RGBA, gl.FLOAT, data)
+    }
 
     const fbo = gl.createFramebuffer()
     if (!fbo) throw new Error('Failed to create GPGPU framebuffer')
@@ -78,10 +131,23 @@ export class FloatTarget {
     this.fbo = fbo
   }
 
-  upload(data: Float32Array): void {
+  get width(): number {
+    return this.size
+  }
+
+  get height(): number {
+    return this.size
+  }
+
+  /** `data` must match `format`: Float32Array for 'rgba32f', Uint8Array for 'rgba8'. */
+  upload(data: Float32Array | Uint8Array): void {
     const gl = this.gl
     gl.bindTexture(gl.TEXTURE_2D, this.texture)
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.size, this.size, gl.RGBA, gl.FLOAT, data)
+    if (this.format === 'rgba8') {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.size, this.size, gl.RGBA, gl.UNSIGNED_BYTE, data as Uint8Array)
+    } else {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.size, this.size, gl.RGBA, gl.FLOAT, data as Float32Array)
+    }
     gl.bindTexture(gl.TEXTURE_2D, null)
   }
 
@@ -90,6 +156,11 @@ export class FloatTarget {
     const gl = this.gl
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo)
     gl.viewport(0, 0, this.size, this.size)
+  }
+
+  /** `RenderSurface` conformance: alias of `bindTarget()`. */
+  bind(): void {
+    this.bindTarget()
   }
 
   bindTexture(unit: number): void {

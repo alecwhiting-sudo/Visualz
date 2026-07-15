@@ -1,5 +1,6 @@
 import { mulberry32, type Prng } from '../../core/prng'
 import type { Gpu } from '../../gpu/context'
+import type { RenderSurface } from '../../gpu/targets'
 import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../types'
 
 /**
@@ -136,8 +137,9 @@ export class LissajousScene implements SceneRuntime {
     this.huePhase = (this.huePhase + this.getParam('hueSpeed') * frame.dt) % 1
   }
 
-  render(ctx: FrameContext): void {
+  render(ctx: FrameContext, surface: RenderSurface): void {
     const gl = this.gpu.gl
+    surface.bind()
     const t = ctx.frame.time
     const a = this.getParam('freqX')
     const b = this.getParam('freqY')
@@ -153,6 +155,8 @@ export class LissajousScene implements SceneRuntime {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
     // Fade pass: translucent black quad leaves trails from previous frames.
+    // Relies on the surface's buffer persisting across frames — true both for
+    // the default framebuffer (preserveDrawingBuffer) and a texture target.
     gl.useProgram(this.fadeProgram)
     gl.uniform1f(gl.getUniformLocation(this.fadeProgram, 'uFade'), this.getParam('trail'))
     gl.bindVertexArray(this.fadeVao)
@@ -164,7 +168,7 @@ export class LissajousScene implements SceneRuntime {
     gl.uniform3f(gl.getUniformLocation(this.lineProgram, 'uColor'), r, g, bl)
     gl.uniform1f(
       gl.getUniformLocation(this.lineProgram, 'uAspect'),
-      this.gpu.width / this.gpu.height,
+      surface.width / surface.height,
     )
     gl.bindVertexArray(this.lineVao)
     gl.bindBuffer(gl.ARRAY_BUFFER, this.lineVbo)

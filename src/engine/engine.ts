@@ -1,6 +1,7 @@
 import { Transport, type TransportMode } from '../core/transport'
 import { SignalBus } from '../core/signals'
 import { Gpu } from '../gpu/context'
+import { DefaultSurface } from '../gpu/targets'
 import { AudioEngine, publishDemoSignals } from '../audio/engine'
 import { AudioEventDetector, type AudioEventResult } from '../audio/events'
 import { sampleTimeline, serializeTimeline, parseTimeline } from '../audio/timeline'
@@ -44,6 +45,9 @@ export class Engine {
   readonly scene: SceneRuntime
   readonly seed: number
   readonly mappings: MappingRuntime
+  /** The canvas as the scene's render destination — always this in v1 (no
+   * combiner scene yet), but scenes read viewport/aspect from it, not `gpu`. */
+  private readonly surface: DefaultSurface
 
   private raf = 0
   private running = false
@@ -87,6 +91,7 @@ export class Engine {
   constructor(canvas: HTMLCanvasElement | OffscreenCanvas, scene: SceneRuntime, opts: EngineOptions) {
     this.transport = new Transport(opts.mode, opts.fps ?? 60)
     this.gpu = new Gpu(canvas, { width: opts.width, height: opts.height })
+    this.surface = new DefaultSurface(this.gpu)
     this.scene = scene
     this.seed = opts.seed
     this.mappings = new MappingRuntime(DEFAULT_MAPPINGS)
@@ -385,6 +390,6 @@ export class Engine {
     })
     const ctx = { frame, signals: this.bus }
     this.scene.update(ctx)
-    this.scene.render(ctx)
+    this.scene.render(ctx, this.surface)
   }
 }

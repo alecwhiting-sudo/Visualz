@@ -1,6 +1,6 @@
 import { mulberry32 } from '../../core/prng'
 import type { Gpu } from '../../gpu/context'
-import { checkFloatRenderable, FullscreenPass, PingPong } from '../../gpu/targets'
+import { checkFloatRenderable, FullscreenPass, PingPong, type RenderSurface } from '../../gpu/targets'
 import { snapCountToSide, DEFAULT_COUNT, DEFAULT_SIDE } from '../families/particles/gpgpu'
 import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../types'
 
@@ -267,13 +267,15 @@ export class FlowFieldScene implements SceneRuntime {
     this.pp.swap()
   }
 
-  render(_ctx: FrameContext): void {
+  render(_ctx: FrameContext, surface: RenderSurface): void {
     const gl = this.gpu.gl
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
-    gl.viewport(0, 0, this.gpu.width, this.gpu.height)
+    surface.bind()
 
     gl.enable(gl.BLEND)
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+    // Fade pass: relies on the surface's buffer persisting across frames —
+    // true both for the default framebuffer (preserveDrawingBuffer) and a
+    // texture target.
     gl.useProgram(this.fadeProgram)
     gl.uniform1f(this.fadeLoc.uFade, this.getParam('trail'))
     this.fsPass.draw()
@@ -283,9 +285,9 @@ export class FlowFieldScene implements SceneRuntime {
     this.pp.src.bindTexture(0)
     gl.uniform1i(this.renderLoc.uState, 0)
     gl.uniform1i(this.renderLoc.uTexSize, this.side)
-    gl.uniform1f(this.renderLoc.uAspect, this.gpu.width / this.gpu.height)
+    gl.uniform1f(this.renderLoc.uAspect, surface.width / surface.height)
     gl.uniform1f(this.renderLoc.uPointSize, this.getParam('pointSize'))
-    gl.uniform1f(this.renderLoc.uResHeight, this.gpu.height)
+    gl.uniform1f(this.renderLoc.uResHeight, surface.height)
     gl.uniform1f(this.renderLoc.uHueShift, this.getParam('hueShift'))
     gl.uniform1f(this.renderLoc.uFalloff, FALLOFF)
     gl.bindVertexArray(this.pointsVao)
