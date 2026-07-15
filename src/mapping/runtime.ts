@@ -23,10 +23,8 @@ interface ActivePulse {
    * the envelope's *current* value (amount * 2^(-elapsed/halflife)) and add only
    * the delta since last frame, not the whole envelope value again — otherwise
    * a one-shot pulse would sum an entire geometric series into the param instead
-   * of tracing a clean decay curve on top of it. Tracking `applied` makes the
-   * telescoping sum of deltas equal the envelope's current value exactly, so a
-   * pulse still literally "adds ... to the param each frame" while its net
-   * contribution stays framerate-independent and bounded by `amount`.
+   * of tracing a clean decay curve on top of it. The telescoping only holds while
+   * the param still contains our previous write; see `lastPulseWrite`.
    */
   applied: number
 }
@@ -39,10 +37,12 @@ interface ActivePulse {
  * frame-identically.
  *
  * Params with an expression binding: bindings run before `MappingRuntime.update()`
- * each frame (see Engine.updateAndRender), so a 'set'/'ramp' action's write gets
- * overwritten by the binding on the very next frame (binding wins). 'pulse' still
- * composes visibly because it reads the param fresh (post-binding) and adds its
- * decaying offset on top, every frame, for as long as it's active.
+ * each frame (see Engine.updateAndRender), so a 'set' action's one-shot write gets
+ * overwritten by the binding on the very next frame (binding wins). A 'ramp'
+ * re-writes the param every frame after the binding for its whole duration, so a
+ * ramp wins over a binding until it completes. 'pulse' composes: it adds its
+ * decaying envelope on top of whatever wrote the param this frame (binding, knob,
+ * or nothing), for as long as it's active.
  */
 export class MappingRuntime {
   private keyRules = new Map<string, MappingRule[]>()
@@ -55,6 +55,15 @@ export class MappingRuntime {
 
   private activeRamps = new Map<string, ActiveRamp>()
   private activePulses: ActivePulse[] = []
+  /**
+   * The exact value we last wrote to each pulsed param. If the param no longer
+   * holds it at the next update, something external (an expression binding, a
+   * knob, a set/ramp) rewrote the param and wiped our previous contribution — so
+   * the telescoping `applied` bookkeeping is void and the full envelope value
+   * belongs on top of the new base. Without this, a pulse on a bound param
+   * over-subtracts and dips *below* baseline instead of decaying onto it.
+   */
+  private lastPulseWrite = new Map<string, number>()
 
   constructor(rules: MappingRule[]) {
     for (const rule of rules) {
@@ -128,15 +137,44 @@ export class MappingRuntime {
       }
     }
 
-    for (let i = this.activePulses.length - 1; i >= 0; i--) {
-      const pulse = this.activePulses[i]
-      const offset = pulse.amount * Math.pow(2, -pulse.elapsed / pulse.halflife)
-      params.set(pulse.param, params.get(pulse.param) + (offset - pulse.applied))
-      pulse.applied = offset
-      if (Math.abs(offset) < 0.001 * Math.abs(pulse.amount)) {
-        this.activePulses.splice(i, 1)
-      } else {
-        pulse.elapsed += dt
+    // Pulses are processed grouped by param so an external overwrite (binding,
+    // knob, set/ramp) is detected once per param and voids every pulse's
+    // `applied` on it together.
+    if (this.activePulses.length > 0) {
+      const byParam = new Map<string, ActivePulse[]>()
+      for (const pulse of this.activePulses) {
+        const list = byParam.get(pulse.param) ?? []
+        list.push(pulse)
+        byParam.set(pulse.param, list)
+      }
+      for (const [param, pulses] of byParam) {
+        const current = params.get(param)
+        const wiped = this.lastPulseWrite.get(param) !== current
+        let value = current
+        for (const pulse of pulses) {
+          const applied = wiped ? 0 : pulse.applied
+          // halflife <= 0 means instantaneous: full amount on the fire frame,
+          // gone the next (guards the 2^(-x/0) = NaN path).
+          const offset =
+            pulse.halflife > 0
+              ? pulse.amount * Math.pow(2, -pulse.elapsed / pulse.halflife)
+              : pulse.elapsed === 0
+                ? pulse.amount
+                : 0
+          value += offset - applied
+          pulse.applied = offset
+          if (Math.abs(offset) < 0.001 * Math.abs(pulse.amount)) {
+            this.activePulses.splice(this.activePulses.indexOf(pulse), 1)
+          } else {
+            pulse.elapsed += dt
+          }
+        }
+        params.set(param, value)
+        if (pulses.some((p) => this.activePulses.includes(p))) {
+          this.lastPulseWrite.set(param, value)
+        } else {
+          this.lastPulseWrite.delete(param)
+        }
       }
     }
   }
@@ -167,11 +205,19 @@ export class MappingRuntime {
     }
   }
 
-  /** Clears queue, held keys, and active ramps/pulses — for deterministic replay. */
+  /**
+   * Restores cold-start state for deterministic replay: queue, held keys, active
+   * ramps/pulses, pulse write-tracking, and the known-signal sets (so a reset
+   * runtime republishes nothing until inputs actually occur, exactly like a
+   * fresh instance).
+   */
   reset(): void {
     this.queued = []
     this.heldKeys.clear()
+    this.knownKeySignals.clear()
+    this.knownTriggerSignals.clear()
     this.activeRamps.clear()
     this.activePulses.length = 0
+    this.lastPulseWrite.clear()
   }
 }

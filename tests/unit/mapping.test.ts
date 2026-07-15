@@ -271,7 +271,7 @@ describe("'pulse' action", () => {
 // --- 6. reset() ----------------------------------------------------------------------
 
 describe('reset()', () => {
-  it('15) clears held keys — key.<k> reports 0 even though no up-edge was queued', () => {
+  it('15) clears held keys — a re-press after reset starts from the down-edge, not held state', () => {
     const runtime = new MappingRuntime([])
     const bus = new SignalBus()
     const params = fakeParams()
@@ -279,8 +279,16 @@ describe('reset()', () => {
     runtime.update(1 / 60, bus, params)
     expect(bus.get('key.x')).toBe(1)
     runtime.reset()
-    runtime.update(1 / 60, bus, params)
-    expect(bus.get('key.x')).toBe(0)
+    // Cold-start semantics: the runtime forgets the key entirely and publishes
+    // nothing until an input actually occurs (clearing stale bus values on reset
+    // is the engine's job, alongside bus/scene state). A fresh down-edge then
+    // publishes 1 again — proving the held state didn't survive.
+    const fresh = new SignalBus()
+    runtime.update(1 / 60, fresh, params)
+    expect(fresh.has('key.x')).toBe(false)
+    runtime.queue({ type: 'key', key: 'x', edge: 'down' })
+    runtime.update(1 / 60, fresh, params)
+    expect(fresh.get('key.x')).toBe(1)
   })
 
   it('16) clears active ramps — an in-progress ramp stops advancing', () => {
@@ -429,5 +437,87 @@ describe('attachKeyboard', () => {
     detach()
     win.dispatch('keydown', fakeKeyboardEvent('a'))
     expect(events).toHaveLength(0)
+  })
+})
+
+// --- 7. Review follow-ups: pulse composition with external overwrites ------------
+
+describe('pulse composition (review follow-ups)', () => {
+  const rules: MappingRule[] = [
+    { source: { type: 'key', key: 'p' }, action: { type: 'pulse', param: 'drift', amount: 1, halflife: 0.4 } },
+  ]
+
+  it('23) pulse on a binding-overwritten param decays onto the base, never below it', () => {
+    const runtime = new MappingRuntime(rules)
+    const bus = new SignalBus()
+    const params = fakeParams({ drift: 2 })
+    const dt = 1 / 60
+    runtime.queue({ type: 'key', key: 'p', edge: 'down' })
+
+    let elapsed = 0
+    const observed: number[] = []
+    for (let f = 0; f < 30; f++) {
+      // Simulate an expression binding: it rewrites the param to base=2 every
+      // frame BEFORE the mapping update (matching Engine.updateAndRender order).
+      params.set('drift', 2)
+      runtime.update(dt, bus, params)
+      observed.push(params.get('drift'))
+      const expected = 2 + Math.pow(2, -elapsed / 0.4)
+      expect(params.get('drift')).toBeCloseTo(expected, 9)
+      expect(params.get('drift')).toBeGreaterThanOrEqual(2)
+      elapsed += dt
+    }
+    // Sanity: it actually decays.
+    expect(observed[0]).toBeCloseTo(3, 9)
+    expect(observed[29]).toBeLessThan(observed[0])
+  })
+
+  it('24) pulse on an unbound param still telescopes exactly (no geometric runaway)', () => {
+    const runtime = new MappingRuntime(rules)
+    const bus = new SignalBus()
+    const params = fakeParams({ drift: 2 })
+    const dt = 1 / 60
+    runtime.queue({ type: 'key', key: 'p', edge: 'down' })
+    let elapsed = 0
+    for (let f = 0; f < 30; f++) {
+      runtime.update(dt, bus, params)
+      expect(params.get('drift')).toBeCloseTo(2 + Math.pow(2, -elapsed / 0.4), 9)
+      elapsed += dt
+    }
+  })
+
+  it('25) pulse with halflife 0 applies once and never produces NaN', () => {
+    const runtime = new MappingRuntime([
+      { source: { type: 'key', key: 'p' }, action: { type: 'pulse', param: 'x', amount: 0.5, halflife: 0 } },
+    ])
+    const bus = new SignalBus()
+    const params = fakeParams({ x: 1 })
+    runtime.queue({ type: 'key', key: 'p', edge: 'down' })
+    runtime.update(1 / 60, bus, params)
+    expect(params.get('x')).toBeCloseTo(1.5, 12)
+    runtime.update(1 / 60, bus, params)
+    expect(params.get('x')).toBeCloseTo(1, 12)
+    for (let f = 0; f < 5; f++) {
+      runtime.update(1 / 60, bus, params)
+      expect(Number.isFinite(params.get('x'))).toBe(true)
+    }
+    expect(params.get('x')).toBeCloseTo(1, 12)
+  })
+
+  it('26) reset() also forgets known key/trigger signals (cold-start bus contents)', () => {
+    const runtime = new MappingRuntime([])
+    const params = fakeParams()
+    const before = new SignalBus()
+    runtime.queue({ type: 'key', key: 'x', edge: 'down' })
+    runtime.queue({ type: 'trigger', index: 2 })
+    runtime.update(1 / 60, before, params)
+    expect(before.has('key.x')).toBe(true)
+    expect(before.has('trig.2')).toBe(true)
+
+    runtime.reset()
+    const after = new SignalBus()
+    runtime.update(1 / 60, after, params)
+    expect(after.has('key.x')).toBe(false)
+    expect(after.has('trig.2')).toBe(false)
   })
 })

@@ -150,6 +150,11 @@ export class AudioEventDetector {
   // --- DEMO path (docs/EVENTS.md §7) ------------------------------------------
 
   private updateDemo(time: number): AudioEventResult {
+    // A demo frame invalidates the live band history: band values move while the
+    // live path isn't watching, so the first live frame after a demo interlude
+    // must recompute from scratch (flux 0) instead of diffing against stale bands
+    // and firing a spurious onset.
+    this.firstFrame = true
     const t2 = time * 2
     const idx = Math.floor(t2)
     const phase = t2 - idx // = fract(time*2)

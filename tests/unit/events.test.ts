@@ -409,3 +409,34 @@ describe('first-frame safety', () => {
     expect(detector.confidence).toBe(0)
   })
 })
+
+// --- 11. Mode-switch robustness (review follow-up) ------------------------------
+
+describe('demo/live mode switching', () => {
+  it('16) first live frame after a demo interlude recomputes flux from scratch', () => {
+    const detector = new AudioEventDetector()
+    const bus = new SignalBus()
+    // Live segment at a quiet level, long enough to fill the threshold window.
+    bus.set('bass', 0.1)
+    bus.set('mid', 0.05)
+    bus.set('high', 0.02)
+    let time = 0
+    for (let f = 0; f < 90; f++) {
+      detector.update(DT, time, bus, false)
+      time += DT
+    }
+    // Demo interlude (audio stopped); band signals move meanwhile.
+    for (let f = 0; f < 30; f++) {
+      detector.update(DT, time, bus, true)
+      time += DT
+    }
+    // Audio resumes much louder: the jump vs the stale pre-interlude bands must
+    // NOT read as an onset — the first live frame recomputes with flux 0.
+    bus.set('bass', 0.9)
+    bus.set('mid', 0.7)
+    bus.set('high', 0.5)
+    const r = detector.update(DT, time, bus, false)
+    expect(r.onset).toBe(false)
+    expect(r.onsetStrength).toBe(0)
+  })
+})
