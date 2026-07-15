@@ -304,6 +304,12 @@ export function App() {
             🔊 Tap to enable sound
           </button>
         )}
+        {trackName && engine && (
+          <p className="session-status">
+            sound: {engine.audio.contextState ?? 'not started'}
+            {engine.audio.contextState === 'running' && ' — if silent, check Control Center for a Bluetooth/AirPlay output'}
+          </p>
+        )}
 
         <section>
           <h2>Signals</h2>

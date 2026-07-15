@@ -86,7 +86,12 @@ export class AudioEngine {
     // before any await gives iOS a chance to drop the activation.
     this.unlockPlaybackCategory()
     if (!this.ctx) this.ctx = new AudioContext()
-    if (this.ctx.state === 'suspended') await this.ctx.resume()
+    // Fire-and-forget: on iOS, resume() outside a still-valid gesture can stay
+    // PENDING forever — awaiting it here hung playFile before the source was
+    // ever created, so the tap-to-enable button (which requires isPlaying)
+    // never appeared. Decode + source.start() work on a suspended context
+    // (playback is queued until it runs); the UI button resumes it on tap.
+    if (this.ctx.state !== 'running') void this.ctx.resume().catch(() => {})
     const buffer = await this.ctx.decodeAudioData(await file.arrayBuffer())
     if (seq !== this.loadSeq) return // superseded by a newer playFile
     this.decoded = buffer
