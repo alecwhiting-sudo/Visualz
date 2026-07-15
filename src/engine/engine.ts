@@ -157,10 +157,18 @@ export class Engine {
     return this.recorder !== null
   }
 
-  /** Snapshots current engine state and starts recording every input/param/binding change. */
+  /**
+   * Snapshots current engine state and starts recording every input/param/binding
+   * change. The boundary is edge-based, like starting a tape mid-note: state held
+   * across it (pressed keys, in-flight ramps) is not captured — replay reproduces
+   * events from here on. Active pulse contributions are subtracted from the param
+   * snapshot so a decaying transient isn't baked in as the permanent base.
+   */
   startRecording(): void {
     const params: Record<string, number> = {}
-    for (const p of this.scene.params) params[p.name] = this.scene.getParam(p.name)
+    for (const p of this.scene.params) {
+      params[p.name] = this.scene.getParam(p.name) - this.mappings.pulseOffset(p.name)
+    }
     const bindings: Record<string, string> = {}
     for (const [param, b] of this.bindings) bindings[param] = b.src
     this.recorder = new SessionRecorder({
@@ -188,6 +196,8 @@ export class Engine {
    * (see `renderFrames`/`tick`).
    */
   loadSession(doc: SessionDoc): void {
+    this.audio.stop() // demo-signal replay must never read a live analyser
+    this.recorder = null // replay must not re-record itself (playerTarget relies on this)
     this.transport.reset()
     this.bus.clear()
     this.mappings.reset()

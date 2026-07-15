@@ -179,6 +179,19 @@ export class MappingRuntime {
     }
   }
 
+  /**
+   * Sum of the decaying contributions currently applied to `param` by active
+   * pulses. Lets a session recording snapshot the param's underlying base value
+   * instead of baking a transient into the session's initial state.
+   */
+  pulseOffset(param: string): number {
+    let sum = 0
+    for (const pulse of this.activePulses) {
+      if (pulse.param === param) sum += pulse.applied
+    }
+    return sum
+  }
+
   private startAction(action: Action, params: ParamAccess): void {
     switch (action.type) {
       case 'set':

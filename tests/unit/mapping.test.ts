@@ -521,3 +521,29 @@ describe('pulse composition (review follow-ups)', () => {
     expect(after.has('trig.2')).toBe(false)
   })
 })
+
+// --- 8. pulseOffset (session-snapshot support) -----------------------------------
+
+describe('pulseOffset', () => {
+  it('27) reports the summed live pulse contribution, 0 when idle or expired', () => {
+    const runtime = new MappingRuntime([
+      { source: { type: 'key', key: 'p' }, action: { type: 'pulse', param: 'drift', amount: 1, halflife: 0.4 } },
+      { source: { type: 'key', key: 'q' }, action: { type: 'pulse', param: 'drift', amount: 0.5, halflife: 0.4 } },
+    ])
+    const bus = new SignalBus()
+    const params = fakeParams({ drift: 2 })
+    expect(runtime.pulseOffset('drift')).toBe(0)
+
+    runtime.queue({ type: 'key', key: 'p', edge: 'down' })
+    runtime.queue({ type: 'key', key: 'q', edge: 'down' })
+    runtime.update(1 / 60, bus, params)
+    // Both pulses fired this frame: applied = full amounts, param = base + 1.5.
+    expect(runtime.pulseOffset('drift')).toBeCloseTo(1.5, 9)
+    expect(params.get('drift') - runtime.pulseOffset('drift')).toBeCloseTo(2, 9)
+    expect(runtime.pulseOffset('other')).toBe(0)
+
+    // The base reconstruction holds mid-decay too.
+    for (let f = 0; f < 30; f++) runtime.update(1 / 60, bus, params)
+    expect(params.get('drift') - runtime.pulseOffset('drift')).toBeCloseTo(2, 9)
+  })
+})

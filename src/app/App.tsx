@@ -114,28 +114,48 @@ export function App() {
     setEngine(null)
     setRecording(false)
 
-    const replayEngine = new Engine(canvas, new LissajousScene(), {
-      mode: 'render',
-      seed: doc.seed,
-      width: 960,
-      height: 540,
-      fps: 60,
-    })
-    replayEngine.loadSession(doc)
-    engineRef.current = replayEngine
+    // Any failure from here on (an uncompilable binding in a hand-edited session
+    // throws DslError from loadSession or mid-replay from a binding event) must
+    // land back in a working live engine, never a dead canvas.
+    const restoreLive = () => {
+      engineRef.current?.dispose()
+      engineRef.current = null
+      setReplay(null)
+      const liveCanvas = canvasRef.current
+      if (liveCanvas) attachLiveEngine(createLiveEngine(liveCanvas))
+    }
+
+    let replayEngine: Engine
+    try {
+      replayEngine = new Engine(canvas, new LissajousScene(), {
+        mode: 'render',
+        seed: doc.seed,
+        width: 960,
+        height: 540,
+        fps: 60,
+      })
+      engineRef.current = replayEngine
+      replayEngine.loadSession(doc)
+    } catch (err) {
+      setSessionError(err instanceof Error ? err.message : String(err))
+      restoreLive()
+      return
+    }
     setReplay({ frame: 0, total: doc.durationFrames })
 
     const step = () => {
       if (engineRef.current !== replayEngine) return // superseded (e.g. unmount)
-      replayEngine.renderFrames(1)
+      try {
+        replayEngine.renderFrames(1)
+      } catch (err) {
+        setSessionError(err instanceof Error ? err.message : String(err))
+        restoreLive()
+        return
+      }
       const frame = replayEngine.transport.frame
       setReplay({ frame, total: doc.durationFrames })
       if (replayEngine.replayDone && frame >= doc.durationFrames) {
-        replayEngine.dispose()
-        engineRef.current = null
-        setReplay(null)
-        const liveCanvas = canvasRef.current
-        if (liveCanvas) attachLiveEngine(createLiveEngine(liveCanvas))
+        restoreLive()
         return
       }
       requestAnimationFrame(step)

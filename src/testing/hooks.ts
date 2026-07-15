@@ -20,6 +20,13 @@ export interface VizTestApi {
   startRecording(): void
   stopRecording(): unknown
   loadSession(doc: unknown): void
+  /**
+   * FNV-1a hash of the canvas's current pixels (readPixels). Exact equality of
+   * two hashes on the same machine/context proves byte-identical frames — a far
+   * stricter check than the golden-image diff threshold, which empirically
+   * tolerates a one-frame event offset.
+   */
+  pixelHash(): string
 }
 
 declare global {
@@ -59,5 +66,17 @@ export function bootTestMode(root: HTMLElement): void {
     startRecording: () => engine.startRecording(),
     stopRecording: () => engine.stopRecording(),
     loadSession: (doc) => engine.loadSession(doc as SessionDoc),
+    pixelHash: () => {
+      const gl = engine.gpu.gl
+      const { width, height } = engine.gpu
+      const pixels = new Uint8Array(width * height * 4)
+      gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+      let h = 0x811c9dc5
+      for (let i = 0; i < pixels.length; i++) {
+        h ^= pixels[i]
+        h = Math.imul(h, 0x01000193)
+      }
+      return (h >>> 0).toString(16).padStart(8, '0')
+    },
   }
 }
