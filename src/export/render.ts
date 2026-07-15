@@ -34,35 +34,44 @@ export async function renderSessionToVideo(
     height: opts.height,
     fps: opts.fps,
   })
-  engine.loadSession(doc)
+  try {
+    engine.loadSession(doc)
 
-  const sink = await createVideoSink(opts)
-  const frameHashes = opts.collectHashes ? ([] as string[]) : undefined
-  const total = doc.durationFrames
+    const sink = await createVideoSink(opts)
+    const frameHashes = opts.collectHashes ? ([] as string[]) : undefined
+    const total = doc.durationFrames
 
-  for (let i = 0; i < total; i++) {
-    engine.renderFrames(1)
+    for (let i = 0; i < total; i++) {
+      engine.renderFrames(1)
 
-    if (frameHashes) {
-      frameHashes.push(pixelHash(engine.gpu.gl, opts.width, opts.height))
+      if (frameHashes) {
+        frameHashes.push(pixelHash(engine.gpu.gl, opts.width, opts.height))
+      }
+
+      const frame = new VideoFrame(canvas, {
+        timestamp: Math.round((i * 1e6) / opts.fps),
+        duration: Math.round(1e6 / opts.fps),
+      })
+      sink.addFrame(frame, i % (opts.fps * 2) === 0)
+
+      onProgress?.({ frame: i + 1, total })
+
+      if ((i + 1) % YIELD_EVERY_N_FRAMES === 0) {
+        await yieldToEventLoop()
+      }
+      await drainEncodeQueue(sink)
     }
 
-    const frame = new VideoFrame(canvas, {
-      timestamp: Math.round((i * 1e6) / opts.fps),
-      duration: Math.round(1e6 / opts.fps),
-    })
-    sink.addFrame(frame, i % (opts.fps * 2) === 0)
-
-    onProgress?.({ frame: i + 1, total })
-
-    if ((i + 1) % YIELD_EVERY_N_FRAMES === 0) {
-      await yieldToEventLoop()
-    }
-    await drainEncodeQueue(sink)
+    const result = await sink.finish()
+    return { ...result, frameHashes }
+  } finally {
+    // Each call creates a WebGL2 context; without explicit release, repeated
+    // main-thread exports pile up live contexts until the browser evicts the
+    // oldest — possibly the visible live canvas. (Worker exports get reclaimed
+    // by terminate(), but this function must be safe anywhere.)
+    engine.dispose()
+    engine.gpu.gl.getExtension('WEBGL_lose_context')?.loseContext()
   }
-
-  const result = await sink.finish()
-  return { ...result, frameHashes }
 }
 
 function yieldToEventLoop(): Promise<void> {

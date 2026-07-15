@@ -12,8 +12,12 @@ const LINE_VS = `#version 300 es
 layout(location = 0) in vec2 aPos;
 uniform float uAspect;
 void main() {
+  // Fit the (square) curve inside any viewport undistorted: shrink x on wide
+  // aspects, shrink y on tall ones. Plain p.x /= uAspect overflows and clips
+  // horizontally when aspect < 1 (9:16) — caught by the aspect goldens.
   vec2 p = aPos;
-  p.x /= uAspect;
+  p.x /= max(uAspect, 1.0);
+  p.y *= min(uAspect, 1.0);
   gl_Position = vec4(p, 0.0, 1.0);
 }`
 

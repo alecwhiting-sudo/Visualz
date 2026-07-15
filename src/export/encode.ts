@@ -90,12 +90,15 @@ export async function createVideoSink(opts: ExportVideoOpts): Promise<VideoSink>
 
   return {
     addFrame(frame, keyFrame) {
-      if (encoderError) {
+      // Ownership means the frame closes on EVERY path — including a synchronous
+      // encode() throw (e.g. InvalidStateError racing the async error callback);
+      // a leaked VideoFrame pins GPU memory.
+      try {
+        if (encoderError) throw encoderError
+        encoder.encode(frame, { keyFrame })
+      } finally {
         frame.close()
-        throw encoderError
       }
-      encoder.encode(frame, { keyFrame })
-      frame.close()
     },
     encodeQueueSize() {
       return encoder.encodeQueueSize

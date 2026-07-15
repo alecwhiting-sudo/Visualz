@@ -7,8 +7,8 @@ import { expect, test } from '@playwright/test'
  * visual changes headlessly (ARCHITECTURE.md §5).
  */
 
-async function boot(page: import('@playwright/test').Page, seed: number) {
-  await page.goto(`/?test=1&seed=${seed}`)
+async function boot(page: import('@playwright/test').Page, seed: number, size?: string) {
+  await page.goto(`/?test=1&seed=${seed}${size ?? ''}`)
   await page.waitForFunction(() => window.__viz !== undefined)
 }
 
@@ -17,6 +17,22 @@ test('lissajous renders deterministically at frame 120', async ({ page }) => {
   await page.evaluate(() => window.__viz!.renderFrames(120))
   expect(await page.evaluate(() => window.__viz!.frame())).toBe(120)
   await expect(page.locator('canvas')).toHaveScreenshot('lissajous-seed42-f120.png')
+})
+
+// Aspect-aware composition is a CLAUDE.md hard rule (16:9, 9:16, 1:1). These
+// goldens are what actually enforce it: deleting the scene's aspect handling
+// changes these images, whereas hash-inequality checks stay green for any
+// implementation that merely renders differently at different sizes.
+test('lissajous composes correctly at 9:16', async ({ page }) => {
+  await boot(page, 42, '&w=360&h=640')
+  await page.evaluate(() => window.__viz!.renderFrames(120))
+  await expect(page.locator('canvas')).toHaveScreenshot('lissajous-9x16-f120.png')
+})
+
+test('lissajous composes correctly at 1:1', async ({ page }) => {
+  await boot(page, 42, '&w=480&h=480')
+  await page.evaluate(() => window.__viz!.renderFrames(120))
+  await expect(page.locator('canvas')).toHaveScreenshot('lissajous-1x1-f120.png')
 })
 
 test('canvas is not blank (guards silent all-black regressions)', async ({ page }) => {

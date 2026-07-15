@@ -29,8 +29,20 @@ test('export produces a valid deterministic WebM', async ({ page }) => {
   await boot(page, 42)
   const doc = await recordSession(page)
 
+  // Reference: replay the session in the page engine (same 640x360 canvas the
+  // harness booted) and hash every frame.
+  const replayHashes = await page.evaluate((sessionDoc) => {
+    window.__viz!.loadSession(sessionDoc)
+    const hashes: string[] = []
+    for (let i = 0; i < 60; i++) {
+      window.__viz!.renderFrames(1)
+      hashes.push(window.__viz!.pixelHash())
+    }
+    return hashes
+  }, doc)
+
   const [run1, run2] = await page.evaluate(async (sessionDoc) => {
-    const opts = { width: 320, height: 180, fps: 30, collectHashes: true }
+    const opts = { width: 640, height: 360, fps: 30, collectHashes: true }
     const a = await window.__viz!.exportSession(sessionDoc, opts)
     const b = await window.__viz!.exportSession(sessionDoc, opts)
     return [a, b]
@@ -44,8 +56,13 @@ test('export produces a valid deterministic WebM', async ({ page }) => {
   }
 
   // Determinism (ARCHITECTURE.md §5 CI requirement): two exports of the same
-  // session produce byte-identical per-frame pixel content.
+  // session produce byte-identical per-frame readback content.
   expect(run2.frameHashes).toEqual(run1.frameHashes)
+  // And the export pipeline renders exactly what an in-page replay renders —
+  // the worker/OffscreenCanvas path introduces no divergence. (What the encoder
+  // consumes vs the readback is validated out-of-band: review decoded a real
+  // export with ffmpeg — in-suite VideoDecoder verification is future work.)
+  expect(run1.frameHashes).toEqual(replayHashes)
 })
 
 test('export renders aspect-aware 9:16', async ({ page }) => {
@@ -70,7 +87,8 @@ test('export renders aspect-aware 9:16', async ({ page }) => {
 
   expect(tall.size).toBeGreaterThan(1000)
   expect(tall.frameHashes?.length).toBe(60)
-  // Composition genuinely depends on aspect: a 9:16 render is not just a resized
-  // 16:9 render, so the two runs' per-frame pixel hashes must differ.
+  // Sanity check only: output responds to the requested dimensions. This does
+  // NOT prove aspect-aware composition (a naive stretch would also differ) —
+  // that rule is enforced by the 9:16 and 1:1 goldens in golden.spec.ts.
   expect(tall.frameHashes).not.toEqual(wide.frameHashes)
 })

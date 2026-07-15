@@ -92,7 +92,8 @@ export class Engine {
 
   stop(): void {
     this.running = false
-    cancelAnimationFrame(this.raf)
+    // Absent in DedicatedWorkerGlobalScope, where render-mode engines run (export).
+    if (typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(this.raf)
   }
 
   /** Render mode: step exactly n fixed-timestep frames. */

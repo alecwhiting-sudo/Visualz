@@ -56,6 +56,11 @@ export function isTestMode(): boolean {
 export function bootTestMode(root: HTMLElement): void {
   const params = new URLSearchParams(location.search)
   const seed = Number(params.get('seed') ?? '42')
+  // Optional canvas size override (?w=360&h=640) so golden tests can lock the
+  // scene's composition at 9:16 and 1:1, not just the 16:9 default — the
+  // aspect-awareness hard rule in CLAUDE.md needs real snapshot coverage.
+  const width = Number(params.get('w') ?? '640')
+  const height = Number(params.get('h') ?? '360')
 
   const canvas = document.createElement('canvas')
   canvas.style.imageRendering = 'pixelated'
@@ -64,8 +69,8 @@ export function bootTestMode(root: HTMLElement): void {
   const engine = new Engine(canvas, new LissajousScene(), {
     mode: 'render',
     seed,
-    width: 640,
-    height: 360,
+    width,
+    height,
     fps: 30,
   })
 
