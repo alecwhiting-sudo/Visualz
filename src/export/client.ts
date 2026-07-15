@@ -10,7 +10,14 @@ import type { ExportProgress } from './render'
 
 type WorkerResponse =
   | { type: 'progress'; frame: number; total: number }
-  | { type: 'done'; buffer: ArrayBuffer; mime: string; frameHashes?: string[] }
+  | {
+      type: 'done'
+      buffer: ArrayBuffer
+      mime: string
+      fileExtension: 'webm' | 'mp4'
+      audioSkipped?: boolean
+      frameHashes?: string[]
+    }
   | { type: 'error'; message: string }
 
 export function exportSession(
@@ -30,7 +37,13 @@ export function exportSession(
           break
         case 'done':
           worker.terminate()
-          resolve({ buffer: msg.buffer, mime: msg.mime, frameHashes: msg.frameHashes })
+          resolve({
+            buffer: msg.buffer,
+            mime: msg.mime,
+            fileExtension: msg.fileExtension,
+            audioSkipped: msg.audioSkipped,
+            frameHashes: msg.frameHashes,
+          })
           break
         case 'error':
           worker.terminate()

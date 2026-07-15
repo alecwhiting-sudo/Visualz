@@ -117,3 +117,40 @@ test('export muxes an Opus audio track', async ({ page }) => {
   // substantially larger than the silent one, not just noise from muxer overhead.
   expect(audible.size).toBeGreaterThan(silent.size + 5000)
 })
+
+test('codec detection prefers VP9 where supported', async ({ page }) => {
+  await boot(page, 42)
+  const doc = await recordSession(page)
+
+  // No `codec` option at all — proves detectExportCodec() actually runs (not
+  // just a hardcoded default) and picks 'vp9' in this Chromium build, which
+  // supports VP9/Opus encode but not H.264/AAC (see export/encode.ts).
+  const result = await page.evaluate((sessionDoc) => {
+    return window.__viz!.exportSession(sessionDoc, { width: 320, height: 180, fps: 30 })
+  }, doc)
+
+  expect(result.mime).toBe('video/webm')
+  expect(result.fileExtension).toBe('webm')
+  expect(result.magic).toEqual([0x1a, 0x45, 0xdf, 0xa3])
+})
+
+test('explicit h264 request on a non-supporting browser throws a clear error', async ({ page }) => {
+  await boot(page, 42)
+  const doc = await recordSession(page)
+
+  // This spec's Chromium build supports VP9/Opus but not H.264/AAC encode
+  // (ARCHITECTURE.md §6 / task context) — so an explicit h264 request must
+  // reject with a message naming the codec, rather than hanging or throwing
+  // something generic deep inside the encoder.
+  const message = await page.evaluate(async (sessionDoc) => {
+    try {
+      await window.__viz!.exportSession(sessionDoc, { width: 320, height: 180, fps: 30, codec: 'h264' })
+      return null
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err)
+    }
+  }, doc)
+
+  expect(message).not.toBeNull()
+  expect(message!.toLowerCase()).toMatch(/h264|h\.264|avc/)
+})

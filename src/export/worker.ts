@@ -26,7 +26,14 @@ type WorkerRequest = ExportRequest
 
 type WorkerResponse =
   | { type: 'progress'; frame: number; total: number }
-  | { type: 'done'; buffer: ArrayBuffer; mime: string; frameHashes?: string[] }
+  | {
+      type: 'done'
+      buffer: ArrayBuffer
+      mime: string
+      fileExtension: 'webm' | 'mp4'
+      audioSkipped?: boolean
+      frameHashes?: string[]
+    }
   | { type: 'error'; message: string }
 
 const PROGRESS_EVERY_N_FRAMES = 10
@@ -56,6 +63,8 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
       type: 'done',
       buffer: result.buffer,
       mime: result.mime,
+      fileExtension: result.fileExtension,
+      audioSkipped: result.audioSkipped,
       frameHashes: result.frameHashes,
     }
     postMessage(response, { transfer: [result.buffer] })

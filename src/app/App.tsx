@@ -57,6 +57,10 @@ export function App() {
   const [replay, setReplay] = useState<{ frame: number; total: number } | null>(null)
   const [exporting, setExporting] = useState<{ frame: number; total: number } | null>(null)
   const [sessionError, setSessionError] = useState<string | null>(null)
+  // Non-fatal note from the most recent export — currently only set when an
+  // H.264/MP4 export dropped its audio track because AAC isn't available in
+  // this browser (see EncodedResult.audioSkipped in export/encode.ts).
+  const [exportNote, setExportNote] = useState<string | null>(null)
   // The most recently recorded session, kept in memory so Replay/Export/Save work
   // directly after Stop — no round-trip through the file system (essential on
   // iPhone, where re-picking a just-saved file is clumsy).
@@ -235,6 +239,7 @@ export function App() {
 
   const exportVideo = async (doc: SessionDoc) => {
     setSessionError(null)
+    setExportNote(null)
     setExporting({ frame: 0, total: doc.durationFrames })
     try {
       // Carry the currently-loaded track's audio into the export, if any — a file
@@ -242,13 +247,18 @@ export function App() {
       // the audio track in). No file loaded (or the live engine has been swapped
       // for a replay engine) means a silent export, same as before this change.
       const audio = engineRef.current?.audio.lastBuffer() ?? undefined
+      // No `codec` given: createVideoSink auto-detects (VP9/WebM preferred where
+      // supported, H.264/MP4 fallback for iOS/macOS Safari — see export/encode.ts).
       const result = await exportSession(
         doc,
         { width: 1280, height: 720, fps: doc.fps },
         (p: ExportProgress) => setExporting({ frame: p.frame, total: p.total }),
         audio,
       )
-      downloadBlob(new Blob([result.buffer], { type: result.mime }), 'visualz-session.webm')
+      downloadBlob(new Blob([result.buffer], { type: result.mime }), `visualz-session.${result.fileExtension}`)
+      if (result.audioSkipped) {
+        setExportNote('exported without audio (AAC unavailable in this browser)')
+      }
     } catch (err) {
       setSessionError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -360,6 +370,7 @@ export function App() {
               exporting… {Math.round((exporting.frame / Math.max(1, exporting.total)) * 100)}%
             </p>
           )}
+          {!exporting && exportNote && <p className="session-status">{exportNote}</p>}
           {sessionError && <span className="expr-message">{sessionError}</span>}
         </section>
 

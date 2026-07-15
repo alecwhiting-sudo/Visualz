@@ -49,7 +49,14 @@ export interface VizTestApi {
   exportSession(
     doc: unknown,
     opts: unknown,
-  ): Promise<{ size: number; mime: string; frameHashes?: string[]; magic: number[] }>
+  ): Promise<{
+    size: number
+    mime: string
+    fileExtension: 'webm' | 'mp4'
+    audioSkipped?: boolean
+    frameHashes?: string[]
+    magic: number[]
+  }>
   /**
    * Synthesizes a deterministic 120 BPM kick-pattern PCM track, runs it through
    * the offline analysis pass (docs/ANALYSIS.md), and returns a complete
@@ -199,7 +206,14 @@ export function bootTestMode(root: HTMLElement): void {
       const audio = audioSeconds !== undefined ? synthesizeTestTone(audioSeconds) : undefined
       const result = await exportSession(doc as SessionDoc, videoOpts, undefined, audio)
       const magic = Array.from(new Uint8Array(result.buffer.slice(0, 4)))
-      return { size: result.buffer.byteLength, mime: result.mime, frameHashes: result.frameHashes, magic }
+      return {
+        size: result.buffer.byteLength,
+        mime: result.mime,
+        fileExtension: result.fileExtension,
+        audioSkipped: result.audioSkipped,
+        frameHashes: result.frameHashes,
+        magic,
+      }
     },
     setShaderSource: (key, source) => {
       try {
