@@ -78,6 +78,15 @@ export function checkFloatRenderable(gpu: Gpu): FloatCaps {
 export type FloatTargetFormat = 'rgba32f' | 'rgba8'
 
 /**
+ * Constructor sizing for `FloatTarget`: a single number for the common square
+ * GPGPU-state case (particle/sim textures must stay square — see `PingPong`),
+ * or an explicit `{width, height}` pair for a rectangular offscreen render
+ * target (e.g. a combiner scene's per-child blend target, sized to match a
+ * non-square output surface at 16:9/9:16).
+ */
+export type FloatTargetSize = number | { width: number; height: number }
+
+/**
  * One texture (RGBA32F by default) + its own framebuffer. NEAREST/CLAMP_TO_EDGE,
  * no mips — particle state is read back with `texelFetch`, never sampled/filtered.
  * Also usable as a `RenderSurface` (e.g. an offscreen target a combiner scene
@@ -86,19 +95,22 @@ export type FloatTargetFormat = 'rgba32f' | 'rgba8'
 export class FloatTarget implements RenderSurface {
   readonly texture: WebGLTexture
   readonly fbo: WebGLFramebuffer
-  readonly size: number
+  readonly texWidth: number
+  readonly texHeight: number
   readonly format: FloatTargetFormat
   private readonly gl: WebGL2RenderingContext
 
   /**
-   * `initial` must be `size*size*4` floats (RGBA per texel), or omitted for
-   * zeros — Float32Array-only, so it's invalid (throws) when `format` is
+   * `initial` must be `width*height*4` floats (RGBA per texel), or omitted
+   * for zeros — Float32Array-only, so it's invalid (throws) when `format` is
    * 'rgba8'. `format` defaults to 'rgba32f' (existing callers unchanged).
    */
-  constructor(gpu: Gpu, size: number, initial?: Float32Array, format: FloatTargetFormat = 'rgba32f') {
+  constructor(gpu: Gpu, size: FloatTargetSize, initial?: Float32Array, format: FloatTargetFormat = 'rgba32f') {
     const gl = gpu.gl
     this.gl = gl
-    this.size = size
+    const { width, height } = typeof size === 'number' ? { width: size, height: size } : size
+    this.texWidth = width
+    this.texHeight = height
     this.format = format
 
     if (format === 'rgba8' && initial) {
@@ -113,11 +125,11 @@ export class FloatTarget implements RenderSurface {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
     if (format === 'rgba8') {
-      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, size, size)
+      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, width, height)
     } else {
-      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, size, size)
-      const data = initial ?? new Float32Array(size * size * 4)
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, size, size, gl.RGBA, gl.FLOAT, data)
+      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, width, height)
+      const data = initial ?? new Float32Array(width * height * 4)
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, gl.RGBA, gl.FLOAT, data)
     }
 
     const fbo = gl.createFramebuffer()
@@ -132,11 +144,11 @@ export class FloatTarget implements RenderSurface {
   }
 
   get width(): number {
-    return this.size
+    return this.texWidth
   }
 
   get height(): number {
-    return this.size
+    return this.texHeight
   }
 
   /** `data` must match `format`: Float32Array for 'rgba32f', Uint8Array for 'rgba8'. */
@@ -144,18 +156,18 @@ export class FloatTarget implements RenderSurface {
     const gl = this.gl
     gl.bindTexture(gl.TEXTURE_2D, this.texture)
     if (this.format === 'rgba8') {
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.size, this.size, gl.RGBA, gl.UNSIGNED_BYTE, data as Uint8Array)
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.texWidth, this.texHeight, gl.RGBA, gl.UNSIGNED_BYTE, data as Uint8Array)
     } else {
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.size, this.size, gl.RGBA, gl.FLOAT, data as Float32Array)
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.texWidth, this.texHeight, gl.RGBA, gl.FLOAT, data as Float32Array)
     }
     gl.bindTexture(gl.TEXTURE_2D, null)
   }
 
-  /** Bind this target's fbo and set the viewport to its (square) texture size. */
+  /** Bind this target's fbo and set the viewport to its texture size. */
   bindTarget(): void {
     const gl = this.gl
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo)
-    gl.viewport(0, 0, this.size, this.size)
+    gl.viewport(0, 0, this.texWidth, this.texHeight)
   }
 
   /** `RenderSurface` conformance: alias of `bindTarget()`. */
