@@ -6,6 +6,9 @@ import { pixelHash } from '../gpu/readback'
 import { exportSession } from '../export/client'
 import type { ExportVideoOpts } from '../export/render'
 import type { ExportAudio } from '../export/encode'
+import { analyzeAudio } from '../audio/analysis'
+import { serializeTimeline } from '../audio/timeline'
+import { mulberry32 } from '../core/prng'
 
 /**
  * Headless test harness (ARCHITECTURE.md §5). `/?test=1&seed=S` boots the engine
@@ -47,6 +50,15 @@ export interface VizTestApi {
     doc: unknown,
     opts: unknown,
   ): Promise<{ size: number; mime: string; frameHashes?: string[]; magic: number[] }>
+  /**
+   * Synthesizes a deterministic 120 BPM kick-pattern PCM track, runs it through
+   * the offline analysis pass (docs/ANALYSIS.md), and returns a complete
+   * file-audio `SessionDoc` (§9 of the analysis-integration task) — Playwright
+   * specs can't hand this harness a real audio file, so this is the file-audio
+   * equivalent of `synthesizeTestTone` above. `seconds` should be >= 8s so the
+   * beat tracker has enough track to lock tempo.
+   */
+  makeFileSessionDoc(seconds: number): unknown
 }
 
 declare global {
@@ -75,6 +87,44 @@ function synthesizeTestTone(seconds: number): ExportAudio {
     right[i] = TEST_TONE_AMPLITUDE * Math.sin((2 * Math.PI * TEST_TONE_RIGHT_HZ * i) / TEST_TONE_SAMPLE_RATE)
   }
   return { channels: [left, right], sampleRate: TEST_TONE_SAMPLE_RATE }
+}
+
+// --- File-audio session fixture (docs/ANALYSIS.md §11's kicks+hats+noise
+// fixture, adapted to raw PCM — mirrors tests/unit/analysis.test.ts's synth) --
+
+const KICK_SAMPLE_RATE = 44100
+const KICK_BPM = 120
+const KICK_TAU = 0.055
+const KICK_FREQ = 60
+const HAT_TAU = 0.02
+const KICK_NOISE_AMP = 0.02
+const KICK_TRACK_SEED = 42
+
+/** Deterministic 120 BPM kick+hat+noise PCM (mulberry32-seeded, no Math.random). */
+function synthesizeKickTrackPCM(seconds: number): Float32Array {
+  const beatSec = 60 / KICK_BPM
+  const rng = mulberry32(KICK_TRACK_SEED)
+  const n = Math.max(0, Math.round(seconds * KICK_SAMPLE_RATE))
+  const pcm = new Float32Array(n)
+  const kickTimes: number[] = []
+  const hatTimes: number[] = []
+  for (let t = 0; t < seconds; t += beatSec) kickTimes.push(t)
+  for (let t = beatSec / 2; t < seconds; t += beatSec) hatTimes.push(t)
+  for (let i = 0; i < n; i++) {
+    const t = i / KICK_SAMPLE_RATE
+    let s = 0
+    for (const kt of kickTimes) {
+      const rel = t - kt
+      if (rel >= 0) s += Math.exp(-rel / KICK_TAU) * Math.sin(2 * Math.PI * KICK_FREQ * rel)
+    }
+    for (const ht of hatTimes) {
+      const rel = t - ht
+      if (rel >= 0) s += 0.6 * Math.exp(-rel / HAT_TAU) * (2 * rng() - 1)
+    }
+    s += KICK_NOISE_AMP * (2 * rng() - 1)
+    pcm[i] = s
+  }
+  return pcm
 }
 
 export function isTestMode(): boolean {
@@ -131,6 +181,23 @@ export function bootTestMode(root: HTMLElement): void {
       const result = await exportSession(doc as SessionDoc, videoOpts, undefined, audio)
       const magic = Array.from(new Uint8Array(result.buffer.slice(0, 4)))
       return { size: result.buffer.byteLength, mime: result.mime, frameHashes: result.frameHashes, magic }
+    },
+    makeFileSessionDoc: (seconds) => {
+      const pcm = synthesizeKickTrackPCM(seconds)
+      const timeline = analyzeAudio(pcm, KICK_SAMPLE_RATE)
+      return {
+        version: 1,
+        seed: 42,
+        fps: 30,
+        scene: { id: engine.scene.meta.id, params: {} },
+        bindings: {
+          trail: '0.05 + 0.3 * env(0.005, 0.15, beat)',
+          freqY: '2 + 2*step(0.5, beatPhase)',
+        },
+        audio: { kind: 'file', name: 'fixture', timeline: serializeTimeline(timeline) },
+        durationFrames: 90,
+        events: [],
+      }
     },
   }
 }

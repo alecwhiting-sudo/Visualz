@@ -1,5 +1,5 @@
 import type { SourceEvent } from '../mapping/types'
-import type { SessionDoc, SessionEvent } from './types'
+import type { SessionAudio, SessionDoc, SessionEvent } from './types'
 
 /** The engine-state snapshot captured the moment recording starts. */
 export interface SessionSnapshot {
@@ -8,6 +8,8 @@ export interface SessionSnapshot {
   sceneId: string
   params: Record<string, number>
   bindings: Record<string, string>
+  /** Defaults to `{ kind: 'demo' }` when omitted (existing callers/tests). */
+  audio?: SessionAudio
 }
 
 /**
@@ -47,7 +49,7 @@ export class SessionRecorder {
       fps: this.snapshot.fps,
       scene: { id: this.snapshot.sceneId, params: { ...this.snapshot.params } },
       bindings: { ...this.snapshot.bindings },
-      audio: { kind: 'demo' },
+      audio: this.snapshot.audio ?? { kind: 'demo' },
       durationFrames: frame,
       events: this.events.slice(),
     }

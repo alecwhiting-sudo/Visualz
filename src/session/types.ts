@@ -17,13 +17,22 @@ export type SessionEvent =
   | { frame: number; type: 'param'; name: string; value: number } // UI knob
   | { frame: number; type: 'binding'; param: string; src: string | null } // null = cleared
 
+/**
+ * `demo` sessions drive signals from `publishDemoSignals`/the live detector, same
+ * as v0. `file` sessions carry a whole-track offline `FeatureTimeline`
+ * (docs/ANALYSIS.md) — `timeline` is `serializeTimeline()`'s output, typed
+ * `unknown` here to keep this module decoupled from `audio/timeline.ts`; the
+ * engine validates/decodes it via `parseTimeline` at load time (Engine.loadSession).
+ */
+export type SessionAudio = { kind: 'demo' } | { kind: 'file'; name: string; timeline: unknown }
+
 export interface SessionDoc {
   version: 1
   seed: number
   fps: number // fixed-timestep rate for replay
   scene: { id: string; params: Record<string, number> } // initial param values
   bindings: Record<string, string> // initial expression bindings
-  audio: { kind: 'demo' } // v0: demo-signal sessions only
+  audio: SessionAudio
   durationFrames: number
   events: SessionEvent[] // ascending by frame (stable order within a frame)
 }

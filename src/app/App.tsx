@@ -82,6 +82,10 @@ export function App() {
 
   const onFile = async (file: File | undefined) => {
     if (!file || !engineRef.current) return
+    // playFile decodes then runs the ~1.6s synchronous offline analysis pass
+    // (docs/ANALYSIS.md §8); it yields once internally after decode so this
+    // label has a chance to paint before that blocking pass runs.
+    setTrackName(`Analyzing ${file.name}…`)
     await engineRef.current.audio.playFile(file)
     setTrackName(file.name)
   }

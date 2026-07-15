@@ -1,10 +1,15 @@
 import type { SignalBus } from '../core/signals'
+import { analyzeAudio, type FeatureTimeline } from './analysis'
 
 /**
- * Live audio path for the skeleton: file playback through an AnalyserNode,
- * publishing band-energy signals each frame. The offline analysis pass
- * (beat grid, sections — ARCHITECTURE.md §3.2) replaces this as the file
- * path later; this remains the live-mic shape.
+ * Live audio path: file playback through an AnalyserNode, publishing
+ * band-energy signals each frame — this remains the live-mic shape and is
+ * kept intact as the future mic path. File playback's signal publishing has
+ * moved to the Engine (docs/ANALYSIS.md §6/§12), which prefers the offline
+ * `FeatureTimeline` computed here (whole-track, non-causal, strictly better
+ * beat tracking — ARCHITECTURE.md §3.2) over this analyser whenever one is
+ * available; `publishSignals`/the analyser stay wired up underneath for that
+ * future mic path and as a fallback shape.
  */
 export class AudioEngine {
   private ctx: AudioContext | null = null
@@ -13,6 +18,8 @@ export class AudioEngine {
   private freqData: Uint8Array<ArrayBuffer> | null = null
   private startedAt = 0
   private decoded: AudioBuffer | null = null
+  private featureTimeline: FeatureTimeline | null = null
+  private _fileName: string | null = null
 
   get isPlaying(): boolean {
     return this.source !== null
@@ -24,12 +31,31 @@ export class AudioEngine {
     return this.ctx.currentTime - this.startedAt
   }
 
+  /** The most recently analyzed file's offline feature timeline, or null until
+   * a file has finished analysis (see `playFile`). */
+  get timeline(): FeatureTimeline | null {
+    return this.featureTimeline
+  }
+
+  /** The most recently loaded file's name, or null if none has been loaded. */
+  get fileName(): string | null {
+    return this._fileName
+  }
+
   async playFile(file: File): Promise<void> {
     this.stop()
     if (!this.ctx) this.ctx = new AudioContext()
     if (this.ctx.state === 'suspended') await this.ctx.resume()
     const buffer = await this.ctx.decodeAudioData(await file.arrayBuffer())
     this.decoded = buffer
+    this._fileName = file.name
+
+    // TODO(docs/ANALYSIS.md §8): analyzeAudio is a synchronous ~1.6s pass for a
+    // 3-minute track — move it into a Worker so the main thread never blocks.
+    // For v1, yield once here so a caller that just set an "Analyzing…" label
+    // (App.tsx) gets a chance to paint before the blocking pass runs.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    this.featureTimeline = analyzeAudio(mixToMono(buffer), buffer.sampleRate)
 
     this.analyser = this.ctx.createAnalyser()
     this.analyser.fftSize = 2048
@@ -90,6 +116,21 @@ export class AudioEngine {
     bus.set('mid', band(160, 2000))
     bus.set('high', band(2000, 12000))
   }
+}
+
+/** Averages all channels of a decoded AudioBuffer into a single Float32Array
+ * (docs/ANALYSIS.md's offline pass runs on mono PCM). */
+function mixToMono(buffer: AudioBuffer): Float32Array {
+  const out = new Float32Array(buffer.length)
+  const channels = buffer.numberOfChannels
+  for (let c = 0; c < channels; c++) {
+    const data = buffer.getChannelData(c)
+    for (let i = 0; i < data.length; i++) out[i] += data[i]
+  }
+  if (channels > 1) {
+    for (let i = 0; i < out.length; i++) out[i] /= channels
+  }
+  return out
 }
 
 /**

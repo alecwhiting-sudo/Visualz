@@ -2,7 +2,9 @@ import { Transport, type TransportMode } from '../core/transport'
 import { SignalBus } from '../core/signals'
 import { Gpu } from '../gpu/context'
 import { AudioEngine, publishDemoSignals } from '../audio/engine'
-import { AudioEventDetector } from '../audio/events'
+import { AudioEventDetector, type AudioEventResult } from '../audio/events'
+import { sampleTimeline, serializeTimeline, parseTimeline } from '../audio/timeline'
+import type { FeatureTimeline } from '../audio/analysis'
 import { compile, type CompiledExpr } from '../dsl/compile'
 import { DslState } from '../dsl/state'
 import type { SceneRuntime } from '../scenes/types'
@@ -11,7 +13,7 @@ import { DEFAULT_MAPPINGS } from '../mapping/defaults'
 import type { SourceEvent } from '../mapping/types'
 import { SessionRecorder } from '../session/recorder'
 import { SessionPlayer, type PlayerTarget } from '../session/player'
-import type { SessionDoc } from '../session/types'
+import type { SessionAudio, SessionDoc } from '../session/types'
 
 interface Binding {
   src: string
@@ -50,6 +52,9 @@ export class Engine {
 
   private recorder: SessionRecorder | null = null
   private player: SessionPlayer | null = null
+  /** Set by `loadSession` when the loaded doc's audio is `kind: 'file'`; drives
+   * signal publishing during replay instead of the (stopped) live AudioEngine. */
+  private sessionTimeline: FeatureTimeline | null = null
   /**
    * Routes replayed events into the live pipeline while bypassing recording —
    * queueInput goes straight to `mappings.queue` (not `this.queueInput`) so a
@@ -164,6 +169,13 @@ export class Engine {
    * across it (pressed keys, in-flight ramps) is not captured — replay reproduces
    * events from here on. Active pulse contributions are subtracted from the param
    * snapshot so a decaying transient isn't baked in as the permanent base.
+   *
+   * The `audio` field is captured the same way: if a file is currently playing
+   * with a finished analysis, the doc gets `{kind:'file', name, timeline}` (the
+   * offline `FeatureTimeline`, serialized); otherwise `{kind:'demo'}`. This is
+   * also edge-based — loading a *different* file mid-recording is not captured;
+   * the doc keeps referencing whatever was playing when recording started, even
+   * though the live engine keeps dancing to the new track underneath it.
    */
   startRecording(): void {
     const params: Record<string, number> = {}
@@ -172,12 +184,17 @@ export class Engine {
     }
     const bindings: Record<string, string> = {}
     for (const [param, b] of this.bindings) bindings[param] = b.src
+    const audio: SessionAudio =
+      this.audio.isPlaying && this.audio.timeline
+        ? { kind: 'file', name: this.audio.fileName ?? 'audio', timeline: serializeTimeline(this.audio.timeline) }
+        : { kind: 'demo' }
     this.recorder = new SessionRecorder({
       seed: this.seed,
       fps: this.transport.fps,
       sceneId: this.scene.meta.id,
       params,
       bindings,
+      audio,
     })
   }
 
@@ -206,6 +223,15 @@ export class Engine {
     this.inputSignals.clear()
     this.bindings.clear()
 
+    this.sessionTimeline = null
+    if (doc.audio.kind === 'file') {
+      try {
+        this.sessionTimeline = parseTimeline(doc.audio.timeline)
+      } catch (err) {
+        throw new Error(`Session audio timeline is invalid: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+
     this.scene.dispose()
     this.scene.init(this.gpu, doc.seed)
     for (const [name, value] of Object.entries(doc.scene.params)) {
@@ -221,6 +247,7 @@ export class Engine {
   /** Disarms the active replay player (no-op if none is armed). */
   clearSession(): void {
     this.player = null
+    this.sessionTimeline = null
   }
 
   /** True once an armed player has applied every recorded event (false if none is armed). */
@@ -240,13 +267,40 @@ export class Engine {
     this.updateAndRender(time, frame)
   }
 
+  /**
+   * Signal-source priority (docs/ANALYSIS.md §12): a whole-track offline
+   * `FeatureTimeline` — sessions replaying `audio.kind === 'file'`, or a file
+   * currently playing live with its analysis done — is strictly better than
+   * the live `AudioEventDetector` (non-causal, sees the whole track) and takes
+   * over both band publishing AND onset/beat/beatPhase; the detector does not
+   * run in that case. Everything else (no timeline: demo sessions, no audio
+   * loaded, or a future mic path) keeps today's publishDemoSignals/analyser +
+   * AudioEventDetector behavior.
+   */
   private updateAndRender(time: number, frame: { time: number; dt: number; frame: number }): void {
-    if (this.audio.isPlaying) {
-      this.audio.publishSignals(this.bus)
+    const timeline =
+      this.player !== null
+        ? this.sessionTimeline
+        : this.audio.isPlaying
+          ? this.audio.timeline
+          : null
+
+    let ev: AudioEventResult
+    if (timeline) {
+      const s = sampleTimeline(timeline, frame.time, frame.dt)
+      this.bus.set('rms', s.rms)
+      this.bus.set('bass', s.bass)
+      this.bus.set('mid', s.mid)
+      this.bus.set('high', s.high)
+      ev = { onset: s.onset === 1, beat: s.beat === 1, beatPhase: s.beatPhase, onsetStrength: s.onsetStrength }
     } else {
-      publishDemoSignals(this.bus, time)
+      if (this.audio.isPlaying) {
+        this.audio.publishSignals(this.bus)
+      } else {
+        publishDemoSignals(this.bus, time)
+      }
+      ev = this.events.update(frame.dt, frame.time, this.bus, !this.audio.isPlaying)
     }
-    const ev = this.events.update(frame.dt, frame.time, this.bus, !this.audio.isPlaying)
     this.bus.set('onset', ev.onset ? 1 : 0)
     this.bus.set('beat', ev.beat ? 1 : 0)
     this.bus.set('beatPhase', ev.beatPhase)
