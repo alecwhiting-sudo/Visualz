@@ -12,6 +12,11 @@ export interface PlayerTarget {
   setParam(name: string, value: number): void
   setBinding(param: string, src: string): void
   clearBinding(param: string): void
+  /** Code-layer hot-recompile (ARCHITECTURE.md §3.3). Routed straight to the
+   * scene, bypassing recording — see engine.ts's `playerTarget`. A compile
+   * error here means the doc is corrupt (it was recorded with a compiling
+   * shader), so it throws rather than swallowing the failure. */
+  setShaderSource(key: string, source: string): void
 }
 
 /**
@@ -51,6 +56,9 @@ export class SessionPlayer {
         case 'binding':
           if (event.src === null) target.clearBinding(event.param)
           else target.setBinding(event.param, event.src)
+          break
+        case 'shader':
+          target.setShaderSource(event.key, event.source)
           break
       }
       this.cursor++

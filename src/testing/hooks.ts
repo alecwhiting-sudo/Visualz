@@ -59,6 +59,11 @@ export interface VizTestApi {
    * beat tracker has enough track to lock tempo.
    */
   makeFileSessionDoc(seconds: number): unknown
+  /** Code layer (ARCHITECTURE.md §3.3): hot-recompile a shader stage. Returns
+   * the GLSL error message on failure, or null on success. */
+  setShaderSource(key: string, source: string): string | null
+  /** Code layer stages the current scene exposes; `[]` if it has none. */
+  getShaderSources(): { key: string; source: string }[]
 }
 
 declare global {
@@ -196,6 +201,15 @@ export function bootTestMode(root: HTMLElement): void {
       const magic = Array.from(new Uint8Array(result.buffer.slice(0, 4)))
       return { size: result.buffer.byteLength, mime: result.mime, frameHashes: result.frameHashes, magic }
     },
+    setShaderSource: (key, source) => {
+      try {
+        engine.setShaderSource(key, source)
+        return null
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err)
+      }
+    },
+    getShaderSources: () => engine.getShaderSources().map(({ key, source }) => ({ key, source })),
     makeFileSessionDoc: (seconds) => {
       const pcm = synthesizeKickTrackPCM(seconds)
       const timeline = analyzeAudio(pcm, KICK_SAMPLE_RATE)

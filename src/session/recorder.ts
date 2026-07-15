@@ -10,6 +10,10 @@ export interface SessionSnapshot {
   bindings: Record<string, string>
   /** Defaults to `{ kind: 'demo' }` when omitted (existing callers/tests). */
   audio?: SessionAudio
+  /** Current shader-stage sources (code layer), keyed by stage key. Omitted
+   * entirely — not even `{}` — from `SessionDoc.scene` when this is undefined,
+   * so existing snapshots/tests that don't pass it are unaffected. */
+  shaders?: Record<string, string>
 }
 
 /**
@@ -42,12 +46,20 @@ export class SessionRecorder {
     this.events.push({ frame, type: 'binding', param, src })
   }
 
+  recordShader(frame: number, key: string, source: string): void {
+    this.events.push({ frame, type: 'shader', key, source })
+  }
+
   finish(frame: number): SessionDoc {
     return {
       version: 1,
       seed: this.snapshot.seed,
       fps: this.snapshot.fps,
-      scene: { id: this.snapshot.sceneId, params: { ...this.snapshot.params } },
+      scene: {
+        id: this.snapshot.sceneId,
+        params: { ...this.snapshot.params },
+        ...(this.snapshot.shaders !== undefined ? { shaders: { ...this.snapshot.shaders } } : {}),
+      },
       bindings: { ...this.snapshot.bindings },
       audio: this.snapshot.audio ?? { kind: 'demo' },
       durationFrames: frame,

@@ -7,7 +7,7 @@ import { sampleTimeline, serializeTimeline, parseTimeline } from '../audio/timel
 import type { FeatureTimeline } from '../audio/analysis'
 import { compile, type CompiledExpr } from '../dsl/compile'
 import { DslState } from '../dsl/state'
-import type { SceneRuntime } from '../scenes/types'
+import type { SceneRuntime, ShaderStage } from '../scenes/types'
 import { MappingRuntime } from '../mapping/runtime'
 import { DEFAULT_MAPPINGS } from '../mapping/defaults'
 import type { SourceEvent } from '../mapping/types'
@@ -71,6 +71,17 @@ export class Engine {
     setParam: (name, value) => this.scene.setParam(name, value),
     setBinding: (param, src) => this.setBinding(param, src),
     clearBinding: (param) => this.clearBinding(param),
+    // Straight to the scene, bypassing this.setShaderSource (and thus
+    // recording) — same reasoning as setParam above (mirrors setBinding's
+    // reuse pattern in the comment on this field). A compile error on replay
+    // means the doc is corrupt and should throw, not silently keep the old
+    // program.
+    setShaderSource: (key, source) => {
+      if (!this.scene.setShaderSource) {
+        throw new Error(`Session references shader stage "${key}" but scene "${this.scene.meta.id}" has no code layer`)
+      }
+      this.scene.setShaderSource(key, source)
+    },
   }
 
   constructor(canvas: HTMLCanvasElement | OffscreenCanvas, scene: SceneRuntime, opts: EngineOptions) {
@@ -161,6 +172,25 @@ export class Engine {
     return this.bindings.get(param)?.src
   }
 
+  /**
+   * Code layer pass-through (ARCHITECTURE.md §3.3). Throws on GLSL error (the
+   * scene's `gpu.compileProgram` log) — the caller surfaces it inline and the
+   * scene's last good program keeps rendering. Records the edit when a
+   * recording is armed (only on success, mirroring `setBinding`).
+   */
+  setShaderSource(key: string, source: string): void {
+    if (!this.scene.setShaderSource) {
+      throw new Error(`Scene "${this.scene.meta.id}" has no shader code layer`)
+    }
+    this.scene.setShaderSource(key, source)
+    if (this.recorder) this.recorder.recordShader(this.transport.frame, key, source)
+  }
+
+  /** `[]` when the scene doesn't implement the code layer. */
+  getShaderSources(): ShaderStage[] {
+    return this.scene.getShaderSources ? this.scene.getShaderSources() : []
+  }
+
   /** True while a session recording is in progress (`startRecording()` ran, `stopRecording()` hasn't). */
   get isRecording(): boolean {
     return this.recorder !== null
@@ -191,6 +221,13 @@ export class Engine {
       this.audio.isPlaying && this.audio.timeline
         ? { kind: 'file', name: this.audio.fileName ?? 'audio', timeline: serializeTimeline(this.audio.timeline) }
         : { kind: 'demo' }
+    // Snapshot ALL current stage sources (not just edited ones) — dead simple
+    // and correct, at the cost of ~2-6KB per doc (docs the tradeoff rather than
+    // diffing against scene defaults, which would need a throwaway scene
+    // instance). Undefined (not `{}`) for scenes with no code layer.
+    const shaders = this.scene.getShaderSources
+      ? Object.fromEntries(this.scene.getShaderSources().map((s) => [s.key, s.source]))
+      : undefined
     this.recorder = new SessionRecorder({
       seed: this.seed,
       fps: this.transport.fps,
@@ -198,6 +235,7 @@ export class Engine {
       params,
       bindings,
       audio,
+      shaders,
     })
   }
 
@@ -245,6 +283,14 @@ export class Engine {
     }
     for (const [param, src] of Object.entries(doc.bindings)) {
       this.setBinding(param, src)
+    }
+    for (const [key, source] of Object.entries(doc.scene.shaders ?? {})) {
+      if (!this.scene.setShaderSource) {
+        throw new Error(
+          `Session scene.shaders references shader stage "${key}" but scene "${this.scene.meta.id}" has no code layer`,
+        )
+      }
+      this.scene.setShaderSource(key, source)
     }
 
     this.player = new SessionPlayer(doc)

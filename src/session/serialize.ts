@@ -19,7 +19,8 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
 }
 
-const KNOWN_EVENT_TYPES = new Set(['input', 'inputSignal', 'param', 'binding'])
+const KNOWN_EVENT_TYPES = new Set(['input', 'inputSignal', 'param', 'binding', 'shader'])
+const MAX_SHADER_SOURCE_LENGTH = 100_000
 
 export function parseSession(json: string): SessionDoc {
   let raw: unknown
@@ -46,6 +47,19 @@ export function parseSession(json: string): SessionDoc {
   for (const [name, value] of Object.entries(raw.scene.params)) {
     if (!isFiniteNumber(value)) {
       throw new Error(`Session scene.params.${name} must be a finite number`)
+    }
+  }
+  if (raw.scene.shaders !== undefined) {
+    if (!isRecord(raw.scene.shaders)) {
+      throw new Error('Session scene.shaders must be an object when present')
+    }
+    for (const [key, source] of Object.entries(raw.scene.shaders)) {
+      if (typeof source !== 'string') {
+        throw new Error(`Session scene.shaders.${key} must be a string`)
+      }
+      if (source.length > MAX_SHADER_SOURCE_LENGTH) {
+        throw new Error(`Session scene.shaders.${key} exceeds max length (${MAX_SHADER_SOURCE_LENGTH})`)
+      }
     }
   }
   if (!isRecord(raw.bindings)) {
@@ -118,6 +132,17 @@ export function parseSession(json: string): SessionDoc {
         }
         if (e.src !== null && typeof e.src !== 'string') {
           throw new Error(`Session events[${i}].src must be a string or null`)
+        }
+        break
+      case 'shader':
+        if (typeof e.key !== 'string') {
+          throw new Error(`Session events[${i}].key must be a string`)
+        }
+        if (typeof e.source !== 'string') {
+          throw new Error(`Session events[${i}].source must be a string`)
+        }
+        if ((e.source as string).length > MAX_SHADER_SOURCE_LENGTH) {
+          throw new Error(`Session events[${i}].source exceeds max length (${MAX_SHADER_SOURCE_LENGTH})`)
         }
         break
     }

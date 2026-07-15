@@ -41,6 +41,7 @@ function fakeTarget() {
     setParam: (name, value) => calls.push({ fn: 'setParam', args: [name, value] }),
     setBinding: (param, src) => calls.push({ fn: 'setBinding', args: [param, src] }),
     clearBinding: (param) => calls.push({ fn: 'clearBinding', args: [param] }),
+    setShaderSource: (key, source) => calls.push({ fn: 'setShaderSource', args: [key, source] }),
   }
   return { target, calls }
 }
@@ -92,6 +93,26 @@ describe('SessionRecorder', () => {
     recorder.recordInputSignal(2, 'pad.y', 0.1)
     const doc = recorder.finish(3)
     expect(doc.events.map((e) => e.type)).toEqual(['param', 'input', 'inputSignal'])
+  })
+
+  it('4b) recordShader stamps a shader event with the given frame/key/source', () => {
+    const recorder = new SessionRecorder(baseSnapshot())
+    recorder.recordShader(4, 'line-fs', 'void main() {}')
+    const doc = recorder.finish(5)
+    expect(doc.events).toEqual([{ frame: 4, type: 'shader', key: 'line-fs', source: 'void main() {}' }])
+  })
+
+  it('4c) scene.shaders is omitted (not even {}) when the snapshot has none', () => {
+    const doc = new SessionRecorder(baseSnapshot()).finish(0)
+    expect(doc.scene).toEqual({ id: 'lissajous', params: { freqX: 3, freqY: 2 } })
+    expect('shaders' in doc.scene).toBe(false)
+  })
+
+  it('4d) scene.shaders carries the snapshot sources when provided', () => {
+    const doc = new SessionRecorder(
+      baseSnapshot({ shaders: { 'line-fs': 'A', 'fade-fs': 'B' } }),
+    ).finish(0)
+    expect(doc.scene.shaders).toEqual({ 'line-fs': 'A', 'fade-fs': 'B' })
   })
 })
 
@@ -176,6 +197,14 @@ describe('SessionPlayer', () => {
       { fn: 'clearBinding', args: ['drift'] },
     ])
   })
+
+  it('11b) routes a shader event to setShaderSource', () => {
+    const doc = docWithEvents([{ frame: 0, type: 'shader', key: 'line-fs', source: 'void main() {}' }])
+    const player = new SessionPlayer(doc)
+    const { target, calls } = fakeTarget()
+    player.applyUpTo(0, target)
+    expect(calls).toEqual([{ fn: 'setShaderSource', args: ['line-fs', 'void main() {}'] }])
+  })
 })
 
 // --- 3. serialize / parse -------------------------------------------------------
@@ -189,6 +218,14 @@ describe('serializeSession / parseSession round-trip', () => {
       { frame: 3, type: 'binding', param: 'drift', src: '0.5 + bass' },
       { frame: 4, type: 'binding', param: 'drift', src: null },
     ])
+    expect(parseSession(serializeSession(doc))).toEqual(doc)
+  })
+
+  it('12b) round-trips a shader event and scene.shaders', () => {
+    const doc = docWithEvents(
+      [{ frame: 0, type: 'shader', key: 'line-fs', source: 'void main() { outColor = vec4(1.0); }' }],
+      { scene: { id: 'lissajous', params: { freqX: 3, freqY: 2 }, shaders: { 'line-fs': 'X', 'fade-fs': 'Y' } } },
+    )
     expect(parseSession(serializeSession(doc))).toEqual(doc)
   })
 })
@@ -224,6 +261,54 @@ describe('parseSession validation', () => {
 
   it('18) rejects malformed JSON entirely', () => {
     expect(() => parseSession('{not json')).toThrow(/JSON/i)
+  })
+
+  it('18b) rejects a shader event with a non-string source', () => {
+    const doc = { ...docWithEvents([]), events: [{ frame: 0, type: 'shader', key: 'line-fs', source: 123 }] }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/source/i)
+  })
+
+  it('18c) rejects a shader event with a non-string key', () => {
+    const doc = { ...docWithEvents([]), events: [{ frame: 0, type: 'shader', key: 7, source: 'x' }] }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/key/i)
+  })
+
+  it('18d) rejects a shader event whose source exceeds the max length', () => {
+    const doc = {
+      ...docWithEvents([]),
+      events: [{ frame: 0, type: 'shader', key: 'line-fs', source: 'x'.repeat(100_001) }],
+    }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/exceeds max length/i)
+  })
+
+  it('18e) accepts a shader event within the max length', () => {
+    const doc = {
+      ...docWithEvents([]),
+      events: [{ frame: 0, type: 'shader', key: 'line-fs', source: 'x'.repeat(100_000) }],
+    }
+    expect(() => parseSession(JSON.stringify(doc))).not.toThrow()
+  })
+
+  it('18f) rejects scene.shaders that is not an object', () => {
+    const doc = {
+      ...docWithEvents([]),
+      scene: { id: 'lissajous', params: {}, shaders: 'not an object' },
+    }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/scene\.shaders/i)
+  })
+
+  it('18g) rejects scene.shaders with a non-string value', () => {
+    const doc = {
+      ...docWithEvents([]),
+      scene: { id: 'lissajous', params: {}, shaders: { 'line-fs': 42 } },
+    }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/scene\.shaders\.line-fs/i)
+  })
+
+  it('18h) accepts a session with no scene.shaders at all (backward compatible)', () => {
+    const doc = docWithEvents([])
+    expect(() => parseSession(JSON.stringify(doc))).not.toThrow()
+    expect(parseSession(JSON.stringify(doc)).scene.shaders).toBeUndefined()
   })
 })
 

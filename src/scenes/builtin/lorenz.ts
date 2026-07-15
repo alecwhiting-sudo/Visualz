@@ -2,7 +2,7 @@ import { mulberry32 } from '../../core/prng'
 import type { Gpu } from '../../gpu/context'
 import { checkFloatRenderable, FullscreenPass, PingPong } from '../../gpu/targets'
 import { snapCountToSide, DEFAULT_COUNT, DEFAULT_SIDE } from '../families/particles/gpgpu'
-import type { FrameContext, ParamSchema, SceneRuntime } from '../types'
+import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../types'
 
 /**
  * Particles family, scene 2 (docs/PARTICLES.md §7): the Lorenz attractor. State
@@ -181,6 +181,13 @@ export class LorenzScene implements SceneRuntime {
   private renderLoc!: RenderLocs
   private pointsVao!: WebGLVertexArrayObject
 
+  // Code layer (ARCHITECTURE.md §3.3): current source per editable stage, reset
+  // to the stock defaults every init() so loadSession's dispose+init starts
+  // clean. Uniform locations are cached (not per-render getUniformLocation
+  // calls) so a program swap must refresh them.
+  private updateSource = UPDATE_FS
+  private renderSource = RENDER_FS
+
   init(gpu: Gpu, seed: number): void {
     const caps = checkFloatRenderable(gpu)
     if (!caps.ok) throw new Error(caps.reason)
@@ -192,32 +199,20 @@ export class LorenzScene implements SceneRuntime {
     this.flash = 0
     for (const p of this.params) this.values.set(p.name, p.default)
 
+    this.updateSource = UPDATE_FS
+    this.renderSource = RENDER_FS
+
     const gl = gpu.gl
     this.pp = new PingPong(gpu, this.side, seedLorenzState(seed, this.side * this.side))
     this.fsPass = new FullscreenPass(gpu)
 
-    this.updateProgram = gpu.compileProgram(FULLSCREEN_VS, UPDATE_FS)
+    this.updateProgram = gpu.compileProgram(FULLSCREEN_VS, this.updateSource)
     this.fadeProgram = gpu.compileProgram(FULLSCREEN_VS, FADE_FS)
-    this.renderProgram = gpu.compileProgram(RENDER_VS, RENDER_FS)
+    this.renderProgram = gpu.compileProgram(RENDER_VS, this.renderSource)
 
-    this.updateLoc = {
-      uState: gl.getUniformLocation(this.updateProgram, 'uState'),
-      uDt: gl.getUniformLocation(this.updateProgram, 'uDt'),
-      uSpeed: gl.getUniformLocation(this.updateProgram, 'uSpeed'),
-    }
+    this.updateLoc = this.lookupUpdateLocs(this.updateProgram)
     this.fadeLoc = { uFade: gl.getUniformLocation(this.fadeProgram, 'uFade') }
-    this.renderLoc = {
-      uState: gl.getUniformLocation(this.renderProgram, 'uState'),
-      uTexSize: gl.getUniformLocation(this.renderProgram, 'uTexSize'),
-      uAngle: gl.getUniformLocation(this.renderProgram, 'uAngle'),
-      uScale: gl.getUniformLocation(this.renderProgram, 'uScale'),
-      uAspect: gl.getUniformLocation(this.renderProgram, 'uAspect'),
-      uPointSize: gl.getUniformLocation(this.renderProgram, 'uPointSize'),
-      uResHeight: gl.getUniformLocation(this.renderProgram, 'uResHeight'),
-      uHueShift: gl.getUniformLocation(this.renderProgram, 'uHueShift'),
-      uFalloff: gl.getUniformLocation(this.renderProgram, 'uFalloff'),
-      uBrightness: gl.getUniformLocation(this.renderProgram, 'uBrightness'),
-    }
+    this.renderLoc = this.lookupRenderLocs(this.renderProgram)
 
     const vao = gl.createVertexArray()
     if (!vao) throw new Error('Failed to create points VAO')
@@ -317,5 +312,61 @@ export class LorenzScene implements SceneRuntime {
     gl.deleteVertexArray(this.pointsVao)
     this.fsPass.dispose()
     this.pp.dispose()
+  }
+
+  private lookupUpdateLocs(program: WebGLProgram): UpdateLocs {
+    const gl = this.gpu.gl
+    return {
+      uState: gl.getUniformLocation(program, 'uState'),
+      uDt: gl.getUniformLocation(program, 'uDt'),
+      uSpeed: gl.getUniformLocation(program, 'uSpeed'),
+    }
+  }
+
+  private lookupRenderLocs(program: WebGLProgram): RenderLocs {
+    const gl = this.gpu.gl
+    return {
+      uState: gl.getUniformLocation(program, 'uState'),
+      uTexSize: gl.getUniformLocation(program, 'uTexSize'),
+      uAngle: gl.getUniformLocation(program, 'uAngle'),
+      uScale: gl.getUniformLocation(program, 'uScale'),
+      uAspect: gl.getUniformLocation(program, 'uAspect'),
+      uPointSize: gl.getUniformLocation(program, 'uPointSize'),
+      uResHeight: gl.getUniformLocation(program, 'uResHeight'),
+      uHueShift: gl.getUniformLocation(program, 'uHueShift'),
+      uFalloff: gl.getUniformLocation(program, 'uFalloff'),
+      uBrightness: gl.getUniformLocation(program, 'uBrightness'),
+    }
+  }
+
+  getShaderSources(): ShaderStage[] {
+    return [
+      { key: 'update-fs', label: 'Integrator (update-fs)', source: this.updateSource },
+      { key: 'render-fs', label: 'Point render (render-fs)', source: this.renderSource },
+    ]
+  }
+
+  setShaderSource(key: string, source: string): void {
+    const gl = this.gpu.gl
+    switch (key) {
+      case 'update-fs': {
+        const program = this.gpu.compileProgram(FULLSCREEN_VS, source) // throws on GLSL error; old program untouched
+        gl.deleteProgram(this.updateProgram)
+        this.updateProgram = program
+        this.updateLoc = this.lookupUpdateLocs(program)
+        this.updateSource = source
+        return
+      }
+      case 'render-fs': {
+        const program = this.gpu.compileProgram(RENDER_VS, source)
+        gl.deleteProgram(this.renderProgram)
+        this.renderProgram = program
+        this.renderLoc = this.lookupRenderLocs(program)
+        this.renderSource = source
+        return
+      }
+      default:
+        throw new Error(`Unknown shader stage "${key}" for scene "${this.meta.id}"`)
+    }
   }
 }

@@ -268,6 +268,21 @@ body {
   color: #9a9ab0;
 }
 
+.shader-editor {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  background: #0d0d13;
+  border: 1px solid #2a2a38;
+  border-radius: 6px;
+  color: #cfcfe0;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
 @media (max-width: 720px) {
   .app {
     flex-direction: column;

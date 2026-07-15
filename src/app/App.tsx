@@ -358,8 +358,77 @@ export function App() {
             ))}
           </section>
         )}
+
+        {engine && <ShaderPanel engine={engine} />}
       </aside>
     </div>
+  )
+}
+
+/**
+ * The "code" authoring layer (REQUIREMENTS.md §3.1 layer 3 / ARCHITECTURE.md
+ * §3.3): a stage dropdown + textarea editing a scene's raw GLSL, hot-recompiled
+ * on Apply. Hidden entirely when the scene has no shader stages. Switching
+ * scenes (a new `engine`) or stages reloads the textarea from the engine.
+ */
+function ShaderPanel({ engine }: { engine: Engine }) {
+  const stages = engine.getShaderSources()
+  const [stageKey, setStageKey] = useState(stages[0]?.key ?? '')
+  const [source, setSource] = useState(stages[0]?.source ?? '')
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const fresh = engine.getShaderSources()
+    const key = fresh[0]?.key ?? ''
+    setStageKey(key)
+    setSource(fresh.find((s) => s.key === key)?.source ?? '')
+    setError(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload only when the scene/engine changes, not on every keystroke
+  }, [engine])
+
+  if (stages.length === 0) return null
+
+  const onStageChange = (key: string) => {
+    setStageKey(key)
+    setSource(engine.getShaderSources().find((s) => s.key === key)?.source ?? '')
+    setError(null)
+  }
+
+  const onApply = () => {
+    try {
+      engine.setShaderSource(stageKey, source)
+      setError(null)
+    } catch (e) {
+      // Bad GLSL: the scene's last good program keeps rendering.
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  return (
+    <section>
+      <h2>Code</h2>
+      <label className="scene-select">
+        Stage
+        <select value={stageKey} onChange={(ev) => onStageChange(ev.target.value)}>
+          {stages.map((s) => (
+            <option key={s.key} value={s.key}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <textarea
+        className="shader-editor"
+        rows={14}
+        spellCheck={false}
+        value={source}
+        onChange={(ev) => setSource(ev.target.value)}
+      />
+      <button type="button" className="session-button" onClick={onApply}>
+        Apply
+      </button>
+      {error && <span className="expr-message">{error}</span>}
+    </section>
   )
 }
 

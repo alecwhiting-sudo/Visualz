@@ -16,6 +16,7 @@ export type SessionEvent =
   | { frame: number; type: 'inputSignal'; name: string; value: number } // pad.x etc.
   | { frame: number; type: 'param'; name: string; value: number } // UI knob
   | { frame: number; type: 'binding'; param: string; src: string | null } // null = cleared
+  | { frame: number; type: 'shader'; key: string; source: string } // code-layer hot-recompile
 
 /**
  * `demo` sessions drive signals from `publishDemoSignals`/the live detector, same
@@ -30,7 +31,13 @@ export interface SessionDoc {
   version: 1
   seed: number
   fps: number // fixed-timestep rate for replay
-  scene: { id: string; params: Record<string, number> } // initial param values
+  scene: {
+    id: string
+    params: Record<string, number> // initial param values
+    /** Initial code-layer sources per shader stage; omitted (not even {})
+     * when the recording snapshot had none (ARCHITECTURE.md §3.3 code layer). */
+    shaders?: Record<string, string>
+  }
   bindings: Record<string, string> // initial expression bindings
   audio: SessionAudio
   durationFrames: number

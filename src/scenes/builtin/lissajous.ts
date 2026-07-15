@@ -1,6 +1,6 @@
 import { mulberry32, type Prng } from '../../core/prng'
 import type { Gpu } from '../../gpu/context'
-import type { FrameContext, ParamSchema, SceneRuntime } from '../types'
+import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../types'
 
 /**
  * First geometry-family scene: an audio-reactive Lissajous/harmonograph curve
@@ -74,15 +74,25 @@ export class LissajousScene implements SceneRuntime {
   private positions = new Float32Array(POINTS * 2)
   private amp = 0.8
 
+  // Code layer (ARCHITECTURE.md §3.3): current source per editable stage, reset
+  // to the stock defaults every init() so loadSession's dispose+init starts
+  // clean. Uniform locations are looked up per-render (see render()), so
+  // swapping `lineProgram`/`fadeProgram` here needs no location refresh.
+  private lineSource = LINE_FS
+  private fadeSource = FADE_FS
+
   init(gpu: Gpu, seed: number): void {
     this.gpu = gpu
     this.random = mulberry32(seed)
     this.huePhase = this.random()
     for (const p of this.params) this.values.set(p.name, p.default)
 
+    this.lineSource = LINE_FS
+    this.fadeSource = FADE_FS
+
     const gl = gpu.gl
-    this.lineProgram = gpu.compileProgram(LINE_VS, LINE_FS)
-    this.fadeProgram = gpu.compileProgram(FADE_VS, FADE_FS)
+    this.lineProgram = gpu.compileProgram(LINE_VS, this.lineSource)
+    this.fadeProgram = gpu.compileProgram(FADE_VS, this.fadeSource)
 
     this.lineVao = gl.createVertexArray()!
     this.lineVbo = gl.createBuffer()!
@@ -173,5 +183,34 @@ export class LissajousScene implements SceneRuntime {
     const gl = this.gpu.gl
     gl.deleteProgram(this.lineProgram)
     gl.deleteProgram(this.fadeProgram)
+  }
+
+  getShaderSources(): ShaderStage[] {
+    return [
+      { key: 'line-fs', label: 'Curve color (line-fs)', source: this.lineSource },
+      { key: 'fade-fs', label: 'Trail fade (fade-fs)', source: this.fadeSource },
+    ]
+  }
+
+  setShaderSource(key: string, source: string): void {
+    const gl = this.gpu.gl
+    switch (key) {
+      case 'line-fs': {
+        const program = this.gpu.compileProgram(LINE_VS, source) // throws on GLSL error; old program untouched
+        gl.deleteProgram(this.lineProgram)
+        this.lineProgram = program
+        this.lineSource = source
+        return
+      }
+      case 'fade-fs': {
+        const program = this.gpu.compileProgram(FADE_VS, source)
+        gl.deleteProgram(this.fadeProgram)
+        this.fadeProgram = program
+        this.fadeSource = source
+        return
+      }
+      default:
+        throw new Error(`Unknown shader stage "${key}" for scene "${this.meta.id}"`)
+    }
   }
 }
