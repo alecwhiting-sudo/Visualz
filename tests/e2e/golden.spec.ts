@@ -57,3 +57,15 @@ test('expression-bound params render deterministically (equations layer)', async
   })
   await expect(page.locator('canvas')).toHaveScreenshot('lissajous-expr-f120.png')
 })
+
+test('mapped triggers and pulses render deterministically (mapping layer)', async ({ page }) => {
+  await boot(page, 42)
+  await page.evaluate(() => {
+    window.__viz!.queueEvent({ type: 'key', key: '4', edge: 'down' })
+    window.__viz!.renderFrames(30)
+    window.__viz!.queueEvent({ type: 'trigger', index: 1 })
+    window.__viz!.queueEvent({ type: 'key', key: ' ', edge: 'down' })
+    window.__viz!.renderFrames(90)
+  })
+  await expect(page.locator('canvas')).toHaveScreenshot('lissajous-mapped-f120.png')
+})

@@ -5,6 +5,8 @@ import { AudioEngine, publishDemoSignals } from '../audio/engine'
 import { compile, type CompiledExpr } from '../dsl/compile'
 import { DslState } from '../dsl/state'
 import type { SceneRuntime } from '../scenes/types'
+import { MappingRuntime } from '../mapping/runtime'
+import { DEFAULT_MAPPINGS } from '../mapping/defaults'
 
 interface Binding {
   src: string
@@ -33,16 +35,19 @@ export class Engine {
   readonly audio = new AudioEngine()
   readonly scene: SceneRuntime
   readonly seed: number
+  readonly mappings: MappingRuntime
 
   private raf = 0
   private running = false
   private bindings = new Map<string, Binding>()
+  private inputSignals = new Map<string, number>()
 
   constructor(canvas: HTMLCanvasElement, scene: SceneRuntime, opts: EngineOptions) {
     this.transport = new Transport(opts.mode, opts.fps ?? 60)
     this.gpu = new Gpu(canvas, { width: opts.width, height: opts.height })
     this.scene = scene
     this.seed = opts.seed
+    this.mappings = new MappingRuntime(DEFAULT_MAPPINGS)
     scene.init(this.gpu, opts.seed)
   }
 
@@ -81,6 +86,15 @@ export class Engine {
   }
 
   /**
+   * Continuous-input signals (e.g. an XY touch pad) that persist on the bus every
+   * frame until changed again — unlike mapping actions, these are just named
+   * numbers for expressions/scenes to read, published before bindings each frame.
+   */
+  setInputSignal(name: string, value: number): void {
+    this.inputSignals.set(name, value)
+  }
+
+  /**
    * Bind a scene param to a DSL expression, evaluated every frame before the scene
    * updates (the "equations" layer of the authoring model). Throws DslError on bad
    * source — callers surface it inline and the previous binding stays active.
@@ -109,6 +123,9 @@ export class Engine {
     } else {
       publishDemoSignals(this.bus, time)
     }
+    for (const [name, value] of this.inputSignals) {
+      this.bus.set(name, value)
+    }
     for (const [param, b] of this.bindings) {
       this.scene.setParam(
         param,
@@ -121,6 +138,10 @@ export class Engine {
         }),
       )
     }
+    this.mappings.update(frame.dt, this.bus, {
+      get: (n) => this.scene.getParam(n),
+      set: (n, v) => this.scene.setParam(n, v),
+    })
     const ctx = { frame, signals: this.bus }
     this.scene.update(ctx)
     this.scene.render(ctx)

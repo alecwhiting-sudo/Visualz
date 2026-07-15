@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Engine } from '../engine/engine'
 import { LissajousScene } from '../scenes/builtin/lissajous'
+import { attachKeyboard } from '../mapping/keyboard'
 import './app.css'
 
 const SIGNAL_NAMES = ['rms', 'bass', 'mid', 'high']
+const KEYBOARD_HINT = '1-6 freqX · q/w/e freqY · space pulse drift · f/g flash/fade trail'
 
 export function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -26,8 +28,10 @@ export function App() {
     setEngine(e)
 
     const meter = setInterval(() => setLevels(e.bus.snapshot()), 100)
+    const detachKeyboard = attachKeyboard(window, (event) => e.mappings.queue(event))
     return () => {
       clearInterval(meter)
+      detachKeyboard()
       e.stop()
     }
   }, [])
@@ -68,6 +72,17 @@ export function App() {
 
         {engine && (
           <section>
+            <h2>Perform</h2>
+            <div className="perform">
+              <TriggerPads engine={engine} />
+              <XyPad engine={engine} />
+            </div>
+            <p className="keyboard-hint">{KEYBOARD_HINT}</p>
+          </section>
+        )}
+
+        {engine && (
+          <section>
             <h2>{engine.scene.meta.name}</h2>
             {engine.scene.params.map((p) => (
               <Knob key={p.name} engine={engine} schema={p} />
@@ -75,6 +90,73 @@ export function App() {
           </section>
         )}
       </aside>
+    </div>
+  )
+}
+
+function TriggerPads({ engine }: { engine: Engine }) {
+  return (
+    <div className="trigger-grid">
+      {[0, 1, 2, 3].map((index) => (
+        <button
+          key={index}
+          type="button"
+          className="trigger-pad"
+          onPointerDown={() => engine.mappings.queue({ type: 'trigger', index })}
+        >
+          T{index + 1}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v))
+}
+
+function XyPad({ engine }: { engine: Engine }) {
+  const padRef = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState({ x: 0.5, y: 0.5 })
+  const [active, setActive] = useState(false)
+
+  const updateFromPointer = (ev: React.PointerEvent<HTMLDivElement>) => {
+    const rect = padRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const x = clamp01((ev.clientX - rect.left) / rect.width)
+    const y = 1 - clamp01((ev.clientY - rect.top) / rect.height) // up = 1
+    setPos({ x, y })
+    engine.setInputSignal('pad.x', x)
+    engine.setInputSignal('pad.y', y)
+  }
+
+  const onDown = (ev: React.PointerEvent<HTMLDivElement>) => {
+    ev.currentTarget.setPointerCapture(ev.pointerId)
+    setActive(true)
+    engine.setInputSignal('pad.active', 1)
+    updateFromPointer(ev)
+  }
+
+  const onMove = (ev: React.PointerEvent<HTMLDivElement>) => {
+    if (!active) return
+    updateFromPointer(ev)
+  }
+
+  const onUp = () => {
+    setActive(false)
+    engine.setInputSignal('pad.active', 0)
+  }
+
+  return (
+    <div
+      ref={padRef}
+      className="xy-pad"
+      onPointerDown={onDown}
+      onPointerMove={onMove}
+      onPointerUp={onUp}
+      onPointerCancel={onUp}
+    >
+      <div className="xy-pad-dot" style={{ left: `${pos.x * 100}%`, top: `${(1 - pos.y) * 100}%` }} />
     </div>
   )
 }

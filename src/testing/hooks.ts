@@ -1,5 +1,6 @@
 import { Engine } from '../engine/engine'
 import { LissajousScene } from '../scenes/builtin/lissajous'
+import type { SourceEvent } from '../mapping/types'
 
 /**
  * Headless test harness (ARCHITECTURE.md §5). `/?test=1&seed=S` boots the engine
@@ -12,6 +13,8 @@ export interface VizTestApi {
   setParam(name: string, value: number): void
   setBinding(param: string, src: string): void
   clearBinding(param: string): void
+  queueEvent(e: SourceEvent): void
+  setInputSignal(name: string, value: number): void
   frame(): number
 }
 
@@ -46,6 +49,8 @@ export function bootTestMode(root: HTMLElement): void {
     setParam: (name, value) => engine.setParam(name, value),
     setBinding: (param, src) => engine.setBinding(param, src),
     clearBinding: (param) => engine.clearBinding(param),
+    queueEvent: (e) => engine.mappings.queue(e),
+    setInputSignal: (name, value) => engine.setInputSignal(name, value),
     frame: () => engine.transport.frame,
   }
 }
