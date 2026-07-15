@@ -65,12 +65,20 @@ export function App() {
   // directly after Stop — no round-trip through the file system (essential on
   // iPhone, where re-picking a just-saved file is clumsy).
   const [lastSession, setLastSession] = useState<SessionDoc | null>(null)
+  // iOS: an AudioContext started outside a still-valid user gesture stays
+  // suspended and plays SILENTLY (the graph runs, no sound). Detected by
+  // polling contextState while a file is "playing"; the fix is a button whose
+  // tap (a guaranteed-valid gesture) resumes the context.
+  const [audioBlocked, setAudioBlocked] = useState(false)
 
   /** Wires up live-only side effects (signal meter polling, keyboard) for an engine. */
   const attachLiveEngine = (e: Engine) => {
     engineRef.current = e
     setEngine(e)
-    meterIntervalRef.current = window.setInterval(() => setLevels(e.bus.snapshot()), 100)
+    meterIntervalRef.current = window.setInterval(() => {
+      setLevels(e.bus.snapshot())
+      setAudioBlocked(e.audio.isPlaying && e.audio.contextState !== 'running')
+    }, 100)
     detachKeyboardRef.current = attachKeyboard(window, (event) => e.queueInput(event))
   }
 
@@ -285,6 +293,17 @@ export function App() {
           />
           {trackName ?? 'Load audio file (demo signals until then)'}
         </label>
+        {audioBlocked && (
+          <button
+            type="button"
+            className="session-button audio-unblock"
+            onClick={() => {
+              void engineRef.current?.audio.resumeContext()
+            }}
+          >
+            🔊 Tap to enable sound
+          </button>
+        )}
 
         <section>
           <h2>Signals</h2>

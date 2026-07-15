@@ -293,3 +293,14 @@ body {
     border-top: 1px solid #24242e;
   }
 }
+
+.audio-unblock {
+  border-color: #5eead4;
+  color: #5eead4;
+  font-weight: 600;
+  animation: pulse-attn 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse-attn {
+  50% { background: #16302c; }
+}

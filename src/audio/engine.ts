@@ -33,6 +33,22 @@ export class AudioEngine {
     return this.source !== null
   }
 
+  /** The AudioContext state, or null before any playback attempt. iOS suspends
+   * contexts created outside a live user gesture — the UI watches this and
+   * offers a tap-to-enable button (a tap is a guaranteed-valid gesture). */
+  get contextState(): AudioContextState | null {
+    return this.ctx?.state ?? null
+  }
+
+  /** Resume audio from within a user gesture: re-kicks the playback-category
+   * unlock element and resumes the context. Safe to call repeatedly. */
+  async resumeContext(): Promise<void> {
+    void this.unlockElement?.play().catch(() => {})
+    if (this.ctx && this.ctx.state !== 'running') {
+      await this.ctx.resume()
+    }
+  }
+
   /** Audio-clock time in seconds since playback started; drives the live Transport. */
   get time(): number {
     if (!this.ctx || !this.source) return 0
