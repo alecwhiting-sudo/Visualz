@@ -86,7 +86,7 @@ void main(){
 }`
 
 // Envelope tuning: bass smoothing time-constant-ish rate, and the onset flash
-// decay/gain (same shape as lorenz.ts's `flash`).
+// decay/gain (same exponential-decay shape used elsewhere for onset flashes).
 const BASS_SMOOTH_RATE = 3.0
 const FLASH_DECAY = 8.0
 const FLASH_GAIN = 1.0
@@ -113,7 +113,7 @@ export class JuliaScene implements SceneRuntime {
     { name: 'orbitSpeed', label: 'Orbit speed', min: 0, max: 0.5, default: 0.08 },
     { name: 'cRadius', label: 'C radius', min: 0.6, max: 0.9, default: 0.7885 },
     { name: 'zoom', label: 'Zoom', min: 0.5, max: 3, default: 1 },
-    { name: 'warp', label: 'Domain warp', min: 0, max: 0.6, default: 0.12 },
+    { name: 'warp', label: 'Domain warp', min: 0, max: 0.6, default: 0 },
     { name: 'hueShift', label: 'Hue shift', min: 0, max: 1, default: 0.7 },
     { name: 'hueSpread', label: 'Hue spread', min: 0.1, max: 1, default: 0.55 },
     { name: 'brightness', label: 'Brightness', min: 0.3, max: 2, default: 1 },

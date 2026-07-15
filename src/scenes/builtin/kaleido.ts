@@ -141,7 +141,8 @@ export class KaleidoScene implements SceneRuntime {
   private flip = false
 
   // CPU-only state: accumulated spin phase (pure dt accumulation, no wobble —
-  // deterministic) and the onset flash envelope (same shape as lorenz.ts).
+  // deterministic) and the onset flash envelope (same decay shape used
+  // elsewhere in the particles/geometry families).
   private spinPhase = 0
   private flash = 0
 

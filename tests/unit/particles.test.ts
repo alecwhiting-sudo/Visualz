@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { COUNT_LADDER, hash32, lattice2, snapCountToSide } from '../../src/scenes/families/particles/gpgpu'
-import { seedLorenzState } from '../../src/scenes/builtin/lorenz'
 import { seedFlowState } from '../../src/scenes/builtin/flowfield'
 
 // A WebGL context isn't available under vitest/node (tests/unit/targets.test.ts
 // is not feasible per the task), so this file covers the CPU-side pieces of the
 // particles family that don't need one: the count quality-ladder snap, the
-// Lorenz CPU seeding function, and the hash32/lattice2 GLSL cross-check
+// flow-field CPU seeding function, and the hash32/lattice2 GLSL cross-check
 // (docs/PARTICLES.md §10).
 
 describe('snapCountToSide (docs/PARTICLES.md §3 quality ladder)', () => {
@@ -92,58 +91,3 @@ describe('seedFlowState (docs/PARTICLES.md §5 CPU init)', () => {
   })
 })
 
-describe('seedLorenzState (docs/PARTICLES.md §7 CPU init)', () => {
-  it('is byte-identical for the same seed', () => {
-    const a = seedLorenzState(42, 4096)
-    const b = seedLorenzState(42, 4096)
-    expect(a).toEqual(b)
-  })
-
-  it('diverges for different seeds', () => {
-    const a = seedLorenzState(1, 4096)
-    const b = seedLorenzState(2, 4096)
-    expect(a).not.toEqual(b)
-  })
-
-  it('places the whole swarm along the attractor within the validated extent', () => {
-    // docs/PARTICLES.md §7 validates x∈[-18.7,18], y∈[-25.5,24.3], z∈[3.6,46.2] for
-    // this seeding scheme at N=65536. Generous bounds here (the spec's own
-    // prototype and this port can differ in unspecified details — RNG draw order,
-    // exact warm-up starting point — while landing on the same bounded attractor).
-    const n = 65536
-    const s = seedLorenzState(42, n)
-    let minX = Infinity,
-      maxX = -Infinity,
-      minY = Infinity,
-      maxY = -Infinity,
-      minZ = Infinity,
-      maxZ = -Infinity
-    for (let i = 0; i < n; i++) {
-      const x = s[i * 4 + 0]
-      const y = s[i * 4 + 1]
-      const z = s[i * 4 + 2]
-      if (x < minX) minX = x
-      if (x > maxX) maxX = x
-      if (y < minY) minY = y
-      if (y > maxY) maxY = y
-      if (z < minZ) minZ = z
-      if (z > maxZ) maxZ = z
-    }
-    expect(minX).toBeGreaterThan(-25)
-    expect(maxX).toBeLessThan(25)
-    expect(minY).toBeGreaterThan(-30)
-    expect(maxY).toBeLessThan(30)
-    expect(minZ).toBeGreaterThan(0)
-    expect(maxZ).toBeLessThan(55)
-    // Sanity: the swarm actually spans the attractor, not a single point/blob.
-    expect(maxX - minX).toBeGreaterThan(20)
-    expect(maxZ - minZ).toBeGreaterThan(20)
-  })
-
-  it('age runs from 0 to just under 1 across the swarm', () => {
-    const n = 1024
-    const s = seedLorenzState(42, n)
-    expect(s[0 * 4 + 3]).toBe(0)
-    expect(s[(n - 1) * 4 + 3]).toBeCloseTo((n - 1) / n, 10)
-  })
-})

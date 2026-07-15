@@ -1,7 +1,7 @@
 import { LissajousScene } from './builtin/lissajous'
 import { FlowFieldScene } from './builtin/flowfield'
-import { LorenzScene } from './builtin/lorenz'
 import { JuliaScene } from './builtin/julia'
+import { MandelDiveScene } from './builtin/mandeldive'
 import { KaleidoScene } from './builtin/kaleido'
 import { GrayScottScene } from './builtin/grayscott'
 import { CompositeScene, type CompositeChild } from './composite'
@@ -13,8 +13,6 @@ import type { SceneRuntime } from './types'
 // without the two combos' flow fields sharing any state).
 const juliaChild: CompositeChild = { id: 'julia', label: 'Julia Warp', create: () => new JuliaScene() }
 const flowfieldChild: CompositeChild = { id: 'flowfield', label: 'Flow Field', create: () => new FlowFieldScene() }
-const kaleidoChild: CompositeChild = { id: 'kaleido', label: 'Kaleidoscope', create: () => new KaleidoScene() }
-const lorenzChild: CompositeChild = { id: 'lorenz', label: 'Lorenz Attractor', create: () => new LorenzScene() }
 const grayscottChild: CompositeChild = { id: 'grayscott', label: 'Reaction-Diffusion', create: () => new GrayScottScene() }
 
 /**
@@ -33,8 +31,8 @@ const grayscottChild: CompositeChild = { id: 'grayscott', label: 'Reaction-Diffu
 export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = {
   lissajous: { name: 'Lissajous', create: () => new LissajousScene() },
   flowfield: { name: 'Flow Field', create: () => new FlowFieldScene() },
-  lorenz: { name: 'Lorenz Attractor', create: () => new LorenzScene() },
   julia: { name: 'Julia Warp', create: () => new JuliaScene() },
+  mandeldive: { name: 'Mandel Dive', create: () => new MandelDiveScene() },
   kaleido: { name: 'Kaleidoscope', create: () => new KaleidoScene() },
   grayscott: { name: 'Reaction-Diffusion', create: () => new GrayScottScene() },
   'blend-julia-flow': {
@@ -44,15 +42,6 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
         { id: 'blend-julia-flow', name: 'Julia × Flow field', family: 'geometry' },
         juliaChild,
         flowfieldChild,
-      ),
-  },
-  'blend-kaleido-lorenz': {
-    name: 'Kaleido × Lorenz',
-    create: () =>
-      new CompositeScene(
-        { id: 'blend-kaleido-lorenz', name: 'Kaleido × Lorenz', family: 'geometry' },
-        kaleidoChild,
-        lorenzChild,
       ),
   },
   'blend-rd-flow': {

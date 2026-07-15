@@ -29,9 +29,8 @@ async function boot(
   await page.waitForFunction(() => window.__viz !== undefined)
 }
 
-// --- Goldens: flowfield f90, lorenz f60 (docs/PARTICLES.md §8 — the flow field
-// is non-chaotic so any frame count is stable; Lorenz snapshots earlier, before
-// chaos amplification makes cross-Chromium-build diffs unrecognizable). -------
+// --- Goldens: flowfield f90 (docs/PARTICLES.md §8 — the flow field is
+// non-chaotic so any frame count is stable). ----------------------------------
 
 test('flowfield renders deterministically at frame 90', async ({ page }) => {
   await boot(page, 'flowfield')
@@ -50,25 +49,6 @@ test('flowfield composes correctly at 1:1', async ({ page }) => {
   await boot(page, 'flowfield', { size: '&w=480&h=480' })
   await page.evaluate(() => window.__viz!.renderFrames(90))
   await expect(page.locator('canvas')).toHaveScreenshot('flowfield-1x1-f90.png')
-})
-
-test('lorenz renders deterministically at frame 60', async ({ page }) => {
-  await boot(page, 'lorenz')
-  await page.evaluate(() => window.__viz!.renderFrames(60))
-  expect(await page.evaluate(() => window.__viz!.frame())).toBe(60)
-  await expect(page.locator('canvas')).toHaveScreenshot('lorenz-seed42-f60.png')
-})
-
-test('lorenz composes correctly at 9:16', async ({ page }) => {
-  await boot(page, 'lorenz', { size: '&w=360&h=640' })
-  await page.evaluate(() => window.__viz!.renderFrames(60))
-  await expect(page.locator('canvas')).toHaveScreenshot('lorenz-9x16-f60.png')
-})
-
-test('lorenz composes correctly at 1:1', async ({ page }) => {
-  await boot(page, 'lorenz', { size: '&w=480&h=480' })
-  await page.evaluate(() => window.__viz!.renderFrames(60))
-  await expect(page.locator('canvas')).toHaveScreenshot('lorenz-1x1-f60.png')
 })
 
 // --- Non-blank guards (silent all-black regression) ---------------------------
@@ -90,12 +70,6 @@ async function litPixelCount(page: import('@playwright/test').Page): Promise<num
 test('flowfield canvas is not blank', async ({ page }) => {
   await boot(page, 'flowfield')
   await page.evaluate(() => window.__viz!.renderFrames(90))
-  expect(await litPixelCount(page)).toBeGreaterThan(2000)
-})
-
-test('lorenz canvas is not blank', async ({ page }) => {
-  await boot(page, 'lorenz')
-  await page.evaluate(() => window.__viz!.renderFrames(60))
   expect(await litPixelCount(page)).toBeGreaterThan(2000)
 })
 
@@ -125,22 +99,6 @@ test('flowfield replays byte-identically via loadSession', async ({ page }) => {
   const hash2 = await page.evaluate((d) => {
     window.__viz!.loadSession(d)
     window.__viz!.renderFrames(90)
-    return window.__viz!.pixelHash()
-  }, doc)
-  expect(hash2).toBe(hash1)
-})
-
-test('lorenz replays byte-identically via loadSession', async ({ page }) => {
-  await boot(page, 'lorenz')
-  const doc = minimalDoc('lorenz', 60)
-  const hash1 = await page.evaluate((d) => {
-    window.__viz!.loadSession(d)
-    window.__viz!.renderFrames(60)
-    return window.__viz!.pixelHash()
-  }, doc)
-  const hash2 = await page.evaluate((d) => {
-    window.__viz!.loadSession(d)
-    window.__viz!.renderFrames(60)
     return window.__viz!.pixelHash()
   }, doc)
   expect(hash2).toBe(hash1)

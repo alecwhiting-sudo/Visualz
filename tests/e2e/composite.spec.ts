@@ -216,13 +216,11 @@ test('shader stages are prefixed and blend-fs is editable', async ({ page }) => 
   expect(await litPixelCount(page)).toBeGreaterThan(2000)
 })
 
-// --- Coverage for the other two registered combos (review finding: every
-// registered scene needs a golden per CLAUDE.md, and blend-kaleido-lorenz is
-// the pairing most exposed to child GL-state leakage — lorenz leaves BLEND
-// enabled after render). Frame 60 bounds the grayscott combo's 16-substeps-
-// per-frame cost on SwiftShader. -------------------------------------------
+// --- Coverage for the other registered combo (review finding: every
+// registered scene needs a golden per CLAUDE.md). Frame 60 bounds the
+// grayscott combo's 16-substeps-per-frame cost on SwiftShader. -------------
 
-for (const combo of ['blend-kaleido-lorenz', 'blend-rd-flow'] as const) {
+for (const combo of ['blend-rd-flow'] as const) {
   test(`${combo} renders deterministically at frame 60`, async ({ page }) => {
     await page.goto(`/?test=1&seed=42&scene=${combo}&count=16384`)
     await page.waitForFunction(() => window.__viz !== undefined)

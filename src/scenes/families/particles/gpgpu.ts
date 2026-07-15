@@ -1,7 +1,7 @@
 /**
- * Shared helpers for the particles family (docs/PARTICLES.md), used by both
- * `flowfield.ts` and `lorenz.ts` (ARCHITECTURE.md §3.3 — the family is a shared
- * library scenes import, not an engine special case).
+ * Shared helpers for the particles family (docs/PARTICLES.md), used by
+ * `flowfield.ts` (ARCHITECTURE.md §3.3 — the family is a shared library
+ * scenes import, not an engine special case).
  */
 
 import { hash32 } from '../../../dsl/builtins'
