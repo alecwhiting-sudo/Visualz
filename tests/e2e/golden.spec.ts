@@ -45,3 +45,15 @@ test('parameter changes alter the image (knob layer is live)', async ({ page }) 
   })
   await expect(page.locator('canvas')).toHaveScreenshot('lissajous-7-5-f120.png')
 })
+
+test('expression-bound params render deterministically (equations layer)', async ({ page }) => {
+  await boot(page, 42)
+  await page.evaluate(() => {
+    // Stateful lfo + audio signal in one binding: exercises the DSL end-to-end
+    // under fixed-timestep replay with the deterministic demo signals.
+    window.__viz!.setBinding('freqX', '3 + floor(3 * lfo(0.2))')
+    window.__viz!.setBinding('drift', '0.2 + smooth(bass, 0.1) * 0.8')
+    window.__viz!.renderFrames(120)
+  })
+  await expect(page.locator('canvas')).toHaveScreenshot('lissajous-expr-f120.png')
+})

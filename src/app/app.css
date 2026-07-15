@@ -118,6 +118,36 @@ body {
   width: 100%;
 }
 
+.knob input[type='range']:disabled {
+  opacity: 0.35;
+}
+
+.knob .expr {
+  margin-top: 4px;
+  padding: 5px 8px;
+  background: #14141c;
+  border: 1px solid #2a2a38;
+  border-radius: 4px;
+  color: #cfcfe0;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+}
+
+.knob .expr::placeholder {
+  color: #55556a;
+}
+
+.knob .expr-error {
+  border-color: #b4455a;
+}
+
+.expr-message {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: #e08095;
+}
+
 @media (max-width: 720px) {
   .app {
     flex-direction: column;

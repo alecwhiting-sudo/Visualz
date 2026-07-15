@@ -2,7 +2,15 @@ import { Transport, type TransportMode } from '../core/transport'
 import { SignalBus } from '../core/signals'
 import { Gpu } from '../gpu/context'
 import { AudioEngine, publishDemoSignals } from '../audio/engine'
+import { compile, type CompiledExpr } from '../dsl/compile'
+import { DslState } from '../dsl/state'
 import type { SceneRuntime } from '../scenes/types'
+
+interface Binding {
+  src: string
+  compiled: CompiledExpr
+  state: DslState
+}
 
 export interface EngineOptions {
   mode: TransportMode
@@ -28,6 +36,7 @@ export class Engine {
 
   private raf = 0
   private running = false
+  private bindings = new Map<string, Binding>()
 
   constructor(canvas: HTMLCanvasElement, scene: SceneRuntime, opts: EngineOptions) {
     this.transport = new Transport(opts.mode, opts.fps ?? 60)
@@ -71,6 +80,24 @@ export class Engine {
     this.scene.setParam(name, value)
   }
 
+  /**
+   * Bind a scene param to a DSL expression, evaluated every frame before the scene
+   * updates (the "equations" layer of the authoring model). Throws DslError on bad
+   * source — callers surface it inline and the previous binding stays active.
+   */
+  setBinding(param: string, src: string): void {
+    const compiled = compile(src, `${this.scene.meta.id}.${param}`)
+    this.bindings.set(param, { src, compiled, state: new DslState() })
+  }
+
+  clearBinding(param: string): void {
+    this.bindings.delete(param)
+  }
+
+  getBinding(param: string): string | undefined {
+    return this.bindings.get(param)?.src
+  }
+
   private tick(time: number): void {
     const frame = this.transport.advanceTo(time)
     this.updateAndRender(time, frame)
@@ -81,6 +108,18 @@ export class Engine {
       this.audio.publishSignals(this.bus)
     } else {
       publishDemoSignals(this.bus, time)
+    }
+    for (const [param, b] of this.bindings) {
+      this.scene.setParam(
+        param,
+        b.compiled.evaluate({
+          time: frame.time,
+          dt: frame.dt,
+          frame: frame.frame,
+          signals: this.bus,
+          state: b.state,
+        }),
+      )
     }
     const ctx = { frame, signals: this.bus }
     this.scene.update(ctx)

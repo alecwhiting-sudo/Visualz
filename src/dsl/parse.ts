@@ -253,8 +253,17 @@ const LBP: Partial<Record<TokenType, number>> = {
   '%': 14,
 }
 
+/**
+ * Compile-time totality bounds: expressions come from UI text fields and scene JSON, so
+ * pathological input (thousands of nested parens) must produce a DslError, not a
+ * RangeError from stack exhaustion in the recursive descent.
+ */
+const MAX_SRC_LENGTH = 4096
+const MAX_DEPTH = 256
+
 class Parser {
   private pos = 0
+  private depth = 0
 
   constructor(
     private readonly tokens: Token[],
@@ -275,11 +284,16 @@ class Parser {
   }
 
   parseExpr(rbp: number): Expr {
+    if (++this.depth > MAX_DEPTH) {
+      const tok = this.peek()
+      throw new DslError('expression too deeply nested', tok.start, tok.end)
+    }
     let left = this.nud()
     while ((LBP[this.peek().type] ?? 0) > rbp) {
       const tok = this.next()
       left = this.led(left, tok)
     }
+    this.depth--
     return left
   }
 
@@ -379,6 +393,13 @@ class Parser {
 }
 
 export function parse(src: string): Expr {
+  if (src.length > MAX_SRC_LENGTH) {
+    throw new DslError(
+      `expression too long (${src.length} chars, max ${MAX_SRC_LENGTH})`,
+      MAX_SRC_LENGTH,
+      src.length,
+    )
+  }
   const tokens = tokenize(src)
   if (tokens.length === 1) {
     // Only the EOF token: empty or whitespace-only source.

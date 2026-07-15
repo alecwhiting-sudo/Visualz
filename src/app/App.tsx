@@ -87,10 +87,32 @@ function Knob({
   schema: { name: string; label: string; min: number; max: number; default: number; step?: number }
 }) {
   const [value, setValue] = useState(engine.scene.getParam(schema.name))
+  const [exprText, setExprText] = useState('')
+  const [bound, setBound] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const applyExpr = (text: string) => {
+    const src = text.trim()
+    if (src === '') {
+      engine.clearBinding(schema.name)
+      setBound(false)
+      setError(null)
+      return
+    }
+    try {
+      engine.setBinding(schema.name, src)
+      setBound(true)
+      setError(null)
+    } catch (e) {
+      // Bad expression: previous binding (or the slider value) stays active.
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   return (
     <label className="knob">
       <span>
-        {schema.label} <em>{value.toFixed(2)}</em>
+        {schema.label} <em>{bound ? 'ƒ(t)' : value.toFixed(2)}</em>
       </span>
       <input
         type="range"
@@ -98,12 +120,25 @@ function Knob({
         max={schema.max}
         step={schema.step ?? 0.01}
         value={value}
+        disabled={bound}
         onChange={(ev) => {
           const v = Number(ev.target.value)
           setValue(v)
           engine.setParam(schema.name, v)
         }}
       />
+      <input
+        type="text"
+        className={`expr${error ? ' expr-error' : ''}`}
+        placeholder="expression, e.g. 2 + bass * 4"
+        value={exprText}
+        spellCheck={false}
+        onChange={(ev) => {
+          setExprText(ev.target.value)
+          applyExpr(ev.target.value)
+        }}
+      />
+      {error && <span className="expr-message">{error}</span>}
     </label>
   )
 }

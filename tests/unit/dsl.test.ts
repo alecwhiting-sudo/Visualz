@@ -395,4 +395,17 @@ describe('errors', () => {
   it("74) ternary missing ':'", () => ERR('1 ? 2', "expected ':'"))
   it('75) misplaced comma', () => ERR('min(1,)', 'expected expression'))
   it("76) assignment attempt", () => ERR('x = 1', "unexpected token '='"))
+
+  // Compile-time totality bounds (review follow-up): pathological input must produce
+  // DslError, never a stack-exhaustion RangeError.
+  it('77) deep nesting is a DslError, not a stack overflow', () => {
+    ERR('('.repeat(1000) + '1' + ')'.repeat(1000), 'too deeply nested')
+  })
+  it('78) over-long source is a DslError', () => {
+    ERR('1+'.repeat(3000) + '1', 'expression too long')
+  })
+  it('79) depth just under the cap still parses', () => {
+    const depth = 200
+    expect(EVAL('('.repeat(depth) + '7' + ')'.repeat(depth))).toBe(7)
+  })
 })

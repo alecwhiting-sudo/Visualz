@@ -10,6 +10,8 @@ import { LissajousScene } from '../scenes/builtin/lissajous'
 export interface VizTestApi {
   renderFrames(n: number): void
   setParam(name: string, value: number): void
+  setBinding(param: string, src: string): void
+  clearBinding(param: string): void
   frame(): number
 }
 
@@ -42,6 +44,8 @@ export function bootTestMode(root: HTMLElement): void {
   window.__viz = {
     renderFrames: (n) => engine.renderFrames(n),
     setParam: (name, value) => engine.setParam(name, value),
+    setBinding: (param, src) => engine.setBinding(param, src),
+    clearBinding: (param) => engine.clearBinding(param),
     frame: () => engine.transport.frame,
   }
 }

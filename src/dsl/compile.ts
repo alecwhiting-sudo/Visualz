@@ -281,7 +281,14 @@ function compileNode(node: Expr, advances: AdvanceFn[]): ValueFn {
     case 'call': {
       const def = builtins[node.name] as BuiltinDef
       const argFns = node.args.map((a) => compileNode(a, advances))
-      return (env) => def.call(argFns.map((fn) => fn(env)))
+      // Scratch array reused across frames: builtins consume it synchronously and never
+      // retain it, and nested call nodes each own their own scratch, so in-place fill is
+      // safe and avoids per-eval allocation (~50 exprs/frame at 60fps).
+      const scratch = new Array<number>(argFns.length)
+      return (env) => {
+        for (let i = 0; i < argFns.length; i++) scratch[i] = argFns[i](env)
+        return def.call(scratch)
+      }
     }
 
     case 'stateful':
