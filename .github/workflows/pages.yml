@@ -1,10 +1,14 @@
 name: Deploy to GitHub Pages
 
+# Deploys from main ONLY. The feature branch used to be a trigger too, but the
+# github-pages environment restricts deployment to the default branch, so the
+# feature-branch run always failed — and worse, it shared the concurrency group
+# and could cancel the main run when both branches were pushed together,
+# leaving nothing deployed.
 on:
   push:
     branches:
       - main
-      - claude/music-viz-app-requirements-fvm67y
   workflow_dispatch:
 
 permissions:
