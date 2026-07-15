@@ -185,10 +185,16 @@ export function App() {
 
     setExporting({ frame: 0, total: doc.durationFrames })
     try {
+      // Carry the currently-loaded track's audio into the export, if any — a file
+      // loaded into the live engine via onFile (REQUIREMENTS.md §5.1: exports mux
+      // the audio track in). No file loaded (or the live engine has been swapped
+      // for a replay engine) means a silent export, same as before this change.
+      const audio = engineRef.current?.audio.lastBuffer() ?? undefined
       const result = await exportSession(
         doc,
         { width: 1280, height: 720, fps: doc.fps },
         (p: ExportProgress) => setExporting({ frame: p.frame, total: p.total }),
+        audio,
       )
       downloadBlob(new Blob([result.buffer], { type: result.mime }), 'visualz-session.webm')
     } catch (err) {

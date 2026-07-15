@@ -92,3 +92,28 @@ test('export renders aspect-aware 9:16', async ({ page }) => {
   // that rule is enforced by the 9:16 and 1:1 goldens in golden.spec.ts.
   expect(tall.frameHashes).not.toEqual(wide.frameHashes)
 })
+
+test('export muxes an Opus audio track', async ({ page }) => {
+  await boot(page, 42)
+  const doc = await recordSession(page)
+
+  const [silent, audible] = await page.evaluate(async (sessionDoc) => {
+    const a = await window.__viz!.exportSession(sessionDoc, { width: 320, height: 180, fps: 30 })
+    const b = await window.__viz!.exportSession(sessionDoc, {
+      width: 320,
+      height: 180,
+      fps: 30,
+      audioSeconds: 2,
+    })
+    return [a, b]
+  }, doc)
+
+  expect(silent.mime).toBe('video/webm')
+  expect(silent.magic).toEqual([0x1a, 0x45, 0xdf, 0xa3])
+  expect(audible.mime).toBe('video/webm')
+  expect(audible.magic).toEqual([0x1a, 0x45, 0xdf, 0xa3])
+
+  // A 2s 128kbps Opus stream is roughly 32KB — the audio-bearing export should be
+  // substantially larger than the silent one, not just noise from muxer overhead.
+  expect(audible.size).toBeGreaterThan(silent.size + 5000)
+})

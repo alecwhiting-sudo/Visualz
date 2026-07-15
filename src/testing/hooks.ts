@@ -5,6 +5,7 @@ import type { SessionDoc } from '../session/types'
 import { pixelHash } from '../gpu/readback'
 import { exportSession } from '../export/client'
 import type { ExportVideoOpts } from '../export/render'
+import type { ExportAudio } from '../export/encode'
 
 /**
  * Headless test harness (ARCHITECTURE.md §5). `/?test=1&seed=S` boots the engine
@@ -36,6 +37,11 @@ export interface VizTestApi {
    * on without shipping the whole ArrayBuffer across the page/test boundary:
    * blob size, mime type, per-frame hashes (determinism), and the first 4 bytes
    * (EBML magic — the test itself checks the exact byte values).
+   *
+   * `opts` accepts an extra `audioSeconds?: number` beyond `ExportVideoOpts &
+   * { collectHashes? }` — when set, a deterministic synthetic stereo tone of that
+   * duration is muxed in as the export's audio track (there's no real audio file
+   * to hand across the Playwright/page boundary).
    */
   exportSession(
     doc: unknown,
@@ -47,6 +53,28 @@ declare global {
   interface Window {
     __viz?: VizTestApi
   }
+}
+
+const TEST_TONE_SAMPLE_RATE = 44100
+const TEST_TONE_LEFT_HZ = 220
+const TEST_TONE_RIGHT_HZ = 330
+const TEST_TONE_AMPLITUDE = 0.3
+
+/**
+ * A deterministic stereo test tone for export audio-muxing tests (no `Math.random`,
+ * no wall clock — plain `Math.sin` over the sample index, same every run). Left
+ * channel 220Hz, right channel 330Hz, so a decoded export can be told apart from
+ * silence and from a mono track by inspection.
+ */
+function synthesizeTestTone(seconds: number): ExportAudio {
+  const n = Math.max(0, Math.round(seconds * TEST_TONE_SAMPLE_RATE))
+  const left = new Float32Array(n)
+  const right = new Float32Array(n)
+  for (let i = 0; i < n; i++) {
+    left[i] = TEST_TONE_AMPLITUDE * Math.sin((2 * Math.PI * TEST_TONE_LEFT_HZ * i) / TEST_TONE_SAMPLE_RATE)
+    right[i] = TEST_TONE_AMPLITUDE * Math.sin((2 * Math.PI * TEST_TONE_RIGHT_HZ * i) / TEST_TONE_SAMPLE_RATE)
+  }
+  return { channels: [left, right], sampleRate: TEST_TONE_SAMPLE_RATE }
 }
 
 export function isTestMode(): boolean {
@@ -91,7 +119,16 @@ export function bootTestMode(root: HTMLElement): void {
       return pixelHash(gl, width, height)
     },
     exportSession: async (doc, opts) => {
-      const result = await exportSession(doc as SessionDoc, opts as ExportVideoOpts & { collectHashes?: boolean })
+      // `audioSeconds` is test-harness-only sugar: Playwright specs can't hand us
+      // a real audio file, so passing this synthesizes a deterministic tone here
+      // and forwards it as `ExportAudio` — the real exportSession() API (and the
+      // opts type it expects) is unaware this key ever existed.
+      const { audioSeconds, ...videoOpts } = opts as ExportVideoOpts & {
+        collectHashes?: boolean
+        audioSeconds?: number
+      }
+      const audio = audioSeconds !== undefined ? synthesizeTestTone(audioSeconds) : undefined
+      const result = await exportSession(doc as SessionDoc, videoOpts, undefined, audio)
       const magic = Array.from(new Uint8Array(result.buffer.slice(0, 4)))
       return { size: result.buffer.byteLength, mime: result.mime, frameHashes: result.frameHashes, magic }
     },

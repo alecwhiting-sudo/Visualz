@@ -12,6 +12,7 @@ export class AudioEngine {
   private source: AudioBufferSourceNode | null = null
   private freqData: Uint8Array<ArrayBuffer> | null = null
   private startedAt = 0
+  private decoded: AudioBuffer | null = null
 
   get isPlaying(): boolean {
     return this.source !== null
@@ -28,6 +29,7 @@ export class AudioEngine {
     if (!this.ctx) this.ctx = new AudioContext()
     if (this.ctx.state === 'suspended') await this.ctx.resume()
     const buffer = await this.ctx.decodeAudioData(await file.arrayBuffer())
+    this.decoded = buffer
 
     this.analyser = this.ctx.createAnalyser()
     this.analyser.fftSize = 2048
@@ -48,6 +50,17 @@ export class AudioEngine {
   stop(): void {
     this.source?.stop()
     this.source = null
+  }
+
+  /** The most recently decoded file's PCM, for export's optional audio muxing
+   * (App.tsx). Returns null until a file has been loaded via `playFile`. */
+  lastBuffer(): { channels: Float32Array[]; sampleRate: number } | null {
+    if (!this.decoded) return null
+    const channels: Float32Array[] = []
+    for (let i = 0; i < this.decoded.numberOfChannels; i++) {
+      channels.push(this.decoded.getChannelData(i))
+    }
+    return { channels, sampleRate: this.decoded.sampleRate }
   }
 
   /** Publish this frame's audio features onto the bus. */

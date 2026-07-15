@@ -2,7 +2,7 @@ import { Engine } from '../engine/engine'
 import { LissajousScene } from '../scenes/builtin/lissajous'
 import { pixelHash } from '../gpu/readback'
 import type { SessionDoc } from '../session/types'
-import { createVideoSink, type EncodedResult, type ExportVideoOpts, type VideoSink } from './encode'
+import { createVideoSink, type EncodedResult, type ExportAudio, type ExportVideoOpts, type VideoSink } from './encode'
 
 export interface ExportProgress {
   frame: number
@@ -23,7 +23,7 @@ const MAX_QUEUE_SIZE = 8
  */
 export async function renderSessionToVideo(
   doc: SessionDoc,
-  opts: ExportVideoOpts & { collectHashes?: boolean },
+  opts: ExportVideoOpts & { collectHashes?: boolean; audio?: ExportAudio },
   onProgress?: (p: ExportProgress) => void,
 ): Promise<EncodedResult & { frameHashes?: string[] }> {
   const canvas = new OffscreenCanvas(opts.width, opts.height)
@@ -37,7 +37,7 @@ export async function renderSessionToVideo(
   try {
     engine.loadSession(doc)
 
-    const sink = await createVideoSink(opts)
+    const sink = await createVideoSink(opts, trimAudioToVideoDuration(opts.audio, doc.durationFrames, opts.fps))
     const frameHashes = opts.collectHashes ? ([] as string[]) : undefined
     const total = doc.durationFrames
 
@@ -84,4 +84,24 @@ async function drainEncodeQueue(sink: VideoSink): Promise<void> {
   }
 }
 
-export type { ExportVideoOpts }
+/**
+ * Trim/pad is explicitly not required (task spec): if audio runs longer than the
+ * video, only encode up to the video's duration; if shorter, encode what exists —
+ * the muxer/decoder side simply has a shorter audio track than video track.
+ */
+function trimAudioToVideoDuration(
+  audio: ExportAudio | undefined,
+  durationFrames: number,
+  fps: number,
+): ExportAudio | undefined {
+  if (!audio) return undefined
+  const maxSamples = Math.ceil((durationFrames / fps) * audio.sampleRate)
+  const totalSamples = audio.channels[0]?.length ?? 0
+  if (totalSamples <= maxSamples) return audio
+  return {
+    sampleRate: audio.sampleRate,
+    channels: audio.channels.map((c) => c.subarray(0, maxSamples)),
+  }
+}
+
+export type { ExportVideoOpts, ExportAudio }

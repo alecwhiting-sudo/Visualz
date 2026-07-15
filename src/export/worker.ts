@@ -1,4 +1,5 @@
 import { renderSessionToVideo, type ExportProgress, type ExportVideoOpts } from './render'
+import type { ExportAudio } from './encode'
 import type { SessionDoc } from '../session/types'
 
 /**
@@ -7,10 +8,18 @@ import type { SessionDoc } from '../session/types'
  * live engine's canvas — this worker owns its own OffscreenCanvas end to end.
  */
 
+/** Wire shape for `ExportAudio` across the postMessage boundary: raw PCM channel
+ * buffers, transferred (not cloned) from client.ts. */
+interface WireAudio {
+  channelBuffers: ArrayBuffer[]
+  sampleRate: number
+}
+
 interface ExportRequest {
   type: 'export'
   doc: SessionDoc
   opts: ExportVideoOpts & { collectHashes?: boolean }
+  audio?: WireAudio
 }
 
 type WorkerRequest = ExportRequest
@@ -35,7 +44,14 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
       postMessage(response)
     }
 
-    const result = await renderSessionToVideo(msg.doc, msg.opts, onProgress)
+    const audio: ExportAudio | undefined = msg.audio
+      ? {
+          channels: msg.audio.channelBuffers.map((buf) => new Float32Array(buf)),
+          sampleRate: msg.audio.sampleRate,
+        }
+      : undefined
+
+    const result = await renderSessionToVideo(msg.doc, { ...msg.opts, audio }, onProgress)
     const response: WorkerResponse = {
       type: 'done',
       buffer: result.buffer,

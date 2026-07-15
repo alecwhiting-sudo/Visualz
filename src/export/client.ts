@@ -1,5 +1,5 @@
 import type { SessionDoc } from '../session/types'
-import type { EncodedResult, ExportVideoOpts } from './encode'
+import type { EncodedResult, ExportAudio, ExportVideoOpts } from './encode'
 import type { ExportProgress } from './render'
 
 /**
@@ -17,6 +17,7 @@ export function exportSession(
   doc: SessionDoc,
   opts: ExportVideoOpts & { collectHashes?: boolean },
   onProgress?: (p: ExportProgress) => void,
+  audio?: ExportAudio,
 ): Promise<EncodedResult & { frameHashes?: string[] }> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
@@ -42,6 +43,22 @@ export function exportSession(
       reject(new Error(ev.message || 'Export worker failed'))
     }
 
-    worker.postMessage({ type: 'export', doc, opts })
+    // `slice()` copies each channel into a fresh, standalone ArrayBuffer before
+    // transfer — transferring a view's underlying buffer directly would detach
+    // it, which could yank the rug out from under the caller (e.g. AudioEngine's
+    // live AudioBuffer channel data) even though the caller never asked to give
+    // it up. The copy costs one pass over the PCM; export is already far slower
+    // than realtime, so it's noise.
+    const channelBuffers = audio?.channels.map((c) => c.slice().buffer)
+
+    worker.postMessage(
+      {
+        type: 'export',
+        doc,
+        opts,
+        audio: audio && channelBuffers ? { channelBuffers, sampleRate: audio.sampleRate } : undefined,
+      },
+      channelBuffers ? { transfer: channelBuffers } : undefined,
+    )
   })
 }
