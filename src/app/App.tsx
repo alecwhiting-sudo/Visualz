@@ -113,12 +113,16 @@ export function App() {
 
   const onFile = async (file: File | undefined) => {
     if (!file || !engineRef.current) return
-    // playFile decodes then runs the ~1.6s synchronous offline analysis pass
-    // (docs/ANALYSIS.md §8); it yields once internally after decode so this
-    // label has a chance to paint before that blocking pass runs.
-    setTrackName(`Analyzing ${file.name}…`)
-    await engineRef.current.audio.playFile(file)
-    setTrackName(file.name)
+    // Playback starts as soon as the file decodes; the offline analysis pass
+    // runs in a background Worker with progress reported here, and the beat
+    // grid hot-swaps in when it completes.
+    setTrackName(`Loading ${file.name}…`)
+    await engineRef.current.audio.playFile(file, (fraction) => {
+      setTrackName(
+        fraction >= 1 ? file.name : `${file.name} (analyzing ${Math.round(fraction * 100)}%)`,
+      )
+    })
+    setTrackName((current) => (current?.startsWith('Loading') ? file.name : current))
   }
 
   const onToggleRecording = () => {

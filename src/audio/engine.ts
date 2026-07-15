@@ -1,5 +1,6 @@
 import type { SignalBus } from '../core/signals'
-import { analyzeAudio, type FeatureTimeline } from './analysis'
+import type { FeatureTimeline } from './analysis'
+import { analyzeAudioAsync } from './analysisClient'
 
 /**
  * Live audio path: file playback through an AnalyserNode, publishing
@@ -49,12 +50,22 @@ export class AudioEngine {
     return this._fileName
   }
 
-  async playFile(file: File): Promise<void> {
+  /**
+   * Decodes and starts playing `file` immediately; resolves once playback has
+   * begun. The offline analysis pass (docs/ANALYSIS.md) runs in a background
+   * Worker meanwhile — until it lands, the engine's signal-source priority
+   * falls back to the realtime analyser + causal detector, then hot-swaps to
+   * the timeline the frame it becomes available. `onAnalysisProgress` reports
+   * [0,1] fractions and a final 1 (or is never called past start on failure —
+   * playback survives an analysis error, just without beat-grid signals).
+   */
+  async playFile(file: File, onAnalysisProgress?: (fraction: number) => void): Promise<void> {
     // Re-entrancy guard: rapid successive file selections each pass the entry
     // stop() before the earlier call has created its source, which would leave
     // overlapping playback. Only the newest call survives its await points.
     const seq = ++this.loadSeq
     this.stop()
+    this.featureTimeline = null
     // Must run synchronously, inside the user gesture that picked the file,
     // before any await gives iOS a chance to drop the activation.
     this.unlockPlaybackCategory()
@@ -64,15 +75,6 @@ export class AudioEngine {
     if (seq !== this.loadSeq) return // superseded by a newer playFile
     this.decoded = buffer
     this._fileName = file.name
-
-    // TODO(docs/ANALYSIS.md §8): analyzeAudio is a synchronous ~1.6s pass for a
-    // 3-minute track — move it into a Worker so the main thread never blocks.
-    // For v1, yield once here so a caller that just set an "Analyzing…" label
-    // (App.tsx) gets a chance to paint before the blocking pass runs.
-    await new Promise<void>((resolve) => setTimeout(resolve, 0))
-    if (seq !== this.loadSeq) return
-    this.featureTimeline = analyzeAudio(mixToMono(buffer), buffer.sampleRate)
-    if (seq !== this.loadSeq) return
 
     this.analyser = this.ctx.createAnalyser()
     this.analyser.fftSize = 2048
@@ -88,6 +90,18 @@ export class AudioEngine {
     }
     this.startedAt = this.ctx.currentTime
     this.source.start()
+
+    // Background analysis: no await from the caller's perspective beyond this
+    // method resolving — the timeline slots in whenever it finishes, and the
+    // loadSeq guard drops results that a newer playFile superseded.
+    void analyzeAudioAsync(mixToMono(buffer), buffer.sampleRate, onAnalysisProgress)
+      .then((tl) => {
+        if (seq === this.loadSeq) this.featureTimeline = tl
+      })
+      .catch(() => {
+        // Pure-function failure or worker loss: keep playing on the analyser
+        // path (no beat grid). Non-fatal by design.
+      })
   }
 
   stop(): void {

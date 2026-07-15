@@ -14,6 +14,12 @@ export interface AnalysisOpts {
   frameSize?: number
   /** STFT hop size in samples. Default 512 (75% overlap at frameSize 2048). */
   hop?: number
+  /**
+   * Progress callback, invoked with a fraction in [0, 1] every ~256 STFT frames
+   * during the front-end pass (the dominant cost). Purely observational — the
+   * analysis output is bit-identical with or without it.
+   */
+  onProgress?: (fraction: number) => void
 }
 
 export interface FeatureTimeline {
@@ -384,7 +390,9 @@ export function analyzeAudio(samples: Float32Array, sampleRate: number, opts: An
   const byte = new Float64Array(half)
   const diffs = new Float64Array(half)
 
+  const onProgress = opts.onProgress
   for (let f = 0; f < nFrames; f++) {
+    if (onProgress && (f & 255) === 0) onProgress(f / nFrames)
     const off = f * hop
     for (let i = 0; i < N; i++) {
       re[i] = samples[off + i] * window[i]
