@@ -11,6 +11,10 @@ import { analyzeAudio, type FeatureTimeline } from './analysis'
  * available; `publishSignals`/the analyser stay wired up underneath for that
  * future mic path and as a fallback shape.
  */
+/** ~50ms of 8kHz mono 16-bit silence — see unlockPlaybackCategory. */
+const SILENT_WAV_DATA_URI =
+  'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=='
+
 export class AudioEngine {
   private ctx: AudioContext | null = null
   private analyser: AnalyserNode | null = null
@@ -20,6 +24,7 @@ export class AudioEngine {
   private decoded: AudioBuffer | null = null
   /** Monotonic token so overlapping playFile calls resolve to the newest one. */
   private loadSeq = 0
+  private unlockElement: HTMLAudioElement | null = null
   private featureTimeline: FeatureTimeline | null = null
   private _fileName: string | null = null
 
@@ -50,6 +55,9 @@ export class AudioEngine {
     // overlapping playback. Only the newest call survives its await points.
     const seq = ++this.loadSeq
     this.stop()
+    // Must run synchronously, inside the user gesture that picked the file,
+    // before any await gives iOS a chance to drop the activation.
+    this.unlockPlaybackCategory()
     if (!this.ctx) this.ctx = new AudioContext()
     if (this.ctx.state === 'suspended') await this.ctx.resume()
     const buffer = await this.ctx.decodeAudioData(await file.arrayBuffer())
@@ -85,6 +93,26 @@ export class AudioEngine {
   stop(): void {
     this.source?.stop()
     this.source = null
+  }
+
+  /**
+   * iOS Safari mutes Web Audio when the hardware ring/silent switch is on
+   * silent (it defaults the page's audio session to the 'ambient' category).
+   * Looping a silent HTML <audio> element promotes the session to 'playback' —
+   * the category music apps use — so file playback stays audible regardless of
+   * the switch. Silent samples, so it is inaudible everywhere else; no-op
+   * outside a DOM context (the engine also runs in export workers).
+   */
+  private unlockPlaybackCategory(): void {
+    if (this.unlockElement || typeof Audio === 'undefined') return
+    const el = new Audio(SILENT_WAV_DATA_URI)
+    el.loop = true
+    el.setAttribute('playsinline', '')
+    void el.play().catch(() => {
+      // Autoplay refused (no user activation): harmless, we retry on next playFile.
+      this.unlockElement = null
+    })
+    this.unlockElement = el
   }
 
   /** The most recently decoded file's PCM, for export's optional audio muxing
