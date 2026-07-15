@@ -8,12 +8,24 @@ re-rendering of live performances into social-ready video.
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** — how: signal bus + replayable transport,
   thin WebGL2 layer, CPU expression DSL, WebCodecs export
 
-## Status
+## Status: v1 scope complete
 
-Working skeleton proving the architecture end-to-end: deterministic `Transport`,
-`SignalBus`, seeded PRNG, thin GPU layer, an audio-reactive Lissajous scene
-(geometry family) with live param knobs, file-audio playback with band-energy
-signals, and a headless golden-image test harness.
+Everything in [REQUIREMENTS.md](./REQUIREMENTS.md) v1 is built and CI-enforced:
+
+- **Three authoring layers**: param knobs → expression DSL (`docs/DSL.md`) → in-app
+  GLSL editing with hot-recompile (errors inline, last good program keeps rendering)
+- **Two maths families**: geometry (Lissajous) and GPGPU particles (curl-noise flow
+  field, Lorenz attractor — up to 262k particles, `docs/PARTICLES.md`)
+- **Inputs on one signal bus**: audio (files analyzed offline into beat-grid feature
+  timelines, `docs/ANALYSIS.md`; realtime detector for demo/mic, `docs/EVENTS.md`),
+  keyboard, touch pads, XY pad — mapped to actions via one table
+- **Deterministic sessions**: performances record as frame-stamped input events
+  (including shader edits) and replay pixel-identically
+- **Video export**: a Web Worker re-renders any session via WebCodecs to WebM
+  (VP9 + Opus audio) at any aspect — 16:9, 9:16, 1:1 — while live playback continues
+
+Suite: 205 unit tests + 30 Playwright e2e (golden images, pixel-hash determinism,
+export validity). Deploys to GitHub Pages on push (`.github/workflows/pages.yml`).
 
 ## Develop
 
