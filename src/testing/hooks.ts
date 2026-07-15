@@ -2,6 +2,9 @@ import { Engine } from '../engine/engine'
 import { LissajousScene } from '../scenes/builtin/lissajous'
 import type { SourceEvent } from '../mapping/types'
 import type { SessionDoc } from '../session/types'
+import { pixelHash } from '../gpu/readback'
+import { exportSession } from '../export/client'
+import type { ExportVideoOpts } from '../export/render'
 
 /**
  * Headless test harness (ARCHITECTURE.md §5). `/?test=1&seed=S` boots the engine
@@ -27,6 +30,17 @@ export interface VizTestApi {
    * tolerates a one-frame event offset.
    */
   pixelHash(): string
+  /**
+   * Drives the export worker pipeline (ARCHITECTURE.md §3.6) end-to-end from a
+   * session doc and returns just enough of the result for Playwright to assert
+   * on without shipping the whole ArrayBuffer across the page/test boundary:
+   * blob size, mime type, per-frame hashes (determinism), and the first 4 bytes
+   * (EBML magic — the test itself checks the exact byte values).
+   */
+  exportSession(
+    doc: unknown,
+    opts: unknown,
+  ): Promise<{ size: number; mime: string; frameHashes?: string[]; magic: number[] }>
 }
 
 declare global {
@@ -67,16 +81,14 @@ export function bootTestMode(root: HTMLElement): void {
     stopRecording: () => engine.stopRecording(),
     loadSession: (doc) => engine.loadSession(doc as SessionDoc),
     pixelHash: () => {
-      const gl = engine.gpu.gl
+      const { gl } = engine.gpu
       const { width, height } = engine.gpu
-      const pixels = new Uint8Array(width * height * 4)
-      gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
-      let h = 0x811c9dc5
-      for (let i = 0; i < pixels.length; i++) {
-        h ^= pixels[i]
-        h = Math.imul(h, 0x01000193)
-      }
-      return (h >>> 0).toString(16).padStart(8, '0')
+      return pixelHash(gl, width, height)
+    },
+    exportSession: async (doc, opts) => {
+      const result = await exportSession(doc as SessionDoc, opts as ExportVideoOpts & { collectHashes?: boolean })
+      const magic = Array.from(new Uint8Array(result.buffer.slice(0, 4)))
+      return { size: result.buffer.byteLength, mime: result.mime, frameHashes: result.frameHashes, magic }
     },
   }
 }

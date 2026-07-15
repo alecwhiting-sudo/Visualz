@@ -65,7 +65,7 @@ export class Engine {
     clearBinding: (param) => this.clearBinding(param),
   }
 
-  constructor(canvas: HTMLCanvasElement, scene: SceneRuntime, opts: EngineOptions) {
+  constructor(canvas: HTMLCanvasElement | OffscreenCanvas, scene: SceneRuntime, opts: EngineOptions) {
     this.transport = new Transport(opts.mode, opts.fps ?? 60)
     this.gpu = new Gpu(canvas, { width: opts.width, height: opts.height })
     this.scene = scene

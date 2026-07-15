@@ -10,10 +10,10 @@ export interface GpuOptions {
 }
 
 export class Gpu {
-  readonly canvas: HTMLCanvasElement
+  readonly canvas: HTMLCanvasElement | OffscreenCanvas
   readonly gl: WebGL2RenderingContext
 
-  constructor(canvas: HTMLCanvasElement, opts: GpuOptions = {}) {
+  constructor(canvas: HTMLCanvasElement | OffscreenCanvas, opts: GpuOptions = {}) {
     this.canvas = canvas
     if (opts.width) canvas.width = opts.width
     if (opts.height) canvas.height = opts.height

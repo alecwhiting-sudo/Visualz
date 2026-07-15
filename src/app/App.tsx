@@ -4,6 +4,8 @@ import { LissajousScene } from '../scenes/builtin/lissajous'
 import { attachKeyboard } from '../mapping/keyboard'
 import { serializeSession, parseSession } from '../session/serialize'
 import type { SessionDoc } from '../session/types'
+import { exportSession } from '../export/client'
+import type { ExportProgress } from '../export/render'
 import './app.css'
 
 const SIGNAL_NAMES = ['rms', 'bass', 'mid', 'high', 'beat', 'onset']
@@ -22,15 +24,19 @@ function createLiveEngine(canvas: HTMLCanvasElement): Engine {
   return e
 }
 
-/** Triggers a browser download of a session doc as a JSON file. */
-function downloadSession(doc: SessionDoc): void {
-  const blob = new Blob([serializeSession(doc)], { type: 'application/json' })
+/** Triggers a browser download of a blob under the given filename. */
+function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = 'visualz-session.json'
+  a.download = filename
   a.click()
   URL.revokeObjectURL(url)
+}
+
+/** Triggers a browser download of a session doc as a JSON file. */
+function downloadSession(doc: SessionDoc): void {
+  downloadBlob(new Blob([serializeSession(doc)], { type: 'application/json' }), 'visualz-session.json')
 }
 
 export function App() {
@@ -43,6 +49,7 @@ export function App() {
   const [trackName, setTrackName] = useState<string | null>(null)
   const [recording, setRecording] = useState(false)
   const [replay, setReplay] = useState<{ frame: number; total: number } | null>(null)
+  const [exporting, setExporting] = useState<{ frame: number; total: number } | null>(null)
   const [sessionError, setSessionError] = useState<string | null>(null)
 
   /** Wires up live-only side effects (signal meter polling, keyboard) for an engine. */
@@ -163,6 +170,34 @@ export function App() {
     requestAnimationFrame(step)
   }
 
+  // Runs entirely in a Worker (export/client.ts) against its own OffscreenCanvas —
+  // the live engine above keeps rendering to the visible canvas throughout.
+  const onExportVideo = async (file: File | undefined) => {
+    if (!file) return
+    setSessionError(null)
+    let doc: SessionDoc
+    try {
+      doc = parseSession(await file.text())
+    } catch (err) {
+      setSessionError(err instanceof Error ? err.message : String(err))
+      return
+    }
+
+    setExporting({ frame: 0, total: doc.durationFrames })
+    try {
+      const result = await exportSession(
+        doc,
+        { width: 1280, height: 720, fps: doc.fps },
+        (p: ExportProgress) => setExporting({ frame: p.frame, total: p.total }),
+      )
+      downloadBlob(new Blob([result.buffer], { type: result.mime }), 'visualz-session.webm')
+    } catch (err) {
+      setSessionError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setExporting(null)
+    }
+  }
+
   return (
     <div className="app">
       <div className="stage">
@@ -198,7 +233,7 @@ export function App() {
               type="button"
               className="session-button"
               onClick={onToggleRecording}
-              disabled={!engine || replay !== null}
+              disabled={!engine || replay !== null || exporting !== null}
             >
               {recording ? 'Stop' : 'Record'}
             </button>
@@ -206,7 +241,7 @@ export function App() {
               <input
                 type="file"
                 accept="application/json"
-                disabled={replay !== null}
+                disabled={replay !== null || exporting !== null}
                 onChange={(ev) => {
                   const file = ev.target.files?.[0]
                   ev.target.value = ''
@@ -216,9 +251,29 @@ export function App() {
               Load & replay
             </label>
           </div>
+          <div className="session-controls">
+            <label className="file session-file">
+              <input
+                type="file"
+                accept="application/json"
+                disabled={replay !== null || exporting !== null}
+                onChange={(ev) => {
+                  const file = ev.target.files?.[0]
+                  ev.target.value = ''
+                  onExportVideo(file)
+                }}
+              />
+              Export video
+            </label>
+          </div>
           {replay && (
             <p className="session-status">
               replaying… frame {replay.frame}/{replay.total}
+            </p>
+          )}
+          {exporting && (
+            <p className="session-status">
+              exporting… {Math.round((exporting.frame / Math.max(1, exporting.total)) * 100)}%
             </p>
           )}
           {sessionError && <span className="expr-message">{sessionError}</span>}
