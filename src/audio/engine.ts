@@ -18,6 +18,8 @@ export class AudioEngine {
   private freqData: Uint8Array<ArrayBuffer> | null = null
   private startedAt = 0
   private decoded: AudioBuffer | null = null
+  /** Monotonic token so overlapping playFile calls resolve to the newest one. */
+  private loadSeq = 0
   private featureTimeline: FeatureTimeline | null = null
   private _fileName: string | null = null
 
@@ -43,10 +45,15 @@ export class AudioEngine {
   }
 
   async playFile(file: File): Promise<void> {
+    // Re-entrancy guard: rapid successive file selections each pass the entry
+    // stop() before the earlier call has created its source, which would leave
+    // overlapping playback. Only the newest call survives its await points.
+    const seq = ++this.loadSeq
     this.stop()
     if (!this.ctx) this.ctx = new AudioContext()
     if (this.ctx.state === 'suspended') await this.ctx.resume()
     const buffer = await this.ctx.decodeAudioData(await file.arrayBuffer())
+    if (seq !== this.loadSeq) return // superseded by a newer playFile
     this.decoded = buffer
     this._fileName = file.name
 
@@ -55,7 +62,9 @@ export class AudioEngine {
     // For v1, yield once here so a caller that just set an "Analyzing…" label
     // (App.tsx) gets a chance to paint before the blocking pass runs.
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    if (seq !== this.loadSeq) return
     this.featureTimeline = analyzeAudio(mixToMono(buffer), buffer.sampleRate)
+    if (seq !== this.loadSeq) return
 
     this.analyser = this.ctx.createAnalyser()
     this.analyser.fftSize = 2048

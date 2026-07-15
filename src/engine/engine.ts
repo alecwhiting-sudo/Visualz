@@ -55,6 +55,9 @@ export class Engine {
   /** Set by `loadSession` when the loaded doc's audio is `kind: 'file'`; drives
    * signal publishing during replay instead of the (stopped) live AudioEngine. */
   private sessionTimeline: FeatureTimeline | null = null
+  /** Set while timeline lookup drives signals; the causal detector resets on the
+   * next non-timeline frame so it never resumes from frozen adaptive state. */
+  private detectorStale = false
   /**
    * Routes replayed events into the live pipeline while bypassing recording —
    * queueInput goes straight to `mappings.queue` (not `this.queueInput`) so a
@@ -293,7 +296,14 @@ export class Engine {
       this.bus.set('mid', s.mid)
       this.bus.set('high', s.high)
       ev = { onset: s.onset === 1, beat: s.beat === 1, beatPhase: s.beatPhase, onsetStrength: s.onsetStrength }
+      // The causal detector isn't run on timeline frames, so its adaptive state
+      // goes stale; make the next non-timeline frame start it fresh.
+      this.detectorStale = true
     } else {
+      if (this.detectorStale) {
+        this.events.reset()
+        this.detectorStale = false
+      }
       if (this.audio.isPlaying) {
         this.audio.publishSignals(this.bus)
       } else {

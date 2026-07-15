@@ -427,7 +427,8 @@ describe('serialization', () => {
     expect(back.frames).toBe(tl.frames)
     expect(back.bpm).toBe(tl.bpm)
     for (const field of ['rms', 'bass', 'mid', 'high', 'onsetEnv', 'onsets', 'beats'] as const) {
-      expect(Array.from(back[field])).toEqual(Array.from(tl[field]))
+      // Bit-identical per docs/ANALYSIS.md §9: compare raw bytes, not float values.
+      expect(new Uint8Array(back[field].buffer)).toEqual(new Uint8Array(tl[field].buffer))
     }
   })
 
@@ -459,7 +460,8 @@ describe('determinism', () => {
     const a = analyzeAudio(pcm, SAMPLE_RATE)
     const b = analyzeAudio(pcm, SAMPLE_RATE)
     for (const field of ['rms', 'bass', 'mid', 'high', 'onsetEnv', 'onsets', 'beats'] as const) {
-      expect(Array.from(a[field])).toEqual(Array.from(b[field]))
+      // Bit-identical per docs/ANALYSIS.md §9: compare raw bytes, not float values.
+      expect(new Uint8Array(a[field].buffer)).toEqual(new Uint8Array(b[field].buffer))
     }
     expect(a.bpm).toBe(b.bpm)
   })
