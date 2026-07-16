@@ -15,6 +15,7 @@ body {
 }
 
 .stage {
+  position: relative;
   flex: 1;
   display: flex;
   align-items: center;
@@ -30,6 +31,22 @@ body {
   background: #000;
 }
 
+/* Perform/full: canvas keeps its aspect but maximizes within the viewport —
+   CSS scaling only, the engine's internal 960x540 framebuffer never changes.
+   No side panel means .stage (flex: 1) already fills the row; it just needs
+   its own padding/max-height dropped so the canvas can grow to fill it. */
+.app-perform .stage,
+.app-full .stage {
+  padding: 0;
+  background: #000;
+}
+
+.app-perform .stage canvas,
+.app-full .stage canvas {
+  max-height: 100vh;
+  border-radius: 0;
+}
+
 .panel {
   width: 280px;
   padding: 20px 16px;
@@ -37,6 +54,13 @@ body {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .panel h1 {
@@ -373,4 +397,41 @@ body {
 
 @keyframes pulse-armed {
   50% { background: #331616; }
+}
+
+/* Perform mode's single slim control strip (REQUIREMENTS.md §1's "nerdy UI
+   goes deep, casual use stays shallow" — here inverted for live performance:
+   everything except the essentials is hidden so the visual reads big).
+   Overlaid along the bottom of the stage — position: fixed keeps it out of
+   the flex layout entirely so it never affects canvas sizing. */
+.perform-strip {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: rgba(11, 11, 15, 0.82);
+  backdrop-filter: blur(6px);
+  border-top: 1px solid #24242e;
+  flex-wrap: wrap;
+}
+
+.perform-strip .scene-select {
+  margin-bottom: 0;
+  min-width: 160px;
+}
+
+.perform-strip .transport-row {
+  flex: 1;
+  min-width: 200px;
+  margin-top: 0;
+}
+
+.view-mode-buttons {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }

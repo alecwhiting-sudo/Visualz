@@ -106,8 +106,62 @@ function formatMidiStatus(supported: boolean, deviceCount: number): string {
   return `MIDI: ${deviceCount} input${deviceCount === 1 ? '' : 's'}`
 }
 
+// --- View modes -------------------------------------------------------------
+// studio: the original layout (this file, untouched below). perform: canvas
+// almost-fullscreen with a single slim control strip — the "flick to big
+// visuals, tweak via MIDI hardware" mode. full: true Fullscreen-API fullscreen
+// on the stage container, zero chrome — Esc (browser-handled) or F exits.
+type ViewMode = 'studio' | 'perform' | 'full'
+
+/** Same convention as mapping/keyboard.ts's isEditableTarget, plus `select` —
+ * this is a UI-level shortcut (not a mapping-table binding) and the panel has
+ * dropdowns (scene, export format) a stray "f" keystroke shouldn't hijack. */
+function isFormFieldTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null
+  const tag = el && typeof el.tagName === 'string' ? el.tagName.toLowerCase() : ''
+  return tag === 'input' || tag === 'textarea' || tag === 'select'
+}
+
+/** Vendor-prefix-tolerant Fullscreen API surface — only Safari-family browsers
+ * still need the `webkit` prefix, and iPhone Safari has no element fullscreen
+ * at all (perform mode is the fallback there per REQUIREMENTS.md's platform note). */
+type FullscreenDoc = Document & {
+  webkitFullscreenElement?: Element | null
+  webkitExitFullscreen?: () => void
+}
+type FullscreenElement = HTMLElement & { webkitRequestFullscreen?: () => void }
+
+function fullscreenApiAvailable(): boolean {
+  const el = document.documentElement as FullscreenElement
+  return typeof el.requestFullscreen === 'function' || typeof el.webkitRequestFullscreen === 'function'
+}
+
+function currentFullscreenElement(): Element | null {
+  return document.fullscreenElement ?? (document as FullscreenDoc).webkitFullscreenElement ?? null
+}
+
+function requestFullscreenOn(el: HTMLElement): Promise<void> {
+  const anyEl = el as FullscreenElement
+  if (typeof anyEl.requestFullscreen === 'function') return anyEl.requestFullscreen()
+  if (typeof anyEl.webkitRequestFullscreen === 'function') {
+    anyEl.webkitRequestFullscreen()
+    return Promise.resolve()
+  }
+  return Promise.reject(new Error('Fullscreen API unavailable'))
+}
+
+function exitFullscreenIfActive(): Promise<void> {
+  const doc = document as FullscreenDoc
+  if (document.fullscreenElement) return document.exitFullscreen()
+  if (doc.webkitFullscreenElement && doc.webkitExitFullscreen) {
+    doc.webkitExitFullscreen()
+  }
+  return Promise.resolve()
+}
+
 export function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const stageRef = useRef<HTMLDivElement>(null)
   const engineRef = useRef<Engine | null>(null)
   const detachKeyboardRef = useRef<(() => void) | null>(null)
   const midiHandleRef = useRef<MidiHandle | null>(null)
@@ -185,6 +239,79 @@ export function App() {
   // polling contextState while a file is "playing"; the fix is a button whose
   // tap (a guaranteed-valid gesture) resumes the context.
   const [audioBlocked, setAudioBlocked] = useState(false)
+
+  // --- View modes (studio / perform / full) --------------------------------
+  const [viewMode, setViewMode] = useState<ViewMode>('studio')
+  // Computed once — feature detection, not per-frame state — and used both to
+  // decide whether "F"/the cycle button ever reach 'full' and to hide the
+  // perform strip's "Full screen" button on platforms without it (iPhone Safari).
+  const [fullscreenSupported] = useState(() => fullscreenApiAvailable())
+
+  /** studio -> perform -> full -> studio; skips 'full' entirely where the
+   * Fullscreen API is unavailable, so it becomes a plain two-state toggle. */
+  const cycleViewMode = () => {
+    setViewMode((v) => {
+      if (v === 'studio') return 'perform'
+      if (v === 'perform') return fullscreenSupported ? 'full' : 'studio'
+      return 'studio'
+    })
+  }
+
+  // Keeps the actual browser fullscreen state in sync with `viewMode`: enters
+  // when it becomes 'full', exits otherwise. Guarded on the stage element
+  // already being (or not being) the fullscreen element so this doesn't fight
+  // the fullscreenchange-driven resync effect below.
+  useEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return
+    if (viewMode === 'full') {
+      if (currentFullscreenElement() !== stage) {
+        requestFullscreenOn(stage).catch(() => {
+          // Fullscreen request rejected (e.g. no user-activation left, or a
+          // feature-detection false positive) — fall back to perform rather
+          // than leaving viewMode stuck on an unrealized 'full'.
+          setViewMode('perform')
+        })
+      }
+    } else if (currentFullscreenElement() === stage) {
+      exitFullscreenIfActive().catch(() => {})
+    }
+  }, [viewMode])
+
+  // The browser can exit fullscreen for reasons outside our control (Esc, OS
+  // gesture, tab switch) — resync viewMode down to 'perform' whenever that
+  // happens so the UI never claims 'full' while the browser is windowed.
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      if (!currentFullscreenElement()) {
+        setViewMode((v) => (v === 'full' ? 'perform' : v))
+      }
+    }
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange)
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreenChange)
+      document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
+    }
+  }, [])
+
+  // "V" (view) cycles view modes — a UI-level shortcut, not a mapping-table
+  // binding (those stay live regardless of view mode via attachKeyboard
+  // below). Deliberately NOT "f": the default mappings bind f/g to the trail
+  // flash/fade, and one keystroke doing both a view change and a visual flash
+  // reads as a glitch. "v" is unclaimed by any default mapping. Guarded the
+  // same way mapping/keyboard.ts guards typing, plus `select` (see
+  // isFormFieldTarget) since this shortcut isn't scoped to the canvas.
+  useEffect(() => {
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.repeat || isFormFieldTarget(ev.target)) return
+      if (ev.key.toLowerCase() !== 'v') return
+      cycleViewMode()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- cycleViewMode closes over fullscreenSupported, which never changes after mount
+  }, [])
 
   /** Wires up live-only side effects (signal meter polling, keyboard) for an engine. */
   const attachLiveEngine = (e: Engine) => {
@@ -498,12 +625,52 @@ export function App() {
   }
 
   return (
-    <div className="app">
-      <div className="stage">
+    <div className={`app app-${viewMode}`}>
+      <div className="stage" ref={stageRef}>
         <canvas ref={canvasRef} />
+        {viewMode === 'perform' && (
+          <div className="perform-strip">
+            <SceneSelect sceneId={sceneId} onChange={onSceneChange} disabled={replay !== null || exporting !== null} />
+            {engine && playback.hasFile && (
+              <TransportRow
+                engine={engine}
+                playback={playback}
+                recording={recording}
+                armed={armed}
+                setArmed={setArmed}
+                setRecording={setRecording}
+                setSessionError={setSessionError}
+              />
+            )}
+            <RecordButton
+              recording={recording}
+              armed={armed}
+              hasFile={playback.hasFile}
+              playing={playback.playing}
+              disabled={!engine || replay !== null || exporting !== null}
+              onToggleRecording={onToggleRecording}
+            />
+            <div className="view-mode-buttons">
+              {fullscreenSupported && (
+                <button type="button" className="session-button" onClick={() => setViewMode('full')}>
+                  Full screen
+                </button>
+              )}
+              <button type="button" className="session-button" onClick={() => setViewMode('studio')}>
+                Studio
+              </button>
+            </div>
+          </div>
+        )}
       </div>
+      {viewMode === 'studio' && (
       <aside className="panel">
-        <h1>Visualz</h1>
+        <div className="panel-header">
+          <h1>Visualz</h1>
+          <button type="button" className="session-button" onClick={() => setViewMode('perform')}>
+            Perform view
+          </button>
+        </div>
         <label className="file">
           <input
             type="file"
@@ -551,69 +718,15 @@ export function App() {
         )}
 
         {engine && playback.hasFile && (
-          <div className="transport-row">
-            <button
-              type="button"
-              className="session-button"
-              disabled={recording}
-              // Keyed on `playing` (an audible source exists), not `paused`:
-              // stopped and naturally-ended tracks must also show ▶, and
-              // resumeAudio restarts those from the rewound offset.
-              onClick={() => {
-                if (playback.playing) {
-                  engine.pauseAudio()
-                  return
-                }
-                engine.resumeAudio()
-                // Armed recording fires here, synchronously after resume — the
-                // source now exists (resume creates it in the same call), so
-                // startRecording's not-playing guard passes and audio + the
-                // recording start on the same transport frame.
-                if (armed && engine.audio.contextState !== 'running') {
-                  // iOS: the context can still be waking (ctx.resume is async);
-                  // a recording begun now would open on a frozen clock and then
-                  // time-jump — stay armed, audio starts when the context does,
-                  // and the next ▶ press fires the take. No-op on desktop,
-                  // where the context is already running.
-                  return
-                }
-                if (armed) {
-                  setArmed(false)
-                  try {
-                    engine.startRecording()
-                    setRecording(true)
-                  } catch (err) {
-                    setSessionError(err instanceof Error ? err.message : String(err))
-                  }
-                }
-              }}
-              aria-label={playback.playing ? 'Pause' : 'Play'}
-            >
-              {playback.playing ? '⏸' : '▶'}
-            </button>
-            <button
-              type="button"
-              className="session-button"
-              disabled={recording}
-              onClick={() => engine.stopAudio()}
-              aria-label="Stop and rewind"
-            >
-              ⏹
-            </button>
-            <input
-              type="range"
-              className="transport-scrub"
-              min={0}
-              max={Math.max(playback.duration, 0.1)}
-              step={0.1}
-              value={Math.min(playback.time, playback.duration)}
-              disabled={recording}
-              onChange={(ev) => engine.seekAudio(Number(ev.target.value))}
-            />
-            <span className="transport-time">
-              {formatTime(playback.time)} / {formatTime(playback.duration)}
-            </span>
-          </div>
+          <TransportRow
+            engine={engine}
+            playback={playback}
+            recording={recording}
+            armed={armed}
+            setArmed={setArmed}
+            setRecording={setRecording}
+            setSessionError={setSessionError}
+          />
         )}
 
         <section>
@@ -643,20 +756,14 @@ export function App() {
             </select>
           </label>
           <div className="session-controls">
-            <button
-              type="button"
-              className={`session-button${armed && !recording ? ' record-armed' : ''}`}
-              onClick={onToggleRecording}
+            <RecordButton
+              recording={recording}
+              armed={armed}
+              hasFile={playback.hasFile}
+              playing={playback.playing}
               disabled={!engine || replay !== null || exporting !== null}
-            >
-              {recording
-                ? 'Stop'
-                : playback.hasFile && !playback.playing
-                  ? armed
-                    ? 'Armed ●'
-                    : 'Arm'
-                  : 'Record'}
-            </button>
+              onToggleRecording={onToggleRecording}
+            />
             <label className="file session-file">
               <input
                 type="file"
@@ -787,20 +894,7 @@ export function App() {
 
         {engine && (
           <section>
-            <label className="scene-select">
-              Scene
-              <select
-                value={sceneId}
-                disabled={replay !== null || exporting !== null}
-                onChange={(ev) => onSceneChange(ev.target.value)}
-              >
-                {Object.entries(SCENES).map(([id, entry]) => (
-                  <option key={id} value={id}>
-                    {entry.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <SceneSelect sceneId={sceneId} onChange={onSceneChange} disabled={replay !== null || exporting !== null} />
             <h2>{engine.scene.meta.name}</h2>
             {engine.scene.params.map((p) => (
               <Knob
@@ -816,6 +910,151 @@ export function App() {
 
         {engine && <ShaderPanel engine={engine} />}
       </aside>
+      )}
+    </div>
+  )
+}
+
+/** The scene picker <select> — shared between the studio panel and the
+ * perform strip (extracted so the two never drift, per the task's "do not
+ * duplicate logic" instruction). */
+function SceneSelect({
+  sceneId,
+  onChange,
+  disabled,
+}: {
+  sceneId: string
+  onChange: (id: string) => void
+  disabled: boolean
+}) {
+  return (
+    <label className="scene-select">
+      Scene
+      <select value={sceneId} disabled={disabled} onChange={(ev) => onChange(ev.target.value)}>
+        {Object.entries(SCENES).map(([id, entry]) => (
+          <option key={id} value={id}>
+            {entry.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+/** The Record/Arm button — shared between the studio panel's Session section
+ * and the perform strip. Label logic matches onToggleRecording's state machine
+ * (App): Stop while recording, Arm/Armed while a file is loaded but paused,
+ * Record otherwise. */
+function RecordButton({
+  recording,
+  armed,
+  hasFile,
+  playing,
+  disabled,
+  onToggleRecording,
+}: {
+  recording: boolean
+  armed: boolean
+  hasFile: boolean
+  playing: boolean
+  disabled: boolean
+  onToggleRecording: () => void
+}) {
+  return (
+    <button
+      type="button"
+      className={`session-button${armed && !recording ? ' record-armed' : ''}`}
+      onClick={onToggleRecording}
+      disabled={disabled}
+    >
+      {recording ? 'Stop' : hasFile && !playing ? (armed ? 'Armed ●' : 'Arm') : 'Record'}
+    </button>
+  )
+}
+
+/** The play/pause/stop/scrub/time transport row — shared between the studio
+ * panel and the perform strip. Only rendered by callers once `playback.hasFile`
+ * is true, same guard as the original inline block this was extracted from. */
+function TransportRow({
+  engine,
+  playback,
+  recording,
+  armed,
+  setArmed,
+  setRecording,
+  setSessionError,
+}: {
+  engine: Engine
+  playback: { time: number; duration: number; playing: boolean; hasFile: boolean }
+  recording: boolean
+  armed: boolean
+  setArmed: React.Dispatch<React.SetStateAction<boolean>>
+  setRecording: React.Dispatch<React.SetStateAction<boolean>>
+  setSessionError: React.Dispatch<React.SetStateAction<string | null>>
+}) {
+  return (
+    <div className="transport-row">
+      <button
+        type="button"
+        className="session-button"
+        disabled={recording}
+        // Keyed on `playing` (an audible source exists), not `paused`:
+        // stopped and naturally-ended tracks must also show ▶, and
+        // resumeAudio restarts those from the rewound offset.
+        onClick={() => {
+          if (playback.playing) {
+            engine.pauseAudio()
+            return
+          }
+          engine.resumeAudio()
+          // Armed recording fires here, synchronously after resume — the
+          // source now exists (resume creates it in the same call), so
+          // startRecording's not-playing guard passes and audio + the
+          // recording start on the same transport frame.
+          if (armed && engine.audio.contextState !== 'running') {
+            // iOS: the context can still be waking (ctx.resume is async);
+            // a recording begun now would open on a frozen clock and then
+            // time-jump — stay armed, audio starts when the context does,
+            // and the next ▶ press fires the take. No-op on desktop,
+            // where the context is already running.
+            return
+          }
+          if (armed) {
+            setArmed(false)
+            try {
+              engine.startRecording()
+              setRecording(true)
+            } catch (err) {
+              setSessionError(err instanceof Error ? err.message : String(err))
+            }
+          }
+        }}
+        aria-label={playback.playing ? 'Pause' : 'Play'}
+      >
+        {playback.playing ? '⏸' : '▶'}
+      </button>
+      <button
+        type="button"
+        className="session-button"
+        disabled={recording}
+        onClick={() => engine.stopAudio()}
+        aria-label="Stop and rewind"
+      >
+        ⏹
+      </button>
+      <input
+        type="range"
+        className="transport-scrub"
+        min={0}
+        max={Math.max(playback.duration, 0.1)}
+        step={0.1}
+        value={Math.min(playback.time, playback.duration)}
+        disabled={recording}
+        onChange={(ev) => engine.seekAudio(Number(ev.target.value))}
+      />
+      <span className="transport-time">
+        {formatTime(playback.time)} / {formatTime(playback.duration)}
+      </span>
     </div>
   )
 }
