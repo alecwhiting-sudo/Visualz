@@ -117,13 +117,18 @@ export function parseSession(json: string): SessionDoc {
     throw new Error("Session audio must be an object with kind: 'demo' or 'file'")
   }
   if (raw.audio.kind === 'demo') {
-    // no further fields to validate
+    if (raw.audio.startSeconds !== undefined && (!isFiniteNumber(raw.audio.startSeconds) || raw.audio.startSeconds < 0)) {
+      throw new Error('Session audio.startSeconds must be a non-negative finite number when present')
+    }
   } else if (raw.audio.kind === 'file') {
     if (typeof raw.audio.name !== 'string') {
       throw new Error('Session audio.name must be a string when kind is "file"')
     }
     if (!isRecord(raw.audio.timeline)) {
       throw new Error('Session audio.timeline must be an object when kind is "file"')
+    }
+    if (raw.audio.startSeconds !== undefined && (!isFiniteNumber(raw.audio.startSeconds) || raw.audio.startSeconds < 0)) {
+      throw new Error('Session audio.startSeconds must be a non-negative finite number when present')
     }
     // Deep timeline validation happens in parseTimeline at load time (Engine.loadSession).
   } else {

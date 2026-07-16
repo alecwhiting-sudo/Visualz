@@ -132,6 +132,48 @@ describe('SessionRecorder', () => {
     expect(doc.events.map((e) => e.type)).toEqual(['param', 'switch', 'input'])
     expect(doc.events[1]).toEqual({ frame: 3, type: 'switch', toScene: 'flowfield' })
   })
+
+  // --- Take-baselining (the "rehearse -> arm -> ▶" regression) ---------------
+  // Live-mode transport.frame is a rAF tick counter that never resets — a take
+  // armed after any rehearsal used to record ABSOLUTE frame numbers, so the
+  // replayed take carried thousands of frames of dead lead-in and durationFrames
+  // massively overstated the performed length. The fix: the recorder captures
+  // `startFrame` at construction and stores every event/duration relative to it.
+
+  it('21) a startFrame offset makes recorded event frames relative, not absolute', () => {
+    // Simulates: engine ran (rehearsed) for 500 frames, THEN startRecording()
+    // captured transport.frame=500 as the baseline.
+    const recorder = new SessionRecorder(baseSnapshot(), 500)
+    recorder.recordParam(505, 'freqX', 4)
+    recorder.recordInput(520, { type: 'trigger', index: 0 })
+    const doc = recorder.finish(560)
+    expect(doc.events).toEqual([
+      { frame: 5, type: 'param', name: 'freqX', value: 4 },
+      { frame: 20, type: 'input', event: { type: 'trigger', index: 0 } },
+    ])
+    // durationFrames is the PERFORMED length (60 frames), not the absolute end
+    // frame (560) — this is the "takes came out far longer than the
+    // performance" defect.
+    expect(doc.durationFrames).toBe(60)
+  })
+
+  it('22) startFrame defaults to 0 — every existing single-arg caller is unaffected', () => {
+    const recorder = new SessionRecorder(baseSnapshot())
+    recorder.recordParam(7, 'freqX', 4)
+    const doc = recorder.finish(10)
+    expect(doc.events).toEqual([{ frame: 7, type: 'param', name: 'freqX', value: 4 }])
+    expect(doc.durationFrames).toBe(10)
+  })
+
+  it('23) clamps rather than throws if an event frame somehow precedes startFrame', () => {
+    const recorder = new SessionRecorder(baseSnapshot(), 100)
+    // Defensive floor only — should be unreachable via the real engine, since
+    // transport.frame only advances after startRecording captures the baseline.
+    recorder.recordParam(50, 'freqX', 4)
+    const doc = recorder.finish(100)
+    expect(doc.events).toEqual([{ frame: 0, type: 'param', name: 'freqX', value: 4 }])
+    expect(doc.durationFrames).toBe(0)
+  })
 })
 
 // --- 2. SessionPlayer -----------------------------------------------------------
@@ -380,6 +422,57 @@ describe('parseSession validation', () => {
     const doc = { ...docWithEvents([]), events: [{ frame: 0, type: 'switch', toScene: 'not-a-real-scene-id' }] }
     expect(() => parseSession(JSON.stringify(doc))).not.toThrow()
     expect(parseSession(JSON.stringify(doc)).events).toEqual([{ frame: 0, type: 'switch', toScene: 'not-a-real-scene-id' }])
+  })
+})
+
+// --- audio.startSeconds validation (take-baselining, audio-start-offset half) --
+
+describe('parseSession audio.startSeconds validation', () => {
+  it('24a) accepts a demo doc with no startSeconds at all (backward compatible)', () => {
+    const doc = docWithEvents([]) // audio: { kind: 'demo' }
+    expect(() => parseSession(JSON.stringify(doc))).not.toThrow()
+    expect((parseSession(JSON.stringify(doc)).audio as { startSeconds?: number }).startSeconds).toBeUndefined()
+  })
+
+  it('24b) accepts and round-trips a demo doc with startSeconds set', () => {
+    const doc = docWithEvents([], { audio: { kind: 'demo', startSeconds: 4.2 } })
+    expect(parseSession(serializeSession(doc))).toEqual(doc)
+  })
+
+  it('24c) accepts a file doc with no startSeconds at all (backward compatible)', () => {
+    const doc = docWithEvents([], { audio: { kind: 'file', name: 'track.mp3', timeline: { version: 1 } } })
+    expect(() => parseSession(JSON.stringify(doc))).not.toThrow()
+    expect((parseSession(JSON.stringify(doc)).audio as { startSeconds?: number }).startSeconds).toBeUndefined()
+  })
+
+  it('24d) accepts and round-trips a file doc with startSeconds set', () => {
+    const doc = docWithEvents([], {
+      audio: { kind: 'file', name: 'track.mp3', timeline: { version: 1 }, startSeconds: 12.5 },
+    })
+    expect(parseSession(serializeSession(doc))).toEqual(doc)
+  })
+
+  it('24e) rejects a negative demo startSeconds', () => {
+    const doc = { ...docWithEvents([]), audio: { kind: 'demo', startSeconds: -1 } }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/startSeconds/i)
+  })
+
+  it('24f) rejects a NaN/non-finite demo startSeconds', () => {
+    const doc = { ...docWithEvents([]), audio: { kind: 'demo', startSeconds: Number.NaN } }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/startSeconds/i)
+  })
+
+  it('24g) rejects a negative file startSeconds', () => {
+    const doc = {
+      ...docWithEvents([]),
+      audio: { kind: 'file', name: 'track.mp3', timeline: { version: 1 }, startSeconds: -0.5 },
+    }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/startSeconds/i)
+  })
+
+  it('24h) accepts startSeconds: 0 explicitly (equivalent to omitted)', () => {
+    const doc = docWithEvents([], { audio: { kind: 'demo', startSeconds: 0 } })
+    expect(() => parseSession(JSON.stringify(doc))).not.toThrow()
   })
 })
 

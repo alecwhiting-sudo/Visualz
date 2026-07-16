@@ -107,4 +107,25 @@ function trimAudioToVideoDuration(
   }
 }
 
+/**
+ * Take-baselining (session/types.ts's `SessionAudio.startSeconds`): a take
+ * armed mid-track starts recording at `startSeconds` seconds into the loaded
+ * file, but the take doc's own timeline (`doc.audio`) and the export's replay
+ * (`frame.time`) both start counting from 0 — so the raw PCM handed in for
+ * muxing must be sliced forward by the same offset, or the exported audio
+ * track would play the wrong section of the file under the video. Callers
+ * that build `ExportAudio` from a live `AudioEngine.lastBuffer()` (App.tsx's
+ * `exportVideo`) apply this before handing the result to `exportSession` —
+ * `trimAudioToVideoDuration` above then bounds the tail to the take's length,
+ * same as any other export. A no-op when `startSeconds` is 0 or omitted.
+ */
+export function sliceExportAudioFromSeconds(audio: ExportAudio, startSeconds: number): ExportAudio {
+  if (!(startSeconds > 0)) return audio
+  const startSample = Math.round(startSeconds * audio.sampleRate)
+  return {
+    sampleRate: audio.sampleRate,
+    channels: audio.channels.map((c) => c.subarray(Math.min(startSample, c.length))),
+  }
+}
+
 export type { ExportVideoOpts, ExportAudio }

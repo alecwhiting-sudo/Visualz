@@ -28,36 +28,56 @@ export interface SessionSnapshot {
 export class SessionRecorder {
   private readonly snapshot: SessionSnapshot
   private readonly events: SessionEvent[] = []
+  /** The absolute `transport.frame` reading at construction (engine passes
+   * this from `startRecording`) — every recorded event and `durationFrames`
+   * are stored RELATIVE to it. Live-mode `transport.frame` is a rAF tick
+   * counter that never resets (ARCHITECTURE.md §3.5 doesn't require it to),
+   * so a take armed after any rehearsal would otherwise record thousands of
+   * frames of dead lead-in and replay far longer than the performance (the
+   * take-baselining defect this field fixes). Defaults to 0 so every existing
+   * caller/test that constructs a recorder without a second argument (always
+   * at a fresh engine's frame 0) is unaffected. */
+  private readonly startFrame: number
 
-  constructor(snapshot: SessionSnapshot) {
+  constructor(snapshot: SessionSnapshot, startFrame = 0) {
     this.snapshot = snapshot
+    this.startFrame = startFrame
+  }
+
+  /** Absolute transport frame -> relative-to-`startFrame`, clamped at 0. Every
+   * frame the engine reports here is `transport.frame`, which only advances
+   * monotonically once recording is armed, so a negative result should be
+   * unreachable — the clamp is a defensive floor (never crash a live
+   * performance over an off-by-one), not a expected code path. */
+  private relative(frame: number): number {
+    return Math.max(0, frame - this.startFrame)
   }
 
   recordInput(frame: number, event: SourceEvent): void {
-    this.events.push({ frame, type: 'input', event })
+    this.events.push({ frame: this.relative(frame), type: 'input', event })
   }
 
   recordInputSignal(frame: number, name: string, value: number): void {
-    this.events.push({ frame, type: 'inputSignal', name, value })
+    this.events.push({ frame: this.relative(frame), type: 'inputSignal', name, value })
   }
 
   recordParam(frame: number, name: string, value: number): void {
-    this.events.push({ frame, type: 'param', name, value })
+    this.events.push({ frame: this.relative(frame), type: 'param', name, value })
   }
 
   recordBinding(frame: number, param: string, src: string | null): void {
-    this.events.push({ frame, type: 'binding', param, src })
+    this.events.push({ frame: this.relative(frame), type: 'binding', param, src })
   }
 
   recordShader(frame: number, key: string, source: string): void {
-    this.events.push({ frame, type: 'shader', key, source })
+    this.events.push({ frame: this.relative(frame), type: 'shader', key, source })
   }
 
   /** Scene handoff (docs/HANDOFF.md §5): records only the target scene id —
    * the handoff snapshot itself is never serialized (invariant I7); it is
    * recomputed on replay by re-capturing A's re-rendered frame. */
   recordSwitch(frame: number, toScene: string): void {
-    this.events.push({ frame, type: 'switch', toScene })
+    this.events.push({ frame: this.relative(frame), type: 'switch', toScene })
   }
 
   finish(frame: number): SessionDoc {
@@ -73,7 +93,7 @@ export class SessionRecorder {
       },
       bindings: { ...this.snapshot.bindings },
       audio: this.snapshot.audio ?? { kind: 'demo' },
-      durationFrames: frame,
+      durationFrames: this.relative(frame),
       events: this.events.slice(),
     }
   }

@@ -25,8 +25,19 @@ export type SessionEvent =
  * (docs/ANALYSIS.md) — `timeline` is `serializeTimeline()`'s output, typed
  * `unknown` here to keep this module decoupled from `audio/timeline.ts`; the
  * engine validates/decodes it via `parseTimeline` at load time (Engine.loadSession).
+ *
+ * `startSeconds` (both variants) is the take-baselining defect's other half:
+ * arming a take mid-track (or mid-demo-dance, after any rehearsal) starts it at
+ * a nonzero position in the take's own time source — `file`'s FeatureTimeline
+ * origin, or `demo`'s free-running clock. Replay/export always steps `frame.time`
+ * from 0, so without this offset every signal the take heard would land at the
+ * wrong point in the timeline/demo curve on replay. Omitted (not even present)
+ * when 0, for backward compatibility with docs recorded before this field
+ * existed — `undefined` and `0` mean the same thing to every reader.
  */
-export type SessionAudio = { kind: 'demo' } | { kind: 'file'; name: string; timeline: unknown }
+export type SessionAudio =
+  | { kind: 'demo'; startSeconds?: number }
+  | { kind: 'file'; name: string; timeline: unknown; startSeconds?: number }
 
 export interface SessionDoc {
   version: 1

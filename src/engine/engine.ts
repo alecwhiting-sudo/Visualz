@@ -48,6 +48,13 @@ function hasIngest(scene: SceneRuntime): scene is SceneRuntime & IngestingScene 
   return typeof (scene as unknown as Partial<IngestingScene>).ingest === 'function'
 }
 
+/** Rounds to 1e-4 seconds (~0.1ms) — plenty of precision for a take's start
+ * offset, keeps the serialized doc's number tidy rather than carrying whatever
+ * float noise `AudioContext.currentTime`/the transport clock produced. */
+function round4(seconds: number): number {
+  return Math.round(seconds * 1e4) / 1e4
+}
+
 export interface EngineOptions {
   mode: TransportMode
   seed: number
@@ -110,6 +117,14 @@ export class Engine {
   /** Set by `loadSession` when the loaded doc's audio is `kind: 'file'`; drives
    * signal publishing during replay instead of the (stopped) live AudioEngine. */
   private sessionTimeline: FeatureTimeline | null = null
+  /** `doc.audio.startSeconds ?? 0`, set by `loadSession` (session/types.ts's
+   * take-baselining doc comment): the take's own time-source position (file
+   * timeline seconds, or demo clock seconds) when recording started. Replay/
+   * export always steps `frame.time` from 0, so every timeline/demo-signal
+   * sample taken while a player is armed adds this back in — see
+   * `updateAndRender`. Stays 0 for a live (non-replaying) engine, since only
+   * `loadSession` ever sets it and live engines never call it. */
+  private audioStartSeconds = 0
   /** Set while timeline lookup drives signals; the causal detector resets on the
    * next non-timeline frame so it never resumes from frozen adaptive state. */
   private detectorStale = false
@@ -214,7 +229,7 @@ export class Engine {
     for (let i = 0; i < n; i++) {
       if (this.player) this.player.applyUpTo(this.transport.frame, this.playerTarget)
       const frame = this.transport.step()
-      this.updateAndRender(frame.time, frame)
+      this.updateAndRender(frame)
     }
   }
 
@@ -447,10 +462,23 @@ export class Engine {
     }
     const bindings: Record<string, string> = {}
     for (const [param, b] of this.bindings) bindings[param] = b.src
+    // Take-baselining (session/types.ts's SessionAudio doc comment): capture
+    // where "now" sits in the take's own time source, so replay/export (which
+    // always steps frame.time from 0) can add it back in. A take armed right
+    // at track/demo start round-trips to exactly 0 seconds, which the `> 0`
+    // guards below omit entirely (not even `startSeconds: 0`) for back-compat
+    // with docs recorded before this field existed.
+    const fileStartSeconds = round4(this.audio.time)
+    const demoStartSeconds = round4(this.transport.time)
     const audio: SessionAudio =
       this.audio.hasFile && this.audio.timeline
-        ? { kind: 'file', name: this.audio.fileName ?? 'audio', timeline: serializeTimeline(this.audio.timeline) }
-        : { kind: 'demo' }
+        ? {
+            kind: 'file',
+            name: this.audio.fileName ?? 'audio',
+            timeline: serializeTimeline(this.audio.timeline),
+            ...(fileStartSeconds > 0 ? { startSeconds: fileStartSeconds } : {}),
+          }
+        : { kind: 'demo', ...(demoStartSeconds > 0 ? { startSeconds: demoStartSeconds } : {}) }
     // Snapshot ALL current stage sources (not just edited ones) — dead simple
     // and correct, at the cost of ~2-6KB per doc (docs the tradeoff rather than
     // diffing against scene defaults, which would need a throwaway scene
@@ -467,16 +495,19 @@ export class Engine {
           data: encodeImageBase64(this.storedImage.data),
         }
       : undefined
-    this.recorder = new SessionRecorder({
-      seed: this.seed,
-      fps: this.transport.fps,
-      sceneId: this.scene.meta.id,
-      params,
-      bindings,
-      audio,
-      shaders,
-      image,
-    })
+    this.recorder = new SessionRecorder(
+      {
+        seed: this.seed,
+        fps: this.transport.fps,
+        sceneId: this.scene.meta.id,
+        params,
+        bindings,
+        audio,
+        shaders,
+        image,
+      },
+      this.transport.frame,
+    )
   }
 
   /** Stops recording and returns the finished session doc, or null if nothing was recording. */
@@ -512,6 +543,9 @@ export class Engine {
     this.macros.reset()
 
     this.sessionTimeline = null
+    // Take-baselining (session/types.ts): both SessionAudio variants may carry
+    // a recorded start offset — read it uniformly here regardless of kind.
+    this.audioStartSeconds = doc.audio.startSeconds ?? 0
     if (doc.audio.kind === 'file') {
       try {
         this.sessionTimeline = parseTimeline(doc.audio.timeline)
@@ -579,6 +613,7 @@ export class Engine {
   clearSession(): void {
     this.player = null
     this.sessionTimeline = null
+    this.audioStartSeconds = 0
   }
 
   /** True once an armed player has applied every recorded event (false if none is armed). */
@@ -600,7 +635,7 @@ export class Engine {
   private tick(time: number): void {
     if (this.player) this.player.applyUpTo(this.transport.frame, this.playerTarget)
     const frame = this.transport.advanceTo(time)
-    this.updateAndRender(time, frame)
+    this.updateAndRender(frame)
   }
 
   /**
@@ -615,7 +650,7 @@ export class Engine {
    * audio loaded at all, or a future mic path) keeps today's
    * publishDemoSignals/analyser + AudioEventDetector behavior.
    */
-  private updateAndRender(time: number, frame: { time: number; dt: number; frame: number }): void {
+  private updateAndRender(frame: { time: number; dt: number; frame: number }): void {
     const timeline =
       this.player !== null
         ? this.sessionTimeline
@@ -627,9 +662,16 @@ export class Engine {
           ? this.audio.timeline
           : null
 
+    // Take-baselining (session/types.ts): while a player is armed (replay or
+    // export), `frame.time` always starts at 0, but the take may have been
+    // armed mid-track/mid-dance — `audioStartSeconds` (0 for a live engine,
+    // which never sets it) shifts every timeline/demo sample back to the
+    // point in the take's own time source where recording actually began.
+    const sampleTime = frame.time + this.audioStartSeconds
+
     let ev: AudioEventResult
     if (timeline) {
-      const s = sampleTimeline(timeline, frame.time, frame.dt)
+      const s = sampleTimeline(timeline, sampleTime, frame.dt)
       this.bus.set('rms', s.rms)
       this.bus.set('bass', s.bass)
       this.bus.set('mid', s.mid)
@@ -663,8 +705,11 @@ export class Engine {
         this.events.reset()
         this.detectorStale = false
       }
-      publishDemoSignals(this.bus, time)
-      ev = this.events.update(frame.dt, frame.time, this.bus, true)
+      publishDemoSignals(this.bus, sampleTime)
+      // The demo detector path (events.ts's updateDemo) recomputes its analytic
+      // beat straight from `time`, independent of the bus — it must see the
+      // same shifted time as publishDemoSignals or the two go out of phase.
+      ev = this.events.update(frame.dt, sampleTime, this.bus, true)
     }
     this.bus.set('onset', ev.onset ? 1 : 0)
     this.bus.set('beat', ev.beat ? 1 : 0)

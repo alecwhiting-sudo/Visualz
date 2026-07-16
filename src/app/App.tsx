@@ -7,7 +7,7 @@ import { MACRO_SLOT_COUNT } from '../engine/macroRouter'
 import { serializeSession, parseSession } from '../session/serialize'
 import type { SessionDoc } from '../session/types'
 import { exportSession } from '../export/client'
-import type { ExportProgress } from '../export/render'
+import { sliceExportAudioFromSeconds, type ExportProgress } from '../export/render'
 import type { ExportCodec } from '../export/encode'
 import { RotaryKnob } from './RotaryKnob'
 import { useParamBinding } from './paramBinding'
@@ -42,6 +42,17 @@ export interface VizLiveTestApi {
    * against real elapsed wall time (tests/e2e/performanceModel.spec.ts) without
    * scraping the take card's rendered mm:ss text. */
   lastTakeDuration(): number | null
+  /** The most recently ended take's full `SessionDoc` (untyped at this
+   * boundary, mirroring `VizTestApi.loadSession`'s `unknown`), or `null` if no
+   * take has ended yet. Lets an e2e test drive a REAL live take (rehearsal ->
+   * armed -> performing against the actual rAF-paced Engine, not the `?test=1`
+   * render-mode harness) and then hand the resulting doc to `window.__viz` on
+   * a second page for exact `durationFrames`/replay-determinism assertions
+   * (tests/e2e/takeBaselining.spec.ts) — the take-baselining regression only
+   * reproduces against a live-mode transport, whose `frame` counter never
+   * resets between rehearsal and the take, unlike every existing render-mode
+   * fixture which always records from a fresh engine at frame 0. */
+  lastSessionDoc(): unknown | null
 }
 
 declare global {
@@ -525,6 +536,7 @@ export function App() {
         const doc = lastSessionRef.current
         return doc ? doc.durationFrames / doc.fps : null
       },
+      lastSessionDoc: () => lastSessionRef.current,
     }
     meterIntervalRef.current = window.setInterval(() => {
       setLevels(e.bus.snapshot())
@@ -997,7 +1009,15 @@ export function App() {
       // loaded into the live engine via onFile (REQUIREMENTS.md §5.1: exports mux
       // the audio track in). No file loaded (or the live engine has been swapped
       // for a replay engine) means a silent export, same as before this change.
-      const audio = engineRef.current?.audio.lastBuffer() ?? undefined
+      const rawAudio = engineRef.current?.audio.lastBuffer() ?? undefined
+      // Take-baselining (session/types.ts): a take armed mid-track recorded
+      // `doc.audio.startSeconds` seconds into this same buffer — slice the raw
+      // PCM forward by that much so the muxed track lines up with what the
+      // exported frames (which replay from take-relative time 0) actually show.
+      const audio =
+        rawAudio && doc.audio.kind === 'file' && doc.audio.startSeconds
+          ? sliceExportAudioFromSeconds(rawAudio, doc.audio.startSeconds)
+          : rawAudio
       // 'auto' passes `codec: undefined`, so createVideoSink auto-detects
       // (VP9/WebM preferred where supported, H.264/MP4 fallback for iOS/macOS
       // Safari); 'mp4'/'webm' pin the codec explicitly (export/encode.ts).
