@@ -30,6 +30,11 @@ import { expect, test } from '@playwright/test'
  * "MIDI settings behind a button") — the tab-style "MIDI" button is the only
  * thing visible until clicked, so this spec opens it before asserting on the
  * status text / device list / Learn button that used to be visible outright.
+ *
+ * The studio panel is also now tabbed (SCENE | SESSION | INPUTS | CODE, SCENE
+ * active by default) and the MIDI section lives inside INPUTS, so this spec
+ * opens that tab first — same idea as the MIDI disclosure itself, just one
+ * level up.
  */
 
 test('MIDI panel reaches "not supported" in headless Chromium and never throws', async ({ page }) => {
@@ -39,6 +44,7 @@ test('MIDI panel reaches "not supported" in headless Chromium and never throws',
   await page.goto('/')
 
   await expect(page.locator('.panel')).toBeVisible()
+  await page.getByRole('tab', { name: 'INPUTS' }).click()
   const midiSection = page.locator('section.midi-section')
   await expect(midiSection).toBeVisible()
 

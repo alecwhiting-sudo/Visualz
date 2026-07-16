@@ -27,67 +27,71 @@ body {
   font-family: system-ui, -apple-system, sans-serif;
 }
 
+/* The app shell never scrolls the page — height is pinned to exactly one
+   viewport and each mode divides that space between a stage region and a
+   chrome region (panel/strip), never by growing past it. Studio and full
+   share the row layout below (studio: stage + panel side by side; full: the
+   lone .stage child fills the row); perform overrides to a column so the
+   strip sits BELOW the stage in normal flow instead of overlaying it (see
+   .app-perform / .perform-strip below — this fixes a bug where the strip
+   used to be position: fixed on top of a 100vh canvas, covering the bottom
+   of the visuals with dials). */
 .app {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
   display: flex;
-  min-height: 100vh;
 }
 
+.app-perform {
+  flex-direction: column;
+}
+
+/* The canvas fills its .stage region in EVERY mode: width/height: 100% plus
+   object-fit: contain scales the engine's fixed 960x540 framebuffer up or
+   down to fit, letterboxed on .stage's black background — object-fit only
+   affects how the bitmap is drawn inside the box, never the box's own
+   (bounding-rect) size, which is what actually grows/shrinks per mode below.
+   Studio keeps a small inset + rounded corners; perform/full run edge to
+   edge. */
 .stage {
   position: relative;
   flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
+  min-width: 0;
+  min-height: 0;
+  background: #000;
 }
 
 .stage canvas {
-  max-width: 100%;
-  max-height: calc(100vh - 32px);
-  aspect-ratio: 16 / 9;
-  border-radius: 8px;
-  background: #000;
-}
-
-/* Perform/full: canvas keeps its aspect but maximizes within the viewport —
-   CSS scaling only, the engine's internal 960x540 framebuffer never changes.
-   No side panel means .stage (flex: 1) already fills the row; it just needs
-   its own padding/max-height dropped so the canvas can grow to fill it.
-
-   Bug fix: the old rules here were both max-* constraints (max-width: 100%,
-   max-height: 100vh) with no floor, which never GROW the canvas past its
-   960x540 attribute size — on a large monitor, fullscreen/perform showed a
-   small centered rectangle instead of filling the screen. Explicit
-   width/height: 100% (of .stage, which itself fills the viewport once the
-   side panel is gone) plus object-fit: contain scales the framebuffer UP to
-   fill the screen, aspect preserved, letterboxed on .stage's black
-   background — object-fit only affects how the canvas's bitmap is fit
-   inside its own box, not the box (bounding-rect) size itself. */
-.app-perform .stage,
-.app-full .stage {
-  padding: 0;
-  background: #000;
-}
-
-.app-perform .stage canvas,
-.app-full .stage canvas {
+  display: block;
   width: 100%;
   height: 100%;
-  max-width: 100%;
-  max-height: 100%;
-  aspect-ratio: auto;
   object-fit: contain;
-  border-radius: 0;
 }
 
+.app-studio .stage {
+  padding: 16px;
+}
+
+.app-studio .stage canvas {
+  border-radius: 8px;
+}
+
+/* Fixed-width column pinned to exactly 100vh — never grows past it. Header,
+   tab row, and footer are fixed-height flex items; .panel-content is the
+   only piece that scrolls (see below), so a scene with a long param list or
+   a wide-open shader editor never drags the page itself into scrolling and
+   never buries the pinned transport/record footer. */
 .panel {
-  width: 280px;
+  width: 320px;
+  height: 100vh;
   padding: 20px 16px;
   background: var(--bg-panel);
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 14px;
+  overflow: hidden;
 }
 
 .panel-header {
@@ -95,6 +99,57 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* SampleArk-style tab row: SCENE | SESSION | INPUTS | CODE, reusing the
+   existing .tab-button look (originally introduced for the MIDI disclosure
+   toggle). Exactly one is active at a time (App's `activeTab` state). */
+.panel-tabs {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+/* The only scrolling region in the studio panel. flex: 1 1 auto + min-height:
+   0 is what lets it shrink below its content's natural height instead of
+   pushing the footer (or the page) taller — the classic flexbox scroll-child
+   trap fixed here. */
+.panel-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Each tab's content stays mounted at all times — visibility is toggled via
+   the `hidden` attribute rather than conditional rendering, so switching tabs
+   never resets in-progress state (an unsaved shader edit, the MIDI
+   disclosure's open/closed state, a param's local slider value). Same
+   specificity as `[hidden]` below; the second rule wins on source order. */
+.panel-tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.panel-tab-content[hidden] {
+  display: none;
+}
+
+/* Pinned below the tabs, outside `.panel-content`'s scroll region — the
+   transport row and Record/Arm button are performance-critical and must
+   never scroll away or hide behind whichever tab happens to be open. */
+.panel-footer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.panel-footer .transport-row {
+  margin-top: 0;
 }
 
 .panel h1 {
@@ -457,12 +512,22 @@ body {
   resize: vertical;
 }
 
+/* Mobile studio: stage on top (~55vh), panel below with its own scroll and
+   the same tabs. Perform/full are already column (perform) or single-child
+   (full) layouts and need no override here. */
 @media (max-width: 720px) {
-  .app {
+  .app-studio {
     flex-direction: column;
   }
-  .panel {
+  .app-studio .stage {
+    flex: 0 0 55vh;
+    min-height: 0;
+  }
+  .app-studio .panel {
     width: 100%;
+    height: auto;
+    flex: 1 1 auto;
+    min-height: 0;
     border-left: none;
     border-top: 1px solid var(--border);
   }
@@ -522,17 +587,17 @@ body {
 
 /* Perform mode's slim control strip (REQUIREMENTS.md §1's "nerdy UI goes
    deep, casual use stays shallow" — here inverted for live performance:
-   everything except the essentials is hidden so the visual reads big).
-   Overlaid along the bottom of the stage — position: fixed keeps it out of
-   the flex layout entirely so it never affects canvas sizing. One translucent
-   backdrop for the whole strip; internally a thin params row (rotaries) sits
-   above the main control row (task: "ONE compact bar (params row may be a
-   second thin row above the main strip row)"). */
+   everything except the essentials is hidden so the visual reads big). Sits
+   in NORMAL FLOW below the stage (.app-perform is a column flex container;
+   the stage takes flex: 1 and the strip takes its natural height) — this
+   used to be position: fixed, overlaying the bottom of a 100vh canvas so the
+   dials covered the visuals; now the stage shrinks to make room instead, so
+   canvas and strip never overlap. One translucent backdrop for the whole
+   strip; internally a thin params row (rotaries) sits above the main control
+   row (task: "ONE compact bar (params row may be a second thin row above the
+   main strip row)"). */
 .perform-strip {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: 6px;

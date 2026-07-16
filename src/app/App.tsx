@@ -115,6 +115,18 @@ function formatMidiStatus(supported: boolean, deviceCount: number): string {
 // on the stage container, zero chrome — Esc (browser-handled) or V exits.
 type ViewMode = 'studio' | 'perform' | 'full'
 
+/** Studio panel's SampleArk-style tab row (task: regroup the panel into
+ * tabs so the column stops growing to whatever-is-expanded height). SCENE
+ * is the default so casual use (knobs) is one click away; SESSION/INPUTS/
+ * CODE hold the deeper tools. */
+type StudioTab = 'scene' | 'session' | 'inputs' | 'code'
+const STUDIO_TABS: Array<[StudioTab, string]> = [
+  ['scene', 'SCENE'],
+  ['session', 'SESSION'],
+  ['inputs', 'INPUTS'],
+  ['code', 'CODE'],
+]
+
 /** Same convention as mapping/keyboard.ts's isEditableTarget, plus `select` —
  * this is a UI-level shortcut (not a mapping-table binding) and the panel has
  * dropdowns (scene, export format) a stray "v" keystroke shouldn't hijack. */
@@ -281,6 +293,13 @@ export function App() {
   // decide whether "V"/the cycle button ever reach 'full' and to hide the
   // perform strip's "Full screen" button on platforms without it (iPhone Safari).
   const [fullscreenSupported] = useState(() => fullscreenApiAvailable())
+
+  // Studio panel tabs: all four tabs' content stays mounted at all times —
+  // visibility toggles via the `hidden` attribute (app.css's
+  // `.panel-tab-content[hidden]`), not conditional rendering, so switching
+  // tabs never resets in-progress state (an unsaved shader edit, the MIDI
+  // disclosure's open/closed state, learn mode).
+  const [activeTab, setActiveTab] = useState<StudioTab>('scene')
 
   /** studio -> perform -> full -> studio; skips 'full' entirely where the
    * Fullscreen API is unavailable, so it becomes a plain two-state toggle. */
@@ -731,7 +750,13 @@ export function App() {
     <div className={`app app-${viewMode}`}>
       <div className="stage" ref={stageRef}>
         <canvas ref={canvasRef} />
-        {viewMode === 'perform' && (
+      </div>
+      {/* SIBLING of .stage, not a child: .app-perform is a column flex layout
+         where the stage takes flex:1 and this strip takes natural height BELOW
+         it. Nested inside the stage it sat in flow after a height-100% canvas —
+         pushed exactly off the bottom of the overflow-hidden app (found via
+         screenshot pass: strip.top === viewport height, invisible). */}
+      {viewMode === 'perform' && (
           <div className="perform-strip">
             {/* Thin params row above the main strip row (task: "ONE compact
                bar (params row may be a second thin row above the main strip
@@ -796,8 +821,7 @@ export function App() {
               </div>
             </div>
           </div>
-        )}
-      </div>
+      )}
       {viewMode === 'studio' && (
       <aside className="panel">
         <div className="panel-header">
@@ -806,275 +830,314 @@ export function App() {
             Perform view
           </button>
         </div>
-        <label className="file">
-          <input
-            type="file"
-            accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.flac"
-            onChange={(ev) => onFile(ev.target.files?.[0])}
-          />
-          {trackName ?? 'Load audio file (demo signals until then)'}
-        </label>
-        <label className="file">
-          <input
-            type="file"
-            accept="image/*"
-            // Enabled only when the current scene has an image-driven concept
-            // (Photo Swarm task's `sceneAcceptsImage()` duck-type check), and
-            // disabled while recording: a mid-recording image swap isn't
-            // captured as a timestamped event (it's snapshot-only, taken at
-            // startRecording()), so replaying the recording could never
-            // reproduce it anyway — disabling avoids a swap that silently
-            // doesn't show up on replay.
-            disabled={!engine || !engine.sceneAcceptsImage() || recording}
-            onChange={(ev) => {
-              const file = ev.target.files?.[0]
-              ev.target.value = ''
-              onImageFile(file)
-            }}
-          />
-          {imageName ?? 'Load image (photo-swarm-style scenes only)'}
-        </label>
-        {audioBlocked && (
-          <button
-            type="button"
-            className="session-button audio-unblock"
-            onClick={() => {
-              void engineRef.current?.audio.resumeContext()
-            }}
-          >
-            🔊 Tap to enable sound
-          </button>
-        )}
-        {trackName && engine && (
-          <p className="session-status">
-            sound: {engine.audio.contextState ?? 'not started'}
-            {engine.audio.contextState === 'running' && ' — if silent, check Control Center for a Bluetooth/AirPlay output'}
-          </p>
-        )}
 
-        {engine && playback.hasFile && (
-          <TransportRow
-            engine={engine}
-            playback={playback}
-            recording={recording}
-            armed={armed}
-            setArmed={setArmed}
-            setRecording={setRecording}
-            setSessionError={setSessionError}
-          />
-        )}
-
-        <section>
-          <h2>Signals</h2>
-          {SIGNAL_NAMES.map((name) => (
-            <div className="meter" key={name}>
-              <span>{name}</span>
-              <div className="bar">
-                <div style={{ width: `${Math.min(1, levels[name] ?? 0) * 100}%` }} />
-              </div>
-            </div>
-          ))}
-        </section>
-
-        <section>
-          <h2>Session</h2>
-          <label className="scene-select">
-            Export format
-            <select
-              value={exportFormat}
-              disabled={replay !== null || exporting !== null}
-              onChange={(ev) => setExportFormat(ev.target.value as ExportFormatChoice)}
-            >
-              <option value="auto">Auto</option>
-              <option value="mp4">MP4 (H.264)</option>
-              <option value="webm">WebM (VP9)</option>
-            </select>
-          </label>
-          <div className="session-controls">
-            <RecordButton
-              recording={recording}
-              armed={armed}
-              hasFile={playback.hasFile}
-              playing={playback.playing}
-              disabled={!engine || replay !== null || exporting !== null}
-              onToggleRecording={onToggleRecording}
-            />
-            <label className="file session-file">
-              <input
-                type="file"
-                accept="application/json,.json"
-                disabled={replay !== null || exporting !== null}
-                onChange={(ev) => {
-                  const file = ev.target.files?.[0]
-                  ev.target.value = ''
-                  onLoadSession(file)
-                }}
-              />
-              Replay from file…
-            </label>
-            <label className="file session-file">
-              <input
-                type="file"
-                accept="application/json,.json"
-                disabled={replay !== null || exporting !== null}
-                onChange={(ev) => {
-                  const file = ev.target.files?.[0]
-                  ev.target.value = ''
-                  onExportVideo(file)
-                }}
-              />
-              Export from file…
-            </label>
-          </div>
-          {lastSession && (
-            <div className="session-controls">
-              <button
-                type="button"
-                className="session-button"
-                disabled={replay !== null || exporting !== null}
-                onClick={() => replaySession(lastSession)}
-              >
-                Replay
-              </button>
-              <button
-                type="button"
-                className="session-button"
-                disabled={replay !== null || exporting !== null}
-                onClick={() => exportVideo(lastSession)}
-              >
-                Export video
-              </button>
-              <button
-                type="button"
-                className="session-button"
-                disabled={replay !== null || exporting !== null}
-                onClick={() => downloadSession(lastSession)}
-              >
-                Save
-              </button>
-            </div>
-          )}
-          {armed && !recording && (
-            <p className="session-status">armed — press ▶ to start the track and the recording together</p>
-          )}
-          {replay && (
-            <p className="session-status">
-              replaying… frame {replay.frame}/{replay.total}
-            </p>
-          )}
-          {exporting && (
-            <p className="session-status">
-              exporting… {Math.round((exporting.frame / Math.max(1, exporting.total)) * 100)}%
-            </p>
-          )}
-          {!exporting && exportNote && <p className="session-status">{exportNote}</p>}
-          {sessionError && <span className="expr-message">{sessionError}</span>}
-        </section>
-
-        {engine && (
-          // MIDI settings collapsed behind a compact disclosure (task: keep
-          // the panel free of a permanently-visible device list/Learn button
-          // most sessions never touch). Closed by default; learn mode keeps
-          // working while collapsed, since the armed highlight lives on the
-          // param controls themselves (Knob/RotaryKnob's `armed` prop), not
-          // inside this section.
-          <section className="midi-section">
+        <div className="panel-tabs" role="tablist">
+          {STUDIO_TABS.map(([tab, label]) => (
             <button
+              key={tab}
               type="button"
-              className={`tab-button${midiOpen ? ' tab-button-active' : ''}`}
-              onClick={() => setMidiOpen((open) => !open)}
-              aria-expanded={midiOpen}
-              aria-controls="midi-disclosure"
+              role="tab"
+              aria-selected={activeTab === tab}
+              className={`tab-button${activeTab === tab ? ' tab-button-active' : ''}`}
+              onClick={() => setActiveTab(tab)}
             >
-              MIDI
-              {(learnMode || midiDevices.length > 0) && <span className="tab-badge" aria-hidden="true" />}
+              {label}
             </button>
-            {midiOpen && (
-              <div id="midi-disclosure" className="midi-disclosure">
-                <p className="session-status">{formatMidiStatus(midiSupported, midiDevices.length)}</p>
-                {midiDevices.length > 0 && (
-                  <ul className="midi-devices">
-                    {midiDevices.map((d) => (
-                      <li key={d.id}>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={d.active}
-                            onChange={(ev) => midiHandleRef.current?.setDeviceActive(d.id, ev.target.checked)}
-                          />
-                          {d.name}
-                        </label>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {midiSupported && (
+          ))}
+        </div>
+
+        <div className="panel-content">
+          {/* SCENE: scene select, hand-off control, param knobs, keyboard hint. */}
+          <div className="panel-tab-content" role="tabpanel" hidden={activeTab !== 'scene'}>
+            {engine && (
+              // `key` forces this section to remount after a handoff (§6): an
+              // in-place switchScene mutates `engine.scene` without changing the
+              // Engine object's own identity, so `sceneVersion` is the only signal
+              // that scene-derived state (Knobs' initial values, in particular)
+              // needs to be re-read from scratch rather than reused across renders.
+              <section key={`scene-${sceneId}-${sceneVersion}`}>
+                <SceneSelect sceneId={sceneId} onChange={onSceneChange} disabled={replay !== null || exporting !== null} />
+                <SwitchControl
+                  targetId={switchTargetId}
+                  onTargetChange={setSwitchTargetId}
+                  onSwitch={() => onSwitchScene(switchTargetId)}
+                  disabled={replay !== null || exporting !== null}
+                />
+                <h2>{engine.scene.meta.name}</h2>
+                {engine.scene.params.map((p) => (
+                  <Knob
+                    key={p.name}
+                    engine={engine}
+                    schema={p}
+                    liveValue={paramValues[p.name] ?? p.default}
+                    learnArm={learnMode ? () => setArmedParam(p.name) : undefined}
+                    armed={armedParam === p.name}
+                  />
+                ))}
+                <p className="keyboard-hint">{KEYBOARD_HINT}</p>
+              </section>
+            )}
+          </div>
+
+          {/* SESSION: export format, Replay/Export/Save + "from file…", status
+             lines. Record/Arm lives ONLY in the pinned footer now (task: two
+             instances of the same button fighting each other). */}
+          <div className="panel-tab-content" role="tabpanel" hidden={activeTab !== 'session'}>
+            <section>
+              <h2>Session</h2>
+              <label className="scene-select">
+                Export format
+                <select
+                  value={exportFormat}
+                  disabled={replay !== null || exporting !== null}
+                  onChange={(ev) => setExportFormat(ev.target.value as ExportFormatChoice)}
+                >
+                  <option value="auto">Auto</option>
+                  <option value="mp4">MP4 (H.264)</option>
+                  <option value="webm">WebM (VP9)</option>
+                </select>
+              </label>
+              <div className="session-controls">
+                <label className="file session-file">
+                  <input
+                    type="file"
+                    accept="application/json,.json"
+                    disabled={replay !== null || exporting !== null}
+                    onChange={(ev) => {
+                      const file = ev.target.files?.[0]
+                      ev.target.value = ''
+                      onLoadSession(file)
+                    }}
+                  />
+                  Replay from file…
+                </label>
+                <label className="file session-file">
+                  <input
+                    type="file"
+                    accept="application/json,.json"
+                    disabled={replay !== null || exporting !== null}
+                    onChange={(ev) => {
+                      const file = ev.target.files?.[0]
+                      ev.target.value = ''
+                      onExportVideo(file)
+                    }}
+                  />
+                  Export from file…
+                </label>
+              </div>
+              {lastSession && (
+                <div className="session-controls">
                   <button
                     type="button"
-                    className={`session-button${learnMode ? ' midi-learning' : ''}`}
-                    onClick={() => {
-                      setLearnMode((on) => {
-                        const next = !on
-                        if (!next) setArmedParam(null)
-                        return next
-                      })
-                    }}
+                    className="session-button"
+                    disabled={replay !== null || exporting !== null}
+                    onClick={() => replaySession(lastSession)}
                   >
-                    {learnMode ? 'Stop learning' : 'Learn'}
+                    Replay
                   </button>
-                )}
-                {learnMode && (
-                  <p className="session-status">
-                    {armedParam
-                      ? `learning "${armedParam}" — move a hardware control (Esc to stop)`
-                      : 'learn mode on — move a param slider to arm it (Esc to stop)'}
-                  </p>
-                )}
-              </div>
-            )}
-          </section>
-        )}
+                  <button
+                    type="button"
+                    className="session-button"
+                    disabled={replay !== null || exporting !== null}
+                    onClick={() => exportVideo(lastSession)}
+                  >
+                    Export video
+                  </button>
+                  <button
+                    type="button"
+                    className="session-button"
+                    disabled={replay !== null || exporting !== null}
+                    onClick={() => downloadSession(lastSession)}
+                  >
+                    Save
+                  </button>
+                </div>
+              )}
+              {armed && !recording && (
+                <p className="session-status">armed — press ▶ to start the track and the recording together</p>
+              )}
+              {replay && (
+                <p className="session-status">
+                  replaying… frame {replay.frame}/{replay.total}
+                </p>
+              )}
+              {exporting && (
+                <p className="session-status">
+                  exporting… {Math.round((exporting.frame / Math.max(1, exporting.total)) * 100)}%
+                </p>
+              )}
+              {!exporting && exportNote && <p className="session-status">{exportNote}</p>}
+              {sessionError && <span className="expr-message">{sessionError}</span>}
+            </section>
+          </div>
 
-        {engine && (
-          <section>
-            <h2>Perform</h2>
-            <div className="perform">
-              <TriggerPads engine={engine} />
-              <XyPad engine={engine} />
-            </div>
-            <p className="keyboard-hint">{KEYBOARD_HINT}</p>
-          </section>
-        )}
-
-        {engine && (
-          // `key` forces this section to remount after a handoff (§6): an
-          // in-place switchScene mutates `engine.scene` without changing the
-          // Engine object's own identity, so `sceneVersion` is the only signal
-          // that scene-derived state (Knobs' initial values, in particular)
-          // needs to be re-read from scratch rather than reused across renders.
-          <section key={`scene-${sceneId}-${sceneVersion}`}>
-            <SceneSelect sceneId={sceneId} onChange={onSceneChange} disabled={replay !== null || exporting !== null} />
-            <SwitchControl
-              targetId={switchTargetId}
-              onTargetChange={setSwitchTargetId}
-              onSwitch={() => onSwitchScene(switchTargetId)}
-              disabled={replay !== null || exporting !== null}
-            />
-            <h2>{engine.scene.meta.name}</h2>
-            {engine.scene.params.map((p) => (
-              <Knob
-                key={p.name}
-                engine={engine}
-                schema={p}
-                liveValue={paramValues[p.name] ?? p.default}
-                learnArm={learnMode ? () => setArmedParam(p.name) : undefined}
-                armed={armedParam === p.name}
+          {/* INPUTS: audio file + diagnostic, image file, MIDI disclosure,
+             signal meters, trigger pads + XY pad. */}
+          <div className="panel-tab-content" role="tabpanel" hidden={activeTab !== 'inputs'}>
+            <label className="file">
+              <input
+                type="file"
+                accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.flac"
+                onChange={(ev) => onFile(ev.target.files?.[0])}
               />
-            ))}
-          </section>
-        )}
+              {trackName ?? 'Load audio file (demo signals until then)'}
+            </label>
+            <label className="file">
+              <input
+                type="file"
+                accept="image/*"
+                // Enabled only when the current scene has an image-driven concept
+                // (Photo Swarm task's `sceneAcceptsImage()` duck-type check), and
+                // disabled while recording: a mid-recording image swap isn't
+                // captured as a timestamped event (it's snapshot-only, taken at
+                // startRecording()), so replaying the recording could never
+                // reproduce it anyway — disabling avoids a swap that silently
+                // doesn't show up on replay.
+                disabled={!engine || !engine.sceneAcceptsImage() || recording}
+                onChange={(ev) => {
+                  const file = ev.target.files?.[0]
+                  ev.target.value = ''
+                  onImageFile(file)
+                }}
+              />
+              {imageName ?? 'Load image (photo-swarm-style scenes only)'}
+            </label>
+            {audioBlocked && (
+              <button
+                type="button"
+                className="session-button audio-unblock"
+                onClick={() => {
+                  void engineRef.current?.audio.resumeContext()
+                }}
+              >
+                🔊 Tap to enable sound
+              </button>
+            )}
+            {trackName && engine && (
+              <p className="session-status">
+                sound: {engine.audio.contextState ?? 'not started'}
+                {engine.audio.contextState === 'running' && ' — if silent, check Control Center for a Bluetooth/AirPlay output'}
+              </p>
+            )}
 
-        {engine && <ShaderPanel engine={engine} key={`shader-${sceneId}-${sceneVersion}`} />}
+            {engine && (
+              // MIDI settings collapsed behind a compact disclosure (task: keep
+              // the panel free of a permanently-visible device list/Learn button
+              // most sessions never touch). Closed by default; learn mode keeps
+              // working while collapsed, since the armed highlight lives on the
+              // param controls themselves (Knob/RotaryKnob's `armed` prop), not
+              // inside this section.
+              <section className="midi-section">
+                <button
+                  type="button"
+                  className={`tab-button${midiOpen ? ' tab-button-active' : ''}`}
+                  onClick={() => setMidiOpen((open) => !open)}
+                  aria-expanded={midiOpen}
+                  aria-controls="midi-disclosure"
+                >
+                  MIDI
+                  {(learnMode || midiDevices.length > 0) && <span className="tab-badge" aria-hidden="true" />}
+                </button>
+                {midiOpen && (
+                  <div id="midi-disclosure" className="midi-disclosure">
+                    <p className="session-status">{formatMidiStatus(midiSupported, midiDevices.length)}</p>
+                    {midiDevices.length > 0 && (
+                      <ul className="midi-devices">
+                        {midiDevices.map((d) => (
+                          <li key={d.id}>
+                            <label>
+                              <input
+                                type="checkbox"
+                                checked={d.active}
+                                onChange={(ev) => midiHandleRef.current?.setDeviceActive(d.id, ev.target.checked)}
+                              />
+                              {d.name}
+                            </label>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {midiSupported && (
+                      <button
+                        type="button"
+                        className={`session-button${learnMode ? ' midi-learning' : ''}`}
+                        onClick={() => {
+                          setLearnMode((on) => {
+                            const next = !on
+                            if (!next) setArmedParam(null)
+                            return next
+                          })
+                        }}
+                      >
+                        {learnMode ? 'Stop learning' : 'Learn'}
+                      </button>
+                    )}
+                    {learnMode && (
+                      <p className="session-status">
+                        {armedParam
+                          ? `learning "${armedParam}" — move a hardware control (Esc to stop)`
+                          : 'learn mode on — move a param slider to arm it (Esc to stop)'}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </section>
+            )}
+
+            <section>
+              <h2>Signals</h2>
+              {SIGNAL_NAMES.map((name) => (
+                <div className="meter" key={name}>
+                  <span>{name}</span>
+                  <div className="bar">
+                    <div style={{ width: `${Math.min(1, levels[name] ?? 0) * 100}%` }} />
+                  </div>
+                </div>
+              ))}
+            </section>
+
+            {engine && (
+              <section>
+                <h2>Perform</h2>
+                <div className="perform">
+                  <TriggerPads engine={engine} />
+                  <XyPad engine={engine} />
+                </div>
+              </section>
+            )}
+          </div>
+
+          {/* CODE: the shader editor. */}
+          <div className="panel-tab-content" role="tabpanel" hidden={activeTab !== 'code'}>
+            {engine && <ShaderPanel engine={engine} key={`shader-${sceneId}-${sceneVersion}`} />}
+          </div>
+        </div>
+
+        {/* Pinned footer — outside the tabs, always visible regardless of
+           which tab is active: the transport row (when a file is loaded)
+           and the Record/Arm button are performance-critical and must never
+           be scrolled away or hidden by tab choice. */}
+        <div className="panel-footer">
+          {engine && playback.hasFile && (
+            <TransportRow
+              engine={engine}
+              playback={playback}
+              recording={recording}
+              armed={armed}
+              setArmed={setArmed}
+              setRecording={setRecording}
+              setSessionError={setSessionError}
+            />
+          )}
+          <RecordButton
+            recording={recording}
+            armed={armed}
+            hasFile={playback.hasFile}
+            playing={playback.playing}
+            disabled={!engine || replay !== null || exporting !== null}
+            onToggleRecording={onToggleRecording}
+          />
+        </div>
       </aside>
       )}
     </div>
