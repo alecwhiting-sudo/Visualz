@@ -8,6 +8,8 @@ import type { SessionDoc } from '../session/types'
 import { exportSession } from '../export/client'
 import type { ExportProgress } from '../export/render'
 import type { ExportCodec } from '../export/encode'
+import { RotaryKnob } from './RotaryKnob'
+import { useParamBinding } from './paramBinding'
 import './app.css'
 
 const SIGNAL_NAMES = ['rms', 'bass', 'mid', 'high', 'beat', 'onset']
@@ -110,12 +112,12 @@ function formatMidiStatus(supported: boolean, deviceCount: number): string {
 // studio: the original layout (this file, untouched below). perform: canvas
 // almost-fullscreen with a single slim control strip — the "flick to big
 // visuals, tweak via MIDI hardware" mode. full: true Fullscreen-API fullscreen
-// on the stage container, zero chrome — Esc (browser-handled) or F exits.
+// on the stage container, zero chrome — Esc (browser-handled) or V exits.
 type ViewMode = 'studio' | 'perform' | 'full'
 
 /** Same convention as mapping/keyboard.ts's isEditableTarget, plus `select` —
  * this is a UI-level shortcut (not a mapping-table binding) and the panel has
- * dropdowns (scene, export format) a stray "f" keystroke shouldn't hijack. */
+ * dropdowns (scene, export format) a stray "v" keystroke shouldn't hijack. */
 function isFormFieldTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null
   const tag = el && typeof el.tagName === 'string' ? el.tagName.toLowerCase() : ''
@@ -181,6 +183,11 @@ export function App() {
   const [midiDevices, setMidiDevices] = useState<MidiDevice[]>([])
   const [learnMode, setLearnMode] = useState(false)
   const [armedParam, setArmedParam] = useState<string | null>(null)
+  // Collapsed by default (task: MIDI settings behind a button) — the tab
+  // button itself is the only chrome shown until opened; learn mode keeps
+  // working while collapsed since the armed highlight lives on the param
+  // controls themselves, not inside this disclosure.
+  const [midiOpen, setMidiOpen] = useState(false)
   // Kept in a ref too so the MIDI activity callback — set up once per engine
   // attach, same lifecycle as attachKeyboard's closure — always reads the
   // latest armed param rather than whatever was armed when it was created.
@@ -222,6 +229,15 @@ export function App() {
     switchTargetIdRef.current = switchTargetId
   }, [switchTargetId])
   const [levels, setLevels] = useState<Record<string, number>>({})
+  // Live-hardware-sync: a snapshot of every current scene param's engine-side
+  // value, refreshed on the same 100ms poll as the signal meters. Bound
+  // params (MIDI-learned or expression-driven) render THIS value instead of
+  // their own local interactive state, so a Knob/RotaryKnob visibly tracks
+  // the hardware/expression rather than freezing at whatever it read on
+  // mount. Unbound params ignore this entirely — reading it via the cheap
+  // `engine.scene.getParam` getter (not a state mutation of the scene) means
+  // the poll never fights a user's in-progress drag on an unbound control.
+  const [paramValues, setParamValues] = useState<Record<string, number>>({})
   const [trackName, setTrackName] = useState<string | null>(null)
   const [recording, setRecording] = useState(false)
   // Hot-armed recording: with a track loaded but not playing, Record becomes
@@ -262,7 +278,7 @@ export function App() {
   // --- View modes (studio / perform / full) --------------------------------
   const [viewMode, setViewMode] = useState<ViewMode>('studio')
   // Computed once — feature detection, not per-frame state — and used both to
-  // decide whether "F"/the cycle button ever reach 'full' and to hide the
+  // decide whether "V"/the cycle button ever reach 'full' and to hide the
   // perform strip's "Full screen" button on platforms without it (iPhone Safari).
   const [fullscreenSupported] = useState(() => fullscreenApiAvailable())
 
@@ -276,6 +292,15 @@ export function App() {
     })
   }
 
+  // Mirrors switchTargetIdRef/armedParamRef below: requestFullscreenOn's
+  // promise resolves asynchronously, so the effect that awaits it needs a
+  // way to read the LATEST viewMode rather than whatever it closed over when
+  // the request was fired.
+  const viewModeRef = useRef(viewMode)
+  useEffect(() => {
+    viewModeRef.current = viewMode
+  }, [viewMode])
+
   // Keeps the actual browser fullscreen state in sync with `viewMode`: enters
   // when it becomes 'full', exits otherwise. Guarded on the stage element
   // already being (or not being) the fullscreen element so this doesn't fight
@@ -285,12 +310,23 @@ export function App() {
     if (!stage) return
     if (viewMode === 'full') {
       if (currentFullscreenElement() !== stage) {
-        requestFullscreenOn(stage).catch(() => {
-          // Fullscreen request rejected (e.g. no user-activation left, or a
-          // feature-detection false positive) — fall back to perform rather
-          // than leaving viewMode stuck on an unrealized 'full'.
-          setViewMode('perform')
-        })
+        requestFullscreenOn(stage)
+          .then(() => {
+            // Rapid-V race (review finding): the user may have already left
+            // 'full' by the time this async request resolves. Don't leave
+            // the browser truly fullscreen while viewMode has moved on —
+            // exit immediately rather than waiting for the effect above to
+            // notice (it won't re-run; viewMode didn't change again).
+            if (viewModeRef.current !== 'full') {
+              exitFullscreenIfActive().catch(() => {})
+            }
+          })
+          .catch(() => {
+            // Fullscreen request rejected (e.g. no user-activation left, or a
+            // feature-detection false positive) — fall back to perform rather
+            // than leaving viewMode stuck on an unrealized 'full'.
+            setViewMode('perform')
+          })
       }
     } else if (currentFullscreenElement() === stage) {
       exitFullscreenIfActive().catch(() => {})
@@ -345,6 +381,12 @@ export function App() {
         playing: e.audio.isPlaying,
         hasFile: e.audio.hasFile,
       })
+      // `e.scene` (not the closed-over `sceneId`/`sceneVersion`) so this
+      // stays correct across an in-place handoff switch, which mutates
+      // engine.scene without recreating this interval.
+      const values: Record<string, number> = {}
+      for (const p of e.scene.params) values[p.name] = e.scene.getParam(p.name)
+      setParamValues(values)
     }, 100)
     detachKeyboardRef.current = attachKeyboard(window, (event) => e.queueInput(event))
     midiHandleRef.current = attachMidi(
@@ -691,43 +733,67 @@ export function App() {
         <canvas ref={canvasRef} />
         {viewMode === 'perform' && (
           <div className="perform-strip">
-            <SceneSelect sceneId={sceneId} onChange={onSceneChange} disabled={replay !== null || exporting !== null} />
-            {engine && (
-              <SwitchControl
-                targetId={switchTargetId}
-                onTargetChange={setSwitchTargetId}
-                onSwitch={() => onSwitchScene(switchTargetId)}
-                disabled={replay !== null || exporting !== null}
-              />
+            {/* Thin params row above the main strip row (task: "ONE compact
+               bar (params row may be a second thin row above the main strip
+               row)") — one rotary per current-scene param, horizontally
+               scrollable so it never forces the strip itself to wrap. Keyed
+               on sceneVersion (docs/HANDOFF.md §6's remount convention, same
+               as the studio panel's Knob list below) since an in-place
+               handoff switch mutates engine.scene without changing the
+               Engine's own identity. */}
+            {engine && engine.scene.params.length > 0 && (
+              <div className="perform-strip-params" key={`perform-params-${sceneId}-${sceneVersion}`}>
+                {engine.scene.params.map((p) => (
+                  <RotaryKnob
+                    key={p.name}
+                    engine={engine}
+                    schema={p}
+                    liveValue={paramValues[p.name] ?? p.default}
+                    learnArm={learnMode ? () => setArmedParam(p.name) : undefined}
+                    armed={armedParam === p.name}
+                  />
+                ))}
+              </div>
             )}
-            {engine && playback.hasFile && (
-              <TransportRow
-                engine={engine}
-                playback={playback}
+            <div className="perform-strip-main">
+              <SceneSelect sceneId={sceneId} onChange={onSceneChange} disabled={replay !== null || exporting !== null} />
+              {engine && (
+                <SwitchControl
+                  targetId={switchTargetId}
+                  onTargetChange={setSwitchTargetId}
+                  onSwitch={() => onSwitchScene(switchTargetId)}
+                  disabled={replay !== null || exporting !== null}
+                />
+              )}
+              {engine && playback.hasFile && (
+                <TransportRow
+                  engine={engine}
+                  playback={playback}
+                  recording={recording}
+                  armed={armed}
+                  setArmed={setArmed}
+                  setRecording={setRecording}
+                  setSessionError={setSessionError}
+                />
+              )}
+              <RecordButton
                 recording={recording}
                 armed={armed}
-                setArmed={setArmed}
-                setRecording={setRecording}
-                setSessionError={setSessionError}
+                hasFile={playback.hasFile}
+                playing={playback.playing}
+                disabled={!engine || replay !== null || exporting !== null}
+                onToggleRecording={onToggleRecording}
               />
-            )}
-            <RecordButton
-              recording={recording}
-              armed={armed}
-              hasFile={playback.hasFile}
-              playing={playback.playing}
-              disabled={!engine || replay !== null || exporting !== null}
-              onToggleRecording={onToggleRecording}
-            />
-            <div className="view-mode-buttons">
-              {fullscreenSupported && (
-                <button type="button" className="session-button" onClick={() => setViewMode('full')}>
-                  Full screen
+              <div className="view-mode-buttons">
+                {fullscreenSupported && (
+                  <button type="button" className="session-button" onClick={() => setViewMode('full')}>
+                    Full screen
+                  </button>
+                )}
+                <button type="button" className="session-button" onClick={() => setViewMode('studio')}>
+                  Studio
                 </button>
-              )}
-              <button type="button" className="session-button" onClick={() => setViewMode('studio')}>
-                Studio
-              </button>
+              </div>
             </div>
           </div>
         )}
@@ -906,46 +972,65 @@ export function App() {
         </section>
 
         {engine && (
-          <section>
-            <h2>MIDI</h2>
-            <p className="session-status">{formatMidiStatus(midiSupported, midiDevices.length)}</p>
-            {midiDevices.length > 0 && (
-              <ul className="midi-devices">
-                {midiDevices.map((d) => (
-                  <li key={d.id}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={d.active}
-                        onChange={(ev) => midiHandleRef.current?.setDeviceActive(d.id, ev.target.checked)}
-                      />
-                      {d.name}
-                    </label>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {midiSupported && (
-              <button
-                type="button"
-                className={`session-button${learnMode ? ' midi-learning' : ''}`}
-                onClick={() => {
-                  setLearnMode((on) => {
-                    const next = !on
-                    if (!next) setArmedParam(null)
-                    return next
-                  })
-                }}
-              >
-                {learnMode ? 'Stop learning' : 'Learn'}
-              </button>
-            )}
-            {learnMode && (
-              <p className="session-status">
-                {armedParam
-                  ? `learning "${armedParam}" — move a hardware control (Esc to stop)`
-                  : 'learn mode on — move a param slider to arm it (Esc to stop)'}
-              </p>
+          // MIDI settings collapsed behind a compact disclosure (task: keep
+          // the panel free of a permanently-visible device list/Learn button
+          // most sessions never touch). Closed by default; learn mode keeps
+          // working while collapsed, since the armed highlight lives on the
+          // param controls themselves (Knob/RotaryKnob's `armed` prop), not
+          // inside this section.
+          <section className="midi-section">
+            <button
+              type="button"
+              className={`tab-button${midiOpen ? ' tab-button-active' : ''}`}
+              onClick={() => setMidiOpen((open) => !open)}
+              aria-expanded={midiOpen}
+              aria-controls="midi-disclosure"
+            >
+              MIDI
+              {(learnMode || midiDevices.length > 0) && <span className="tab-badge" aria-hidden="true" />}
+            </button>
+            {midiOpen && (
+              <div id="midi-disclosure" className="midi-disclosure">
+                <p className="session-status">{formatMidiStatus(midiSupported, midiDevices.length)}</p>
+                {midiDevices.length > 0 && (
+                  <ul className="midi-devices">
+                    {midiDevices.map((d) => (
+                      <li key={d.id}>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={d.active}
+                            onChange={(ev) => midiHandleRef.current?.setDeviceActive(d.id, ev.target.checked)}
+                          />
+                          {d.name}
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {midiSupported && (
+                  <button
+                    type="button"
+                    className={`session-button${learnMode ? ' midi-learning' : ''}`}
+                    onClick={() => {
+                      setLearnMode((on) => {
+                        const next = !on
+                        if (!next) setArmedParam(null)
+                        return next
+                      })
+                    }}
+                  >
+                    {learnMode ? 'Stop learning' : 'Learn'}
+                  </button>
+                )}
+                {learnMode && (
+                  <p className="session-status">
+                    {armedParam
+                      ? `learning "${armedParam}" — move a hardware control (Esc to stop)`
+                      : 'learn mode on — move a param slider to arm it (Esc to stop)'}
+                  </p>
+                )}
+              </div>
             )}
           </section>
         )}
@@ -981,6 +1066,7 @@ export function App() {
                 key={p.name}
                 engine={engine}
                 schema={p}
+                liveValue={paramValues[p.name] ?? p.default}
                 learnArm={learnMode ? () => setArmedParam(p.name) : undefined}
                 armed={armedParam === p.name}
               />
@@ -1314,11 +1400,19 @@ function XyPad({ engine }: { engine: Engine }) {
 function Knob({
   engine,
   schema,
+  liveValue,
   learnArm,
   armed = false,
 }: {
   engine: Engine
   schema: { name: string; label: string; min: number; max: number; default: number; step?: number }
+  /** This param's most recently polled live value (App's 100ms poll,
+   * `engine.scene.getParam` under the hood) — rendered on the slider instead
+   * of local interactive state whenever `bound` is true, so a MIDI-learned or
+   * expression-driven param visibly tracks the hardware/expression rather
+   * than freezing the slider wherever it happened to be when the binding
+   * landed. */
+  liveValue: number
   /** Present (and callable) only while the panel's global Learn mode is on;
    * calling it arms this param as the next MIDI-learn bind target. Slider
    * drags call it on every change while learn mode is on — the "tweak a
@@ -1328,56 +1422,20 @@ function Knob({
   armed?: boolean
 }) {
   const [value, setValue] = useState(engine.scene.getParam(schema.name))
-  const [exprText, setExprText] = useState(engine.getBinding(schema.name) ?? '')
-  const [bound, setBound] = useState(engine.getBinding(schema.name) !== undefined)
-  const [error, setError] = useState<string | null>(null)
-  // Tracks the last binding this component itself observed, so the effect
-  // below can tell "the engine's binding changed under us" (a MIDI-learn
-  // bind, or a fresh engine from a scene switch/session load) apart from our
-  // own applyExpr calls, which already keep exprText/bound in sync.
-  const lastSeenBindingRef = useRef(engine.getBinding(schema.name))
-
-  useEffect(() => {
-    const current = engine.getBinding(schema.name)
-    if (current !== lastSeenBindingRef.current) {
-      lastSeenBindingRef.current = current
-      setExprText(current ?? '')
-      setBound(current !== undefined)
-      setError(null)
-    }
-  })
-
-  const applyExpr = (text: string) => {
-    const src = text.trim()
-    if (src === '') {
-      engine.clearBinding(schema.name)
-      lastSeenBindingRef.current = undefined
-      setBound(false)
-      setError(null)
-      return
-    }
-    try {
-      engine.setBinding(schema.name, src)
-      lastSeenBindingRef.current = src
-      setBound(true)
-      setError(null)
-    } catch (e) {
-      // Bad expression: previous binding (or the slider value) stays active.
-      setError(e instanceof Error ? e.message : String(e))
-    }
-  }
+  const { bound, exprText, setExprText, applyExpr, error } = useParamBinding(engine, schema.name)
+  const displayValue = bound ? liveValue : value
 
   return (
     <label className={`knob${armed ? ' knob-armed' : ''}`}>
       <span>
-        {schema.label} <em>{bound ? 'ƒ(t)' : value.toFixed(2)}</em>
+        {schema.label} <em>{bound ? 'ƒ(t)' : displayValue.toFixed(2)}</em>
       </span>
       <input
         type="range"
         min={schema.min}
         max={schema.max}
         step={schema.step ?? 0.01}
-        value={value}
+        value={displayValue}
         disabled={bound}
         onChange={(ev) => {
           const v = Number(ev.target.value)

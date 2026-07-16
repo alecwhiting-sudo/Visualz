@@ -25,6 +25,11 @@ import { expect, test } from '@playwright/test'
  * tests/unit/midiAttach.test.ts; the pure decoder in tests/unit/midi.test.ts;
  * this spec covers App.tsx's wiring for the one path that's cheap and
  * deterministic headlessly.
+ *
+ * MIDI settings are collapsed behind a compact disclosure by default (task:
+ * "MIDI settings behind a button") — the tab-style "MIDI" button is the only
+ * thing visible until clicked, so this spec opens it before asserting on the
+ * status text / device list / Learn button that used to be visible outright.
  */
 
 test('MIDI panel reaches "not supported" in headless Chromium and never throws', async ({ page }) => {
@@ -34,8 +39,18 @@ test('MIDI panel reaches "not supported" in headless Chromium and never throws',
   await page.goto('/')
 
   await expect(page.locator('.panel')).toBeVisible()
-  const midiSection = page.locator('section', { has: page.locator('h2', { hasText: 'MIDI' }) })
+  const midiSection = page.locator('section.midi-section')
   await expect(midiSection).toBeVisible()
+
+  const midiToggle = midiSection.getByRole('button', { name: 'MIDI' })
+  await expect(midiToggle).toBeVisible()
+  // Closed by default — the disclosure's contents aren't in the DOM at all.
+  await expect(midiSection.getByText(/MIDI: /)).toHaveCount(0)
+  await expect(midiToggle).toHaveAttribute('aria-expanded', 'false')
+
+  await midiToggle.click()
+  await expect(midiToggle).toHaveAttribute('aria-expanded', 'true')
+
   // requestMIDIAccess's promise settles asynchronously (rejected for lack of
   // permission, or simply absent) — toBeVisible auto-retries until the panel
   // catches up.
@@ -44,6 +59,9 @@ test('MIDI panel reaches "not supported" in headless Chromium and never throws',
   // No device checkboxes and no Learn button once MIDI is unavailable.
   await expect(midiSection.locator('input[type="checkbox"]')).toHaveCount(0)
   await expect(midiSection.getByRole('button', { name: 'Learn' })).toHaveCount(0)
+  // Not supported, so no devices are connected and learn mode never turns
+  // on — the disclosure trigger shows no badge.
+  await expect(midiToggle.locator('.tab-badge')).toHaveCount(0)
 
   expect(pageErrors).toEqual([])
 })

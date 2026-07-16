@@ -81,6 +81,25 @@ test('switching to perform mode hides the panel and shows the slim strip', async
   await expect(page.locator('.perform-strip')).toHaveCount(0)
 })
 
+test('perform strip shows one rotary knob per current-scene param', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.locator('.panel')).toBeVisible()
+
+  // Count the studio panel's param sliders first — avoids hardcoding a
+  // scene-specific number that would go stale the moment a scene's param
+  // list changes; the rotary row must track whatever the scene actually
+  // exposes.
+  const studioKnobCount = await page.locator('.knob').count()
+  expect(studioKnobCount).toBeGreaterThan(0)
+
+  await page.getByRole('button', { name: 'Perform view' }).click()
+  const strip = page.locator('.perform-strip')
+  await expect(strip).toBeVisible()
+
+  const rotaries = strip.locator('.rotary-knob')
+  await expect(rotaries).toHaveCount(studioKnobCount)
+})
+
 test('"V" cycles studio -> perform -> full -> studio', async ({ page }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(String(err)))
@@ -154,4 +173,34 @@ test('Full screen button enters real Fullscreen and fullscreenchange re-syncs to
   await expect(page.locator('.panel')).toHaveCount(0)
 
   expect(pageErrors).toEqual([])
+})
+
+/**
+ * Bug fix regression test: the CSS driving .app-perform/.app-full's canvas
+ * used to be max-* only (no floor), which never grows the canvas past its
+ * 960x540 attribute size — on a large viewport, perform/full mode showed a
+ * small centered rectangle rather than filling the screen. The canvas's
+ * rendered bounding box (its CSS box, independent of the letterboxed content
+ * object-fit: contain draws inside it) must now span the viewport on at
+ * least one axis, aspect preserved via letterboxing on the other.
+ */
+test('perform mode scales the canvas up to fill the viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 })
+  await page.goto('/')
+  await page.waitForTimeout(200)
+
+  await page.getByRole('button', { name: 'Perform view' }).click()
+  await expect(page.locator('.perform-strip')).toBeVisible()
+
+  const box = await page.locator('canvas').boundingBox()
+  expect(box).not.toBeNull()
+  const viewport = page.viewportSize()
+  expect(viewport).not.toBeNull()
+  if (!box || !viewport) return
+
+  // 16:9 canvas in a 16:9 (1600x900) viewport should span both axes almost
+  // exactly; a looser tolerance keeps this robust to scrollbar/DPR rounding
+  // without weakening it back to "just bigger than 960x540".
+  expect(box.width).toBeGreaterThan(viewport.width * 0.95)
+  expect(box.height).toBeGreaterThan(viewport.height * 0.9)
 })
