@@ -32,6 +32,11 @@ const KEYBOARD_HINT = '1-6 freqX · q/w/e freqY · space pulse drift · f/g flas
  */
 export interface VizLiveTestApi {
   setInputSignal(name: string, value: number): void
+  /** Read a live param value — full-chain MIDI integration assertions
+   * (tests/e2e/midiIntegration.spec.ts) verify hardware→router→param. */
+  getParam(name: string): number
+  /** The live scene's param schemas, for positional macro assertions. */
+  sceneParams(): { name: string; min: number; max: number; default: number }[]
 }
 
 declare global {
@@ -464,7 +469,12 @@ export function App() {
   const attachLiveEngine = (e: Engine) => {
     engineRef.current = e
     setEngine(e)
-    window.__vizLive = { setInputSignal: (name, value) => e.setInputSignal(name, value) }
+    window.__vizLive = {
+      setInputSignal: (name, value) => e.setInputSignal(name, value),
+      getParam: (name) => e.scene.getParam(name),
+      sceneParams: () =>
+        e.scene.params.map((p) => ({ name: p.name, min: p.min, max: p.max, default: p.default })),
+    }
     meterIntervalRef.current = window.setInterval(() => {
       setLevels(e.bus.snapshot())
       setAudioBlocked(e.audio.isPlaying && e.audio.contextState !== 'running')
