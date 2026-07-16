@@ -256,6 +256,12 @@ body {
   border-radius: 4px;
 }
 
+/* docs/MACROS.md §5: macro-driven rows get the same accent as a bound row's
+   "ƒ(t)" text, without disabling the slider (edits stay allowed). */
+.knob-macro em {
+  color: var(--accent);
+}
+
 .knob .expr {
   margin-top: 4px;
   padding: 5px 8px;
@@ -489,6 +495,90 @@ body {
 }
 
 .midi-learning {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* docs/MACROS.md §5: the Controls 1-8 block inside the MIDI disclosure. */
+.macro-controls {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.macro-controls-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.macro-controls-header h3 {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.macro-slots {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.macro-slot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin-bottom: 5px;
+}
+
+.macro-slot-num {
+  width: 12px;
+  text-align: right;
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
+
+.macro-slot-cc {
+  width: 46px;
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
+
+.macro-slot .bar {
+  flex: 1;
+  height: 6px;
+  background: #1c1c26;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.macro-slot .bar div {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent));
+  transition: width 80ms linear;
+}
+
+.macro-slot-armed {
+  outline: 1px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.macro-slot-learn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: #cfcfe0;
+  font-size: 11px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.macro-slot-learn:hover {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -745,4 +835,16 @@ body {
   outline: 1px solid var(--accent);
   outline-offset: 4px;
   border-radius: 6px;
+}
+
+/* docs/MACROS.md §5: macro-driven rows get the same accent needle/value color
+   as `.rotary-knob-bound` (below/above), WITHOUT `.rotary-knob-bound`'s
+   `cursor: default` on the dial — edits stay allowed for a macro-driven
+   param, just overwritten again next engaged-slot frame. */
+.rotary-knob-macro .rotary-knob-needle {
+  stroke: var(--accent);
+}
+
+.rotary-knob-macro .rotary-knob-value {
+  color: var(--accent);
 }

@@ -12,6 +12,7 @@ import type { IngestingScene, SceneRuntime, SceneSnapshot, ShaderStage } from '.
 import { SCENES } from '../scenes/registry'
 import { MappingRuntime } from '../mapping/runtime'
 import { DEFAULT_MAPPINGS } from '../mapping/defaults'
+import { MacroRouter } from './macroRouter'
 import type { SourceEvent } from '../mapping/types'
 import { SessionRecorder } from '../session/recorder'
 import { SessionPlayer, type PlayerTarget } from '../session/player'
@@ -90,6 +91,12 @@ export class Engine {
   private running = false
   private bindings = new Map<string, Binding>()
   private inputSignals = new Map<string, number>()
+  /** Macro controls (docs/MACROS.md): eight `ctl.N` slots that drive the
+   * current scene's params positionally once engaged, surviving scene
+   * switches. Reset in the constructor, `switchScene`, and `loadSession`
+   * (§2/§4) — a cold scene change (a brand new `Engine`) resets for free
+   * since this field is allocated fresh per instance. */
+  private readonly macros = new MacroRouter()
 
   private recorder: SessionRecorder | null = null
   private player: SessionPlayer | null = null
@@ -115,7 +122,18 @@ export class Engine {
    */
   private readonly playerTarget: PlayerTarget = {
     queueInput: (e) => this.mappings.queue(e),
-    setInputSignal: (name, value) => this.inputSignals.set(name, value),
+    // Mirrors the live `setInputSignal` below (docs/MACROS.md §4: "both the
+    // live path and the player path route through here — verify; hook
+    // both"): this writes `inputSignals` directly rather than calling
+    // `this.setInputSignal` (which would also try to record — harmless here
+    // since `recorder` is always null while a player drives this, but the
+    // direct write predates macros and there's no reason to route back
+    // through the recording-aware method), so macro engagement is noted
+    // explicitly here too rather than relying on unification.
+    setInputSignal: (name, value) => {
+      this.inputSignals.set(name, value)
+      this.macros.noteSignal(name)
+    },
     setParam: (name, value) => this.scene.setParam(name, value),
     setBinding: (param, src) => this.setBinding(param, src),
     clearBinding: (param) => this.clearBinding(param),
@@ -144,6 +162,10 @@ export class Engine {
     this.seed = opts.seed
     this.audio = opts.audio ?? new AudioEngine()
     this.mappings = new MappingRuntime(DEFAULT_MAPPINGS)
+    // Redundant with the field initializer above (a fresh `MacroRouter` already
+    // starts fully disengaged) but explicit per docs/MACROS.md §2's reset-point
+    // list, and cheap insurance against a future refactor that reorders fields.
+    this.macros.reset()
     scene.init(this.gpu, opts.seed)
   }
 
@@ -259,6 +281,10 @@ export class Engine {
   setInputSignal(name: string, value: number): void {
     if (this.recorder) this.recorder.recordInputSignal(this.transport.frame, name, value)
     this.inputSignals.set(name, value)
+    // Macro pickup (docs/MACROS.md §2): a NEW value for `ctl.N` engages that
+    // slot, live or replayed (see `playerTarget.setInputSignal`'s matching
+    // call) — a no-op for every other signal name.
+    this.macros.noteSignal(name)
   }
 
   /**
@@ -279,6 +305,20 @@ export class Engine {
 
   getBinding(param: string): string | undefined {
     return this.bindings.get(param)?.src
+  }
+
+  /**
+   * docs/MACROS.md §4/§5: true when param `name` currently has no explicit
+   * user binding but IS driven by an engaged macro slot — the UI (studio
+   * `Knob`, perform `RotaryKnob`, via `paramBinding.ts`'s hook) renders such
+   * params live and shows "ctl N" instead of an expression, same visual
+   * language as an explicitly bound param. Positional: the slot is
+   * `scene.params`'s index of `name`, plus one.
+   */
+  isMacroDriven(name: string): boolean {
+    const index = this.scene.params.findIndex((p) => p.name === name)
+    if (index < 0) return false
+    return this.macros.isDriven(index, this.scene.params, (n) => this.bindings.has(n))
   }
 
   /**
@@ -359,6 +399,12 @@ export class Engine {
     // switchScene clears them identically, invariant I6). Mappings/ramps are
     // left untouched: a stray `params.set(unknownName, …)` write is harmless.
     this.bindings.clear()
+    // Macro pickup resets on every switch (docs/MACROS.md §2): B's params are
+    // a different schema at the same positions, so A's stale ctl.N-driven
+    // values must not yank B's params on its very first frame — B's slots
+    // stay dormant until a fresh ctl.N event arrives post-switch. The CC->slot
+    // hardware mapping itself lives in app state, untouched by this reset.
+    this.macros.reset()
     // ARCHITECT AMENDMENT (§5a, invariant I11): when B ingested the snapshot,
     // it becomes the stored image, so a recording started at ANY point after
     // this switch serializes it into `doc.scene.image` and replays B's true
@@ -460,6 +506,10 @@ export class Engine {
     this.events.reset()
     this.inputSignals.clear()
     this.bindings.clear()
+    // Macro pickup resets on load, same reasoning as switchScene above
+    // (docs/MACROS.md §2/§4): a fresh replay/export run must not have any
+    // slot pre-engaged from a previous run's stale state.
+    this.macros.reset()
 
     this.sessionTimeline = null
     if (doc.audio.kind === 'file') {
@@ -635,6 +685,17 @@ export class Engine {
         }),
       )
     }
+    // Macro router (docs/MACROS.md §4): runs AFTER bindings evaluate, so an
+    // explicit expression binding on a param is already in place and the
+    // router's own `hasBinding` skip is just for clarity/no-double-write —
+    // ctl.N is already on the bus (raw 0..1) via the `inputSignals` loop
+    // above; range-mapping + step-snapping happen only here, never on the bus.
+    this.macros.route(
+      this.scene.params,
+      (name) => this.bindings.has(name),
+      (slot) => this.bus.get(`ctl.${slot}`),
+      (name, value) => this.scene.setParam(name, value),
+    )
     this.mappings.update(frame.dt, this.bus, {
       get: (n) => this.scene.getParam(n),
       set: (n, v) => this.scene.setParam(n, v),

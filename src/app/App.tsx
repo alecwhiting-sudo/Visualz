@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Engine } from '../engine/engine'
 import { SCENES } from '../scenes/registry'
 import { attachKeyboard } from '../mapping/keyboard'
-import { attachMidi, type MidiDevice, type MidiHandle } from '../mapping/midi'
+import { attachMidi, type MidiDevice, type MidiHandle, type MidiSink } from '../mapping/midi'
+import { MACRO_SLOT_COUNT } from '../engine/macroRouter'
 import { serializeSession, parseSession } from '../session/serialize'
 import type { SessionDoc } from '../session/types'
 import { exportSession } from '../export/client'
@@ -14,6 +15,34 @@ import './app.css'
 
 const SIGNAL_NAMES = ['rms', 'bass', 'mid', 'high', 'beat', 'onset']
 const KEYBOARD_HINT = '1-6 freqX · q/w/e freqY · space pulse drift · f/g flash/fade trail'
+
+/**
+ * A narrow Playwright-only hook onto the REAL App's engine (docs/MACROS.md
+ * §6): `window.__viz` (src/testing/hooks.ts) only exists under the `?test=1`
+ * harness, which bypasses React entirely (see main.tsx) — there is no
+ * RotaryKnob/perform-strip DOM there at all. But the macro e2e spec needs to
+ * assert a REAL perform-strip rotary visibly tracks a macro-driven param, and
+ * headless Chromium's WebMIDI always rejects (see midi.spec.ts's docstring),
+ * so real hardware can't be simulated either. `__vizLive.setInputSignal` is
+ * the seam: it's exactly what a mapped MIDI CC would have written, called
+ * directly, against the real live-mode Engine backing the real UI. Kept
+ * separate from `VizTestApi`'s type (not a union on `window.__viz`) since
+ * most of that interface — `renderFrames`, `exportSession`, … — assumes
+ * render-mode and doesn't apply to a live rAF-driven engine.
+ */
+export interface VizLiveTestApi {
+  setInputSignal(name: string, value: number): void
+}
+
+declare global {
+  interface Window {
+    __vizLive?: VizLiveTestApi
+  }
+}
+
+// docs/MACROS.md §5: the eight Controls 1-8 slot numbers, for the disclosure's
+// row list and the "Map controls…" sequential-learn loop.
+const MACRO_SLOTS = Array.from({ length: MACRO_SLOT_COUNT }, (_, i) => i + 1)
 
 const DEFAULT_SCENE_ID = 'lissajous'
 
@@ -220,6 +249,50 @@ export function App() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [learnMode])
+
+  // --- Macro controls (docs/MACROS.md) -------------------------------------
+  // `macroCcBySlot[i]` is the learned CC number for slot i+1 (`ctl.${i+1}`),
+  // or `null` if unmapped. This is the "MIDI CC -> ctl.N" hardware mapping —
+  // deliberately App-level state, not Engine state: it's scene-independent
+  // and must survive every switch (§1/§3), and it outlives even a cold
+  // scene-dropdown swap (attachLiveEngine/detachLiveEngine never touch it)
+  // since remapping hardware after every scene change would defeat the whole
+  // point of macros. Kept in a ref too, mirroring armedParamRef above, so the
+  // MIDI activity callback (set up once per engine attach) always reads the
+  // latest mapping rather than whatever it was when attached.
+  const [macroCcBySlot, setMacroCcBySlot] = useState<(number | null)[]>(() => new Array(MACRO_SLOT_COUNT).fill(null))
+  const macroCcBySlotRef = useRef(macroCcBySlot)
+  useEffect(() => {
+    macroCcBySlotRef.current = macroCcBySlot
+  }, [macroCcBySlot])
+  // Non-null while "Map controls…" (sequential) or a per-row relearn (single)
+  // is in progress; `slot` is the next (or the only, for `single`) slot a
+  // matching CC will claim. Mirrors armedParamRef's ref-shadow pattern for
+  // the same reason: the activity callback must see live updates.
+  const [macroLearn, setMacroLearn] = useState<{ mode: 'sequential' | 'single'; slot: number } | null>(null)
+  const macroLearnRef = useRef(macroLearn)
+  useEffect(() => {
+    macroLearnRef.current = macroLearn
+  }, [macroLearn])
+  /** Ends any in-progress per-param learn — called when macro learn starts,
+   * so the two learn flows (per-param vs. Controls 1-8) never fight over the
+   * same incoming CC (docs/MACROS.md §5: the per-param flow "stays untouched"
+   * but the two are still mutually exclusive UI *modes*). */
+  const cancelParamLearn = () => {
+    setLearnMode(false)
+    setArmedParam(null)
+  }
+  // Esc ends an in-progress macro-learn early (spec: "Esc/click ends early"),
+  // same pattern as the per-param learnMode effect above.
+  useEffect(() => {
+    if (!macroLearn) return
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') setMacroLearn(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [macroLearn])
+
   const [sceneId, setSceneId] = useState(DEFAULT_SCENE_ID)
   // Scene handoff (docs/HANDOFF.md §6): `switchTargetId` is the currently
   // selected hand-off target (a registry id, independent of the cold-swap
@@ -391,6 +464,7 @@ export function App() {
   const attachLiveEngine = (e: Engine) => {
     engineRef.current = e
     setEngine(e)
+    window.__vizLive = { setInputSignal: (name, value) => e.setInputSignal(name, value) }
     meterIntervalRef.current = window.setInterval(() => {
       setLevels(e.bus.snapshot())
       setAudioBlocked(e.audio.isPlaying && e.audio.contextState !== 'running')
@@ -408,13 +482,62 @@ export function App() {
       setParamValues(values)
     }, 100)
     detachKeyboardRef.current = attachKeyboard(window, (event) => e.queueInput(event))
+    // docs/MACROS.md CC-remap seam: `attachMidi`/`mapping/midi.ts` stay exactly
+    // as they were (no engine- or mapping-layer change at all) — App wraps the
+    // `MidiSink` it hands to `attachMidi` instead. `midi.cc.<n>` keeps
+    // publishing under its own name (so the existing per-param learn flow,
+    // which binds expressions directly to `midi.cc.<n>`, is untouched), and
+    // ADDITIONALLY republishes as `ctl.<slot>` when that CC has been mapped to
+    // a Controls 1-8 slot. This was chosen over the alternative (an optional
+    // `ccRemap` param on `attachMidi` itself) because the remap is pure
+    // App-level UI state (docs/MACROS.md §3: "session-scoped app state...NOT
+    // stored in the doc") — keeping `mapping/midi.ts`'s interface untouched
+    // means the remap can never leak into what counts as a "device"/"frontend"
+    // at the mapping-layer, and there's nothing for a future non-MIDI macro
+    // source (a future OSC/gamepad frontend, say) to have to route through.
+    const midiSink: MidiSink = {
+      queueInput: (event) => e.queueInput(event),
+      setInputSignal: (name, value) => {
+        e.setInputSignal(name, value)
+        const m = /^midi\.cc\.(\d+)$/.exec(name)
+        if (!m) return
+        const cc = Number(m[1])
+        const slotIndex = macroCcBySlotRef.current.findIndex((mapped) => mapped === cc)
+        if (slotIndex >= 0) e.setInputSignal(`ctl.${slotIndex + 1}`, value)
+      },
+    }
     midiHandleRef.current = attachMidi(
-      e,
+      midiSink,
       (state) => {
         setMidiSupported(state.supported)
         setMidiDevices(state.devices)
       },
       (signalName) => {
+        // Controls 1-8 mapping (docs/MACROS.md §5) takes priority when a
+        // sequential "Map controls…" pass or a per-row relearn is in progress:
+        // the next CC claims the armed slot instead of (also) feeding the
+        // per-param learn flow below. Notes don't claim macro slots (the spec
+        // frames this as "turn hardware knobs" — CCs only) but are still
+        // swallowed here so a stray note during Map Controls can't fall
+        // through and arm a per-param bind.
+        const macro = macroLearnRef.current
+        if (macro) {
+          const m = /^midi\.cc\.(\d+)$/.exec(signalName)
+          if (m) {
+            const cc = Number(m[1])
+            setMacroCcBySlot((prev) => {
+              const next = [...prev]
+              next[macro.slot - 1] = cc
+              return next
+            })
+            if (macro.mode === 'single' || macro.slot >= MACRO_SLOT_COUNT) {
+              setMacroLearn(null)
+            } else {
+              setMacroLearn({ mode: 'sequential', slot: macro.slot + 1 })
+            }
+          }
+          return
+        }
         // Learn mode: the next CC/note to arrive from an active device while
         // a param is armed binds it — `midi.cc.<n>`/`midi.note.<n>` are just
         // signal names, so this is exactly the same `setBinding` path the
@@ -447,6 +570,7 @@ export function App() {
   }
 
   const detachLiveEngine = () => {
+    window.__vizLive = undefined
     if (meterIntervalRef.current !== null) {
       clearInterval(meterIntervalRef.current)
       meterIntervalRef.current = null
@@ -459,6 +583,11 @@ export function App() {
     setLearnMode(false)
     setArmedParam(null)
     setArmed(false)
+    // Ends any in-progress Controls 1-8 mapping (the old engine/MIDI handle
+    // it was targeting is gone) — but NOT `macroCcBySlot` itself: the learned
+    // CC->slot hardware mapping is scene-independent app state that must
+    // survive even a cold scene-dropdown swap (docs/MACROS.md §1/§3).
+    setMacroLearn(null)
   }
 
   useEffect(() => {
@@ -778,11 +907,12 @@ export function App() {
                Engine's own identity. */}
             {engine && engine.scene.params.length > 0 && (
               <div className="perform-strip-params" key={`perform-params-${sceneId}-${sceneVersion}`}>
-                {engine.scene.params.map((p) => (
+                {engine.scene.params.map((p, i) => (
                   <RotaryKnob
                     key={p.name}
                     engine={engine}
                     schema={p}
+                    slot={i + 1}
                     liveValue={paramValues[p.name] ?? p.default}
                     learnArm={learnMode ? () => setArmedParam(p.name) : undefined}
                     armed={armedParam === p.name}
@@ -838,6 +968,9 @@ export function App() {
                     setLearnMode((on) => {
                       const next = !on
                       if (!next) setArmedParam(null)
+                      // Mutually exclusive with Controls 1-8 mapping (docs/MACROS.md
+                      // §5): starting per-param learn cancels any in-progress macro learn.
+                      else setMacroLearn(null)
                       return next
                     })
                   }}
@@ -912,6 +1045,7 @@ export function App() {
                         setLearnMode((on) => {
                           const next = !on
                           if (!next) setArmedParam(null)
+                          else setMacroLearn(null)
                           return next
                         })
                       }}
@@ -927,11 +1061,12 @@ export function App() {
                       : 'learn on — move a param slider, then a hardware control (Esc to stop)'}
                   </p>
                 )}
-                {engine.scene.params.map((p) => (
+                {engine.scene.params.map((p, i) => (
                   <Knob
                     key={p.name}
                     engine={engine}
                     schema={p}
+                    slot={i + 1}
                     liveValue={paramValues[p.name] ?? p.default}
                     learnArm={learnMode ? () => setArmedParam(p.name) : undefined}
                     armed={armedParam === p.name}
@@ -1128,6 +1263,7 @@ export function App() {
                           setLearnMode((on) => {
                             const next = !on
                             if (!next) setArmedParam(null)
+                            else setMacroLearn(null)
                             return next
                           })
                         }}
@@ -1141,6 +1277,62 @@ export function App() {
                           ? `learning "${armedParam}" — move a hardware control (Esc to stop)`
                           : 'learn mode on — move a param slider to arm it (Esc to stop)'}
                       </p>
+                    )}
+                    {/* Controls 1-8 (docs/MACROS.md §5): eight generic macro
+                       slots — map hardware ONCE here, and it drives whatever
+                       scene's params are live afterward, surviving every
+                       switch. Gated on midiSupported like the rest of the
+                       panel; there's no hardware to map without it. */}
+                    {midiSupported && (
+                      <div className="macro-controls">
+                        <div className="macro-controls-header">
+                          <h3>Controls 1-8</h3>
+                          <button
+                            type="button"
+                            className={`session-button${macroLearn?.mode === 'sequential' ? ' midi-learning' : ''}`}
+                            onClick={() => {
+                              if (macroLearn?.mode === 'sequential') {
+                                setMacroLearn(null)
+                              } else {
+                                cancelParamLearn()
+                                setMacroLearn({ mode: 'sequential', slot: 1 })
+                              }
+                            }}
+                          >
+                            {macroLearn?.mode === 'sequential' ? 'Stop mapping' : 'Map controls…'}
+                          </button>
+                        </div>
+                        {macroLearn?.mode === 'sequential' && (
+                          <p className="session-status">
+                            turn control {macroLearn.slot} next — each new knob claims the next slot (Esc to stop)
+                          </p>
+                        )}
+                        <ul className="macro-slots">
+                          {MACRO_SLOTS.map((slot) => {
+                            const cc = macroCcBySlot[slot - 1]
+                            const armedHere = macroLearn !== null && macroLearn.slot === slot
+                            return (
+                              <li key={slot} className={`macro-slot${armedHere ? ' macro-slot-armed' : ''}`}>
+                                <span className="macro-slot-num">{slot}</span>
+                                <span className="macro-slot-cc">{cc != null ? `CC ${cc}` : '—'}</span>
+                                <div className="bar">
+                                  <div style={{ width: `${Math.min(1, levels[`ctl.${slot}`] ?? 0) * 100}%` }} />
+                                </div>
+                                <button
+                                  type="button"
+                                  className="macro-slot-learn"
+                                  onClick={() => {
+                                    cancelParamLearn()
+                                    setMacroLearn({ mode: 'single', slot })
+                                  }}
+                                >
+                                  Learn
+                                </button>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </div>
                     )}
                   </div>
                 )}
@@ -1526,12 +1718,17 @@ function XyPad({ engine }: { engine: Engine }) {
 function Knob({
   engine,
   schema,
+  slot,
   liveValue,
   learnArm,
   armed = false,
 }: {
   engine: Engine
   schema: { name: string; label: string; min: number; max: number; default: number; step?: number }
+  /** This param's 1-based position in `engine.scene.params` — docs/MACROS.md
+   * §1/§4's positional slot number, used ONLY for the "ctl N" source hint
+   * when this param is macro-driven (see `macroDriven` below). */
+  slot: number
   /** This param's most recently polled live value (App's 100ms poll,
    * `engine.scene.getParam` under the hood) — rendered on the slider instead
    * of local interactive state whenever `bound` is true, so a MIDI-learned or
@@ -1548,13 +1745,20 @@ function Knob({
   armed?: boolean
 }) {
   const [value, setValue] = useState(engine.scene.getParam(schema.name))
-  const { bound, exprText, setExprText, applyExpr, error } = useParamBinding(engine, schema.name)
-  const displayValue = bound ? liveValue : value
+  const { bound, macroDriven, exprText, setExprText, applyExpr, error } = useParamBinding(engine, schema.name)
+  const driven = bound || macroDriven
+  const displayValue = driven ? liveValue : value
+  // docs/MACROS.md §5: macro-driven rows get the same accent visual language
+  // as bound rows (the `em` readout, accent-colored via app.css's
+  // `.knob-macro`), but the slider stays enabled — unlike `bound`, editing a
+  // macro-driven param is allowed (§1's precedence note); it's just
+  // overwritten again on the next engaged-slot frame.
+  const macroClass = macroDriven && !bound ? ' knob-macro' : ''
 
   return (
-    <label className={`knob${armed ? ' knob-armed' : ''}`}>
+    <label className={`knob${armed ? ' knob-armed' : ''}${macroClass}`}>
       <span>
-        {schema.label} <em>{bound ? 'ƒ(t)' : displayValue.toFixed(2)}</em>
+        {schema.label} <em>{bound ? 'ƒ(t)' : macroDriven ? `ctl ${slot}` : displayValue.toFixed(2)}</em>
       </span>
       <input
         type="range"

@@ -8,6 +8,15 @@ export interface ParamBinding {
    * render the engine's live polled value instead of local interactive state
    * while this is true (App.tsx's live-hardware-sync requirement). */
   bound: boolean
+  /** docs/MACROS.md §4/§5: true while `name` has NO explicit binding but IS
+   * currently driven by an engaged macro slot (`Engine.isMacroDriven`).
+   * Mutually exclusive with `bound` by construction (the router skips any
+   * param with an explicit binding). Consumers render the engine's live
+   * polled value here too, same as `bound` — but, unlike `bound`, do NOT
+   * disable direct interaction: a macro-driven param can still be tweaked by
+   * hand, it's just overwritten again on the next engaged-slot frame
+   * (docs/MACROS.md §1's precedence note). */
+  macroDriven: boolean
   /** The raw bound expression text — '' when unbound. Only the studio
    * slider's expression text field needs this; the rotary only needs `bound`. */
   exprText: string
@@ -30,6 +39,7 @@ export interface ParamBinding {
 export function useParamBinding(engine: Engine, name: string): ParamBinding {
   const [exprText, setExprText] = useState(engine.getBinding(name) ?? '')
   const [bound, setBound] = useState(engine.getBinding(name) !== undefined)
+  const [macroDriven, setMacroDriven] = useState(engine.isMacroDriven(name))
   const [error, setError] = useState<string | null>(null)
   // The last binding this hook itself observed, so the effect below can tell
   // "the engine's binding changed under us" apart from our own applyExpr
@@ -44,6 +54,13 @@ export function useParamBinding(engine: Engine, name: string): ParamBinding {
       setBound(current !== undefined)
       setError(null)
     }
+    // Macro engagement (docs/MACROS.md §2) can flip true between renders with
+    // no binding change at all — a bare ctl.N event landing mid-performance —
+    // so it's re-read unconditionally too, same "runs after every render"
+    // polling this effect already does for `bound` (App's 100ms meter-poll
+    // re-render is what actually drives this, same as `bound` above).
+    const driven = engine.isMacroDriven(name)
+    setMacroDriven((prev) => (prev === driven ? prev : driven))
   })
 
   const applyExpr = (text: string) => {
@@ -65,5 +82,5 @@ export function useParamBinding(engine: Engine, name: string): ParamBinding {
     }
   }
 
-  return { bound, exprText, setExprText, applyExpr, error }
+  return { bound, macroDriven, exprText, setExprText, applyExpr, error }
 }

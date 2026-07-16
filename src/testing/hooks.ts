@@ -20,6 +20,11 @@ import { decodeImageBase64 } from '../engine/imageCodec'
 export interface VizTestApi {
   renderFrames(n: number): void
   setParam(name: string, value: number): void
+  /** Current value of scene param `name` (`engine.scene.getParam` — docs/MACROS.md
+   * §6: lets a spec assert a macro-driven/positional value directly instead of
+   * inferring it from a pixel-hash comparison, which a scene handoff's `ingest`
+   * snapshot would otherwise confound). */
+  getParam(name: string): number
   setBinding(param: string, src: string): void
   clearBinding(param: string): void
   queueEvent(e: SourceEvent): void
@@ -202,6 +207,7 @@ export function bootTestMode(root: HTMLElement): void {
   window.__viz = {
     renderFrames: (n) => engine.renderFrames(n),
     setParam: (name, value) => engine.setParam(name, value),
+    getParam: (name) => engine.scene.getParam(name),
     setBinding: (param, src) => engine.setBinding(param, src),
     clearBinding: (param) => engine.clearBinding(param),
     queueEvent: (e) => engine.queueInput(e),

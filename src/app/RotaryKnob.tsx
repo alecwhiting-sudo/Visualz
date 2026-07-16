@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import type { Engine } from '../engine/engine'
 import type { ParamSchema } from '../scenes/types'
+import { snapToStep } from '../scenes/paramStep'
 import { useParamBinding } from './paramBinding'
 import { describeArc, dragDeltaToValue, polarToCartesian, valueToAngle, wheelDeltaToValue } from './rotaryMath'
 
@@ -27,6 +28,7 @@ const TRACK_END = 135
 export function RotaryKnob({
   engine,
   schema,
+  slot,
   liveValue,
   learnArm,
   armed = false,
@@ -34,6 +36,10 @@ export function RotaryKnob({
 }: {
   engine: Engine
   schema: ParamSchema
+  /** This param's 1-based position in `engine.scene.params` — docs/MACROS.md
+   * §1/§4's positional slot number (param i <- slot i+1), used ONLY for the
+   * "ctl N" source hint when `macroDriven` is true. */
+  slot: number
   /** This param's most recently polled live value (App's 100ms poll) —
    * rendered instead of local interactive state whenever the param is bound. */
   liveValue: number
@@ -45,25 +51,27 @@ export function RotaryKnob({
   armed?: boolean
   size?: number
 }) {
-  const { bound } = useParamBinding(engine, schema.name)
+  const { bound, macroDriven } = useParamBinding(engine, schema.name)
   // Local interactive value — same pattern as the studio Knob: seeded once
   // from the engine at mount, then driven purely by this control's own
-  // pointer/wheel/dblclick handlers. Only read while unbound; a bound param
-  // always renders `liveValue` instead, so this never fights the poll.
+  // pointer/wheel/dblclick handlers. Only read while unbound; a bound OR
+  // macro-driven param always renders `liveValue` instead, so this never
+  // fights the poll.
   const [value, setValue] = useState(engine.scene.getParam(schema.name))
   const dragRef = useRef<{ pointerId: number; startY: number; startValue: number } | null>(null)
 
-  const displayValue = bound ? liveValue : value
+  const driven = bound || macroDriven
+  const displayValue = driven ? liveValue : value
 
   const commit = (raw: number) => {
     // Snap to the schema's step (review finding): the studio slider is
     // step-constrained by its range input, so the rotary must be too —
     // otherwise integer params (lissajous freqX, kaleido segments, …) get
-    // fractional values the slider can never produce.
-    const step = schema.step
-    const v = step
-      ? Math.min(schema.max, Math.max(schema.min, Math.round((raw - schema.min) / step) * step + schema.min))
-      : raw
+    // fractional values the slider can never produce. Shared with the
+    // engine's MacroRouter (docs/MACROS.md §4/§6) via `paramStep.ts` so a
+    // macro-driven param and a manually-dragged rotary land on the same
+    // quantized values for the same schema.
+    const v = snapToStep(raw, schema.min, schema.max, schema.step)
     setValue(v)
     engine.setParam(schema.name, v)
     learnArm?.()
@@ -103,8 +111,15 @@ export function RotaryKnob({
   const needleStart = polarToCartesian(50, 50, NEEDLE_INNER, angle)
   const needleEnd = polarToCartesian(50, 50, NEEDLE_OUTER, angle)
 
+  // docs/MACROS.md §5: macro-driven rows get the same accent visual language
+  // as bound rows (needle/value color — see app.css's `.rotary-knob-macro`)
+  // WITHOUT `rotary-knob-bound`'s `cursor: default` — edits stay allowed, per
+  // §1's precedence note, since `onPointerDown`/`onWheel`/`onDoubleClick`
+  // above only ever gate on `bound`, never `macroDriven`.
+  const macroClass = macroDriven && !bound ? ' rotary-knob-macro' : ''
+
   return (
-    <div className={`rotary-knob${bound ? ' rotary-knob-bound' : ''}${armed ? ' rotary-knob-armed' : ''}`}>
+    <div className={`rotary-knob${bound ? ' rotary-knob-bound' : ''}${macroClass}${armed ? ' rotary-knob-armed' : ''}`}>
       <span className="rotary-knob-label">{schema.label}</span>
       <svg
         className="rotary-knob-dial"
@@ -130,7 +145,10 @@ export function RotaryKnob({
         <line x1={needleStart.x} y1={needleStart.y} x2={needleEnd.x} y2={needleEnd.y} className="rotary-knob-needle" />
         <circle cx="50" cy="50" r="6" className="rotary-knob-hub" />
       </svg>
-      <span className="rotary-knob-value">{displayValue.toFixed(2)}</span>
+      {/* docs/MACROS.md §5: "ctl N" source hint where a bound row would show
+         its expression (the rotary has no expression field of its own, so
+         this is the readout's only "what's driving this" text). */}
+      <span className="rotary-knob-value">{macroDriven && !bound ? `ctl ${slot}` : displayValue.toFixed(2)}</span>
     </div>
   )
 }
