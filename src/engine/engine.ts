@@ -129,9 +129,14 @@ export class Engine {
     let fallbackClock = 0
     const loop = () => {
       if (!this.running) return
-      // Audio clock when playing; otherwise a steady rAF-paced clock. The
-      // fallback is the one place live mode touches frame pacing directly.
-      const time = this.audio.isPlaying ? this.audio.time : (fallbackClock += 1 / 60)
+      // Audio clock once a file has been loaded (gated on `hasFile`, not
+      // `isPlaying`: `AudioEngine.time` is frozen at the held offset while
+      // paused/stopped, and feeding that frozen value straight into
+      // `transport.advanceTo` is what freezes the visuals with it — falling
+      // back to the free-running clock on pause would instead make the demo
+      // clock take over and the visuals jump). No file loaded at all keeps the
+      // steady rAF-paced fallback clock (demo mode dances on its own).
+      const time = this.audio.hasFile ? this.audio.time : (fallbackClock += 1 / 60)
       this.tick(time)
       this.raf = requestAnimationFrame(loop)
     }
@@ -152,6 +157,44 @@ export class Engine {
       const frame = this.transport.step()
       this.updateAndRender(frame.time, frame)
     }
+  }
+
+  /**
+   * Transport controls (play/pause/stop/seek), gated on recording: the session
+   * model assumes a monotonically advancing transport (recordInput/Param/etc.
+   * are keyed by `transport.frame`), so pausing, seeking, or stopping mid-
+   * recording would let the audio clock — and therefore `frame.time` — jump or
+   * freeze in a way the recorded log can't represent. Reject as a no-op rather
+   * than recording something replay couldn't reproduce; App.tsx also disables
+   * the transport UI while `isRecording`, this is the belt to that suspenders.
+   */
+  pauseAudio(): void {
+    if (this.isRecording) return
+    this.audio.pause()
+  }
+
+  resumeAudio(): void {
+    if (this.isRecording) return
+    this.audio.resume()
+  }
+
+  /**
+   * Intentionally does NOT reset scene state (kaleido feedback trails, tunnel
+   * ring phase, Gray-Scott chemical field, particle positions, …) — this is a
+   * live instrument, not a video scrubber, so a seek is a jump in *time*, not a
+   * rewind of the running simulation. Audio-derived signals (bass/beat/etc.)
+   * still jump correctly because they're a pure lookup by time on the
+   * FeatureTimeline (see `updateAndRender`); only per-scene state carries on
+   * from wherever it was.
+   */
+  seekAudio(seconds: number): void {
+    if (this.isRecording) return
+    this.audio.seek(seconds)
+  }
+
+  stopAudio(): void {
+    if (this.isRecording) return
+    this.audio.stop()
   }
 
   /**
@@ -264,7 +307,7 @@ export class Engine {
     const bindings: Record<string, string> = {}
     for (const [param, b] of this.bindings) bindings[param] = b.src
     const audio: SessionAudio =
-      this.audio.isPlaying && this.audio.timeline
+      this.audio.hasFile && this.audio.timeline
         ? { kind: 'file', name: this.audio.fileName ?? 'audio', timeline: serializeTimeline(this.audio.timeline) }
         : { kind: 'demo' }
     // Snapshot ALL current stage sources (not just edited ones) — dead simple
@@ -395,18 +438,24 @@ export class Engine {
   /**
    * Signal-source priority (docs/ANALYSIS.md §12): a whole-track offline
    * `FeatureTimeline` — sessions replaying `audio.kind === 'file'`, or a file
-   * currently playing live with its analysis done — is strictly better than
-   * the live `AudioEventDetector` (non-causal, sees the whole track) and takes
-   * over both band publishing AND onset/beat/beatPhase; the detector does not
-   * run in that case. Everything else (no timeline: demo sessions, no audio
-   * loaded, or a future mic path) keeps today's publishDemoSignals/analyser +
-   * AudioEventDetector behavior.
+   * that's currently loaded live (playing, paused, or stopped) with its
+   * analysis done — is strictly better than the live `AudioEventDetector`
+   * (non-causal, sees the whole track) and takes over both band publishing AND
+   * onset/beat/beatPhase; the detector does not run in that case. A loaded
+   * file with no timeline yet (analysis still running/failed) freezes instead
+   * of falling back while paused/stopped (see below). Everything else (no
+   * audio loaded at all, or a future mic path) keeps today's
+   * publishDemoSignals/analyser + AudioEventDetector behavior.
    */
   private updateAndRender(time: number, frame: { time: number; dt: number; frame: number }): void {
     const timeline =
       this.player !== null
         ? this.sessionTimeline
-        : this.audio.isPlaying
+        : // `hasFile`, not `isPlaying`: a paused/stopped-but-loaded file keeps
+          // sampling its timeline at the (frozen) transport time, so signals
+          // hold steady with the visuals instead of falling back to demo
+          // signals the instant playback pauses.
+          this.audio.hasFile
           ? this.audio.timeline
           : null
 
@@ -421,17 +470,33 @@ export class Engine {
       // The causal detector isn't run on timeline frames, so its adaptive state
       // goes stale; make the next non-timeline frame start it fresh.
       this.detectorStale = true
+    } else if (this.audio.isPlaying) {
+      if (this.detectorStale) {
+        this.events.reset()
+        this.detectorStale = false
+      }
+      this.audio.publishSignals(this.bus)
+      ev = this.events.update(frame.dt, frame.time, this.bus, false)
+    } else if (this.audio.hasFile) {
+      // Paused/stopped with a file loaded but no timeline yet (analysis still
+      // running, or it failed): freeze rather than read the analyser (its
+      // source is disconnected while paused, so it would decay toward silence)
+      // or fall back to demo signals (a visible discontinuity) — hold the bus
+      // and event state at whatever they last were.
+      this.detectorStale = true
+      ev = {
+        onset: false,
+        beat: false,
+        beatPhase: this.bus.get('beatPhase'),
+        onsetStrength: this.bus.get('onsetStrength'),
+      }
     } else {
       if (this.detectorStale) {
         this.events.reset()
         this.detectorStale = false
       }
-      if (this.audio.isPlaying) {
-        this.audio.publishSignals(this.bus)
-      } else {
-        publishDemoSignals(this.bus, time)
-      }
-      ev = this.events.update(frame.dt, frame.time, this.bus, !this.audio.isPlaying)
+      publishDemoSignals(this.bus, time)
+      ev = this.events.update(frame.dt, frame.time, this.bus, true)
     }
     this.bus.set('onset', ev.onset ? 1 : 0)
     this.bus.set('beat', ev.beat ? 1 : 0)

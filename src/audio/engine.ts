@@ -1,6 +1,7 @@
 import type { SignalBus } from '../core/signals'
 import type { FeatureTimeline } from './analysis'
 import { analyzeAudioAsync } from './analysisClient'
+import { clampSeek, computeAudioTime } from './transportMath'
 
 /**
  * Live audio path: file playback through an AnalyserNode, publishing
@@ -21,7 +22,15 @@ export class AudioEngine {
   private analyser: AnalyserNode | null = null
   private source: AudioBufferSourceNode | null = null
   private freqData: Uint8Array<ArrayBuffer> | null = null
+  /** `ctx.currentTime` when the current playing segment's source was started. */
   private startedAt = 0
+  /** Position (seconds) at the start of the current playing segment, or the
+   * held position while paused/stopped — see `transportMath.ts`. `source` is
+   * one-shot (`AudioBufferSourceNode`), so pause/seek/resume don't pause it in
+   * place, they capture this and recreate the source with `start(0, offset)`. */
+  private offsetSeconds = 0
+  /** True between `pause()` and the next `resume()`/`seek()`/`stop()`/new `playFile()`. */
+  private paused = false
   private decoded: AudioBuffer | null = null
   /** Monotonic token so overlapping playFile calls resolve to the newest one. */
   private loadSeq = 0
@@ -29,8 +38,29 @@ export class AudioEngine {
   private featureTimeline: FeatureTimeline | null = null
   private _fileName: string | null = null
 
+  /** True only while a source is actually running — false when paused, stopped,
+   * or no file has been loaded. Engine/App code that means "is a file loaded at
+   * all" (so pausing doesn't fall back to demo signals/a free-running clock)
+   * should check `hasFile`, not this. */
   get isPlaying(): boolean {
     return this.source !== null
+  }
+
+  /** True between `pause()` and `resume()`/`seek()`/`stop()`. */
+  get isPaused(): boolean {
+    return this.paused
+  }
+
+  /** A file has been decoded and is loaded (whether playing, paused, or
+   * stopped-and-rewound) — the "is there a track at all" check, as opposed to
+   * `isPlaying`'s "is it audibly running right now". */
+  get hasFile(): boolean {
+    return this.decoded !== null
+  }
+
+  /** Decoded buffer duration in seconds, or 0 before any file has loaded. */
+  get duration(): number {
+    return this.decoded?.duration ?? 0
   }
 
   /** The AudioContext state, or null before any playback attempt. iOS suspends
@@ -49,10 +79,21 @@ export class AudioEngine {
     }
   }
 
-  /** Audio-clock time in seconds since playback started; drives the live Transport. */
+  /**
+   * Audio-clock time in seconds since the file's own start (0 if none loaded);
+   * drives the live Transport. Frozen at `offsetSeconds` while paused or
+   * stopped — the Engine feeds this straight to `Transport.advanceTo`, so a
+   * frozen `time` is precisely what freezes the visuals with no discontinuity
+   * when the user pauses.
+   */
   get time(): number {
-    if (!this.ctx || !this.source) return 0
-    return this.ctx.currentTime - this.startedAt
+    return computeAudioTime({
+      hasFile: this.decoded !== null,
+      playing: this.source !== null && !this.paused,
+      offsetSeconds: this.offsetSeconds,
+      ctxCurrentTime: this.ctx?.currentTime ?? 0,
+      startedAt: this.startedAt,
+    })
   }
 
   /** The most recently analyzed file's offline feature timeline, or null until
@@ -101,16 +142,10 @@ export class AudioEngine {
     this.analyser.fftSize = 2048
     this.analyser.smoothingTimeConstant = 0.7
     this.freqData = new Uint8Array(this.analyser.frequencyBinCount)
-
-    this.source = this.ctx.createBufferSource()
-    this.source.buffer = buffer
-    this.source.connect(this.analyser)
     this.analyser.connect(this.ctx.destination)
-    this.source.onended = () => {
-      this.source = null
-    }
-    this.startedAt = this.ctx.currentTime
-    this.source.start()
+
+    this.paused = false
+    this.startSourceAt(0)
 
     // Background analysis: no await from the caller's perspective beyond this
     // method resolving — the timeline slots in whenever it finishes, and the
@@ -125,9 +160,88 @@ export class AudioEngine {
       })
   }
 
+  /**
+   * Stops and rewinds to the start. No-op (well, idempotent) if no file is
+   * loaded or playback was already stopped. Unlike `pause()`, the position is
+   * discarded rather than held.
+   */
   stop(): void {
-    this.source?.stop()
+    this.killSource()
+    this.paused = false
+    this.offsetSeconds = 0
+  }
+
+  /** Captures the current position and stops the source. No-op unless a file
+   * is actively playing (already paused, or stopped, does nothing). */
+  pause(): void {
+    if (this.source === null || this.paused) return
+    this.offsetSeconds = this.time // read while still "playing" per computeAudioTime
+    this.paused = true
+    this.killSource()
+  }
+
+  /** Resumes from the paused position. No-op unless currently paused. Re-kicks
+   * the iOS playback-category unlock element and fire-and-forget-resumes the
+   * context, mirroring `playFile`'s gesture handling — `resume()` is itself
+   * normally called from a user gesture (a tap on the play button). */
+  resume(): void {
+    if (!this.paused || !this.decoded || !this.ctx) return
+    this.paused = false
+    void this.unlockElement?.play().catch(() => {})
+    if (this.ctx.state !== 'running') void this.ctx.resume().catch(() => {})
+    this.startSourceAt(this.offsetSeconds)
+  }
+
+  /**
+   * Seeks to `seconds`, clamped to `[0, duration]`. While playing, restarts
+   * the source at the new offset (still playing after); while paused or
+   * stopped, just moves the held position. No-op if no file is loaded.
+   */
+  seek(seconds: number): void {
+    if (!this.decoded) return
+    const clamped = clampSeek(seconds, this.duration)
+    if (this.source !== null && !this.paused) {
+      this.killSource()
+      this.startSourceAt(clamped)
+    } else {
+      this.offsetSeconds = clamped
+    }
+  }
+
+  /**
+   * Creates a fresh `AudioBufferSourceNode` (one-shot, so pause/seek/resume
+   * can't reuse the old one) starting playback at `offset` seconds into the
+   * buffer, and wires the CRITICAL onended guard: a pause/seek/stop calls
+   * `killSource()` first, which detaches `this.source` from the outgoing node
+   * *before* calling `.stop()` on it — so when that node's `onended` fires
+   * (asynchronously), the identity check below sees `this.source !== node`
+   * and does nothing. Only a node that is still `this.source` when its
+   * `onended` fires got there via natural end-of-track, so only that path
+   * clears `decoded`-adjacent playback state (paused/offset).
+   */
+  private startSourceAt(offset: number): void {
+    if (!this.ctx || !this.decoded || !this.analyser) return
+    const node = this.ctx.createBufferSource()
+    node.buffer = this.decoded
+    node.connect(this.analyser)
+    node.onended = () => {
+      if (this.source !== node) return // stale: superseded by pause/seek/stop, not a natural end
+      this.source = null
+      this.paused = false
+      this.offsetSeconds = 0
+    }
+    this.startedAt = this.ctx.currentTime
+    this.offsetSeconds = offset
+    this.source = node
+    node.start(0, offset)
+  }
+
+  /** Detaches and stops the current source, if any — safe to call when none
+   * exists. Does not touch `paused`/`offsetSeconds`; callers set those. */
+  private killSource(): void {
+    const node = this.source
     this.source = null
+    node?.stop()
   }
 
   /**

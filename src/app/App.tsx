@@ -6,6 +6,7 @@ import { serializeSession, parseSession } from '../session/serialize'
 import type { SessionDoc } from '../session/types'
 import { exportSession } from '../export/client'
 import type { ExportProgress } from '../export/render'
+import type { ExportCodec } from '../export/encode'
 import './app.css'
 
 const SIGNAL_NAMES = ['rms', 'bass', 'mid', 'high', 'beat', 'onset']
@@ -75,6 +76,25 @@ function downloadSession(doc: SessionDoc): void {
   downloadBlob(new Blob([serializeSession(doc)], { type: 'application/json' }), 'visualz-session.json')
 }
 
+/** Export format picker's options: 'auto' leaves `codec` unset so `detectExportCodec`
+ * (export/encode.ts) picks — otherwise pins the codec explicitly (e.g. to force MP4
+ * on a desktop Chrome that has no AAC encoder, accepting a video-only export). */
+type ExportFormatChoice = 'auto' | 'mp4' | 'webm'
+
+function resolveExportCodec(choice: ExportFormatChoice): ExportCodec | undefined {
+  if (choice === 'mp4') return 'h264'
+  if (choice === 'webm') return 'vp9'
+  return undefined
+}
+
+/** mm:ss, floored to whole seconds — used by the transport row's scrub readout. */
+function formatTime(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds))
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
 export function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const engineRef = useRef<Engine | null>(null)
@@ -92,6 +112,13 @@ export function App() {
   // H.264/MP4 export dropped its audio track because AAC isn't available in
   // this browser (see EncodedResult.audioSkipped in export/encode.ts).
   const [exportNote, setExportNote] = useState<string | null>(null)
+  // Export format picker: 'auto' (default) lets detectExportCodec choose;
+  // 'mp4'/'webm' pin the codec explicitly (e.g. forcing MP4 on a browser that
+  // can't encode AAC, accepting a video-only export to add sound in post).
+  const [exportFormat, setExportFormat] = useState<ExportFormatChoice>('auto')
+  // Transport row (play/pause/stop/seek): polled the same way as the signal
+  // meters below, not driven by its own rAF — see attachLiveEngine.
+  const [playback, setPlayback] = useState({ time: 0, duration: 0, paused: false, hasFile: false })
   // The most recently recorded session, kept in memory so Replay/Export/Save work
   // directly after Stop — no round-trip through the file system (essential on
   // iPhone, where re-picking a just-saved file is clumsy).
@@ -115,6 +142,12 @@ export function App() {
     meterIntervalRef.current = window.setInterval(() => {
       setLevels(e.bus.snapshot())
       setAudioBlocked(e.audio.isPlaying && e.audio.contextState !== 'running')
+      setPlayback({
+        time: e.audio.time,
+        duration: e.audio.duration,
+        paused: e.audio.isPaused,
+        hasFile: e.audio.hasFile,
+      })
     }, 100)
     detachKeyboardRef.current = attachKeyboard(window, (event) => e.queueInput(event))
   }
@@ -333,17 +366,18 @@ export function App() {
       // the audio track in). No file loaded (or the live engine has been swapped
       // for a replay engine) means a silent export, same as before this change.
       const audio = engineRef.current?.audio.lastBuffer() ?? undefined
-      // No `codec` given: createVideoSink auto-detects (VP9/WebM preferred where
-      // supported, H.264/MP4 fallback for iOS/macOS Safari — see export/encode.ts).
+      // 'auto' passes `codec: undefined`, so createVideoSink auto-detects
+      // (VP9/WebM preferred where supported, H.264/MP4 fallback for iOS/macOS
+      // Safari); 'mp4'/'webm' pin the codec explicitly (export/encode.ts).
       const result = await exportSession(
         doc,
-        { width: 1280, height: 720, fps: doc.fps },
+        { width: 1280, height: 720, fps: doc.fps, codec: resolveExportCodec(exportFormat) },
         (p: ExportProgress) => setExporting({ frame: p.frame, total: p.total }),
         audio,
       )
       downloadBlob(new Blob([result.buffer], { type: result.mime }), `visualz-session.${result.fileExtension}`)
       if (result.audioSkipped) {
-        setExportNote('exported without audio (AAC unavailable in this browser)')
+        setExportNote("Exported video-only MP4 — this browser can't encode AAC audio; add the track in post.")
       }
     } catch (err) {
       setSessionError(err instanceof Error ? err.message : String(err))
@@ -405,6 +439,42 @@ export function App() {
           </p>
         )}
 
+        {engine && playback.hasFile && (
+          <div className="transport-row">
+            <button
+              type="button"
+              className="session-button"
+              disabled={recording}
+              onClick={() => (playback.paused ? engine.resumeAudio() : engine.pauseAudio())}
+              aria-label={playback.paused ? 'Play' : 'Pause'}
+            >
+              {playback.paused ? '▶' : '⏸'}
+            </button>
+            <button
+              type="button"
+              className="session-button"
+              disabled={recording}
+              onClick={() => engine.stopAudio()}
+              aria-label="Stop and rewind"
+            >
+              ⏹
+            </button>
+            <input
+              type="range"
+              className="transport-scrub"
+              min={0}
+              max={Math.max(playback.duration, 0.1)}
+              step={0.1}
+              value={Math.min(playback.time, playback.duration)}
+              disabled={recording}
+              onChange={(ev) => engine.seekAudio(Number(ev.target.value))}
+            />
+            <span className="transport-time">
+              {formatTime(playback.time)} / {formatTime(playback.duration)}
+            </span>
+          </div>
+        )}
+
         <section>
           <h2>Signals</h2>
           {SIGNAL_NAMES.map((name) => (
@@ -419,6 +489,18 @@ export function App() {
 
         <section>
           <h2>Session</h2>
+          <label className="scene-select">
+            Export format
+            <select
+              value={exportFormat}
+              disabled={replay !== null || exporting !== null}
+              onChange={(ev) => setExportFormat(ev.target.value as ExportFormatChoice)}
+            >
+              <option value="auto">Auto</option>
+              <option value="mp4">MP4 (H.264)</option>
+              <option value="webm">WebM (VP9)</option>
+            </select>
+          </label>
           <div className="session-controls">
             <button
               type="button"

@@ -32,7 +32,11 @@ import { expect, test } from '@playwright/test'
 
 const GOLDEN_FRAME = 450
 const SMOKE_FRAME = 30
-const SCREENSHOT_TIMEOUT = 20_000
+// SwiftShader's readback cost at frame 450 is ~11s on an idle machine but has
+// been observed to blow past 20s under CPU contention (parallel agent/build
+// work on shared sandboxes) — the golden tests mark themselves slow and give
+// the screenshot most of that tripled budget.
+const SCREENSHOT_TIMEOUT = 60_000
 
 async function boot(page: import('@playwright/test').Page, size?: string) {
   await page.goto(`/?test=1&seed=42&scene=mandeldive${size ?? ''}`)
@@ -69,6 +73,7 @@ function minimalDoc(durationFrames: number) {
 // --- Goldens ------------------------------------------------------------
 
 test('mandeldive renders deterministically at frame 450', async ({ page }) => {
+  test.slow()
   await boot(page)
   await page.evaluate((n) => window.__viz!.renderFrames(n), GOLDEN_FRAME)
   expect(await page.evaluate(() => window.__viz!.frame())).toBe(GOLDEN_FRAME)
@@ -78,6 +83,7 @@ test('mandeldive renders deterministically at frame 450', async ({ page }) => {
 })
 
 test('mandeldive composes correctly at 9:16', async ({ page }) => {
+  test.slow()
   await boot(page, '&w=360&h=640')
   await page.evaluate((n) => window.__viz!.renderFrames(n), GOLDEN_FRAME)
   await expect(page.locator('canvas')).toHaveScreenshot('mandeldive-9x16-f450.png', {
@@ -86,6 +92,7 @@ test('mandeldive composes correctly at 9:16', async ({ page }) => {
 })
 
 test('mandeldive composes correctly at 1:1', async ({ page }) => {
+  test.slow()
   await boot(page, '&w=480&h=480')
   await page.evaluate((n) => window.__viz!.renderFrames(n), GOLDEN_FRAME)
   await expect(page.locator('canvas')).toHaveScreenshot('mandeldive-1x1-f450.png', {
