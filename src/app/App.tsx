@@ -426,7 +426,17 @@ export function App() {
         if (!target) return
         armedParamRef.current = null
         try {
-          e.setBinding(target, signalName)
+          // Range-map the 0..1 MIDI signal onto the param's [min, max] (user
+          // report: a full hardware sweep barely moved freqX — binding the
+          // bare signal drove a 1..6 param with 0..1 values, clamped at the
+          // bottom). Expressions output raw param VALUES, so learn writes the
+          // mapping explicitly; it reads as ordinary editable DSL in the knob.
+          const schema = e.scene.params.find((p) => p.name === target)
+          const expr =
+            schema && !(schema.min === 0 && schema.max === 1)
+              ? `${schema.min} + ${+(schema.max - schema.min).toFixed(4)} * ${signalName}`
+              : signalName
+          e.setBinding(target, expr)
         } catch {
           // `midi.cc.<n>`/`midi.note.<n>` always compile; guard anyway rather
           // than crash on a future change to signal-name validity.
