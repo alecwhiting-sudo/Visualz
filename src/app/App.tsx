@@ -819,6 +819,32 @@ export function App() {
                 disabled={!engine || replay !== null || exporting !== null}
                 onToggleRecording={onToggleRecording}
               />
+              {/* Same global learn toggle as SCENE tab / MIDI disclosure (user
+                 request): in perform view the rotaries above arm exactly like
+                 the studio sliders, so learn belongs here too. The armed
+                 rotary's highlight is the status; no room for the text line. */}
+              {midiSupported && (
+                <button
+                  type="button"
+                  className={`session-button${learnMode ? ' midi-learning' : ''}`}
+                  title={
+                    learnMode
+                      ? armedParam
+                        ? `learning "${armedParam}" — move a hardware control (Esc to stop)`
+                        : 'learn on — tweak a dial, then move a hardware control (Esc to stop)'
+                      : 'MIDI learn: tweak a dial, then move a hardware control'
+                  }
+                  onClick={() => {
+                    setLearnMode((on) => {
+                      const next = !on
+                      if (!next) setArmedParam(null)
+                      return next
+                    })
+                  }}
+                >
+                  {learnMode ? 'Learning…' : 'MIDI learn'}
+                </button>
+              )}
               <div className="view-mode-buttons">
                 {fullscreenSupported && (
                   <button type="button" className="session-button" onClick={() => setViewMode('full')}>
