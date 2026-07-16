@@ -129,12 +129,18 @@ export class Engine {
     let fallbackClock = 0
     const loop = () => {
       if (!this.running) return
-      // Audio clock once a file has been loaded (gated on `hasFile`, not
-      // `isPlaying`: `AudioEngine.time` is frozen at the held offset while
-      // paused/stopped, and feeding that frozen value straight into
-      // `transport.advanceTo` is what freezes the visuals with it — falling
-      // back to the free-running clock on pause would instead make the demo
-      // clock take over and the visuals jump). No file loaded at all keeps the
+      // A loaded track that is not audibly running (paused, stopped, or ended)
+      // skips the tick entirely: a frozen clock alone (dt=0) freezes the
+      // time-clocked scenes, but frame-clocked simulations (Gray-Scott's
+      // substeps, the tunnel ring, flowfield's uFrame) advance per update()
+      // call and would keep simmering through a "pause". The canvas holds its
+      // last frame (preserveDrawingBuffer); a seek made while paused takes
+      // visual effect on resume.
+      if (this.audio.hasFile && !this.audio.isPlaying) {
+        this.raf = requestAnimationFrame(loop)
+        return
+      }
+      // Audio clock once a file has been loaded; no file at all keeps the
       // steady rAF-paced fallback clock (demo mode dances on its own).
       const time = this.audio.hasFile ? this.audio.time : (fallbackClock += 1 / 60)
       this.tick(time)
@@ -300,6 +306,14 @@ export class Engine {
    * though the live engine keeps dancing to the new track underneath it.
    */
   startRecording(): void {
+    // A recording started with a loaded-but-not-playing track (paused, stopped,
+    // or ended) would run against a frozen transport: the live view holds one
+    // frame while events accumulate, but replay/export steps time forward from
+    // 0 — a coherent yet *different* video than what was performed. Reject
+    // loudly; the App also disables Record in this state.
+    if (this.audio.hasFile && !this.audio.isPlaying) {
+      throw new Error('Cannot start recording while the track is paused or stopped — press play first')
+    }
     const params: Record<string, number> = {}
     for (const p of this.scene.params) {
       params[p.name] = this.scene.getParam(p.name) - this.mappings.pulseOffset(p.name)

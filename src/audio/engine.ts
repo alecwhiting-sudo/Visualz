@@ -180,12 +180,15 @@ export class AudioEngine {
     this.killSource()
   }
 
-  /** Resumes from the paused position. No-op unless currently paused. Re-kicks
-   * the iOS playback-category unlock element and fire-and-forget-resumes the
-   * context, mirroring `playFile`'s gesture handling — `resume()` is itself
-   * normally called from a user gesture (a tap on the play button). */
+  /** Starts playback from the held position: resumes a pause, restarts a
+   * stopped/naturally-ended track from its rewound offset. No-op while already
+   * audibly playing or with no file. Re-kicks the iOS playback-category unlock
+   * element and fire-and-forget-resumes the context, mirroring `playFile`'s
+   * gesture handling — `resume()` is itself normally called from a user
+   * gesture (a tap on the play button). */
   resume(): void {
-    if (!this.paused || !this.decoded || !this.ctx) return
+    if (!this.decoded || !this.ctx) return
+    if (this.source !== null && !this.paused) return // already playing
     this.paused = false
     void this.unlockElement?.play().catch(() => {})
     if (this.ctx.state !== 'running') void this.ctx.resume().catch(() => {})

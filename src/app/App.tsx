@@ -118,7 +118,7 @@ export function App() {
   const [exportFormat, setExportFormat] = useState<ExportFormatChoice>('auto')
   // Transport row (play/pause/stop/seek): polled the same way as the signal
   // meters below, not driven by its own rAF — see attachLiveEngine.
-  const [playback, setPlayback] = useState({ time: 0, duration: 0, paused: false, hasFile: false })
+  const [playback, setPlayback] = useState({ time: 0, duration: 0, playing: false, hasFile: false })
   // The most recently recorded session, kept in memory so Replay/Export/Save work
   // directly after Stop — no round-trip through the file system (essential on
   // iPhone, where re-picking a just-saved file is clumsy).
@@ -145,7 +145,7 @@ export function App() {
       setPlayback({
         time: e.audio.time,
         duration: e.audio.duration,
-        paused: e.audio.isPaused,
+        playing: e.audio.isPlaying,
         hasFile: e.audio.hasFile,
       })
     }, 100)
@@ -243,8 +243,15 @@ export function App() {
       setRecording(false)
       if (doc) setLastSession(doc)
     } else {
-      e.startRecording()
-      setRecording(true)
+      try {
+        e.startRecording()
+        setRecording(true)
+      } catch (err) {
+        // Recording rejected (e.g. track paused/stopped — engine.startRecording
+        // guards against frozen-transport takes). The button is disabled in
+        // that state too; this catch keeps UI state honest if it's ever hit.
+        setSessionError(err instanceof Error ? err.message : String(err))
+      }
     }
   }
 
@@ -445,10 +452,13 @@ export function App() {
               type="button"
               className="session-button"
               disabled={recording}
-              onClick={() => (playback.paused ? engine.resumeAudio() : engine.pauseAudio())}
-              aria-label={playback.paused ? 'Play' : 'Pause'}
+              // Keyed on `playing` (an audible source exists), not `paused`:
+              // stopped and naturally-ended tracks must also show ▶, and
+              // resumeAudio restarts those from the rewound offset.
+              onClick={() => (playback.playing ? engine.pauseAudio() : engine.resumeAudio())}
+              aria-label={playback.playing ? 'Pause' : 'Play'}
             >
-              {playback.paused ? '▶' : '⏸'}
+              {playback.playing ? '⏸' : '▶'}
             </button>
             <button
               type="button"
@@ -506,7 +516,16 @@ export function App() {
               type="button"
               className="session-button"
               onClick={onToggleRecording}
-              disabled={!engine || replay !== null || exporting !== null}
+              // Also blocked while a loaded track isn't audibly playing:
+              // recording against a frozen transport would replay/export as a
+              // different video than the frozen live view (engine.startRecording
+              // throws on this too).
+              disabled={
+                !engine ||
+                replay !== null ||
+                exporting !== null ||
+                (!recording && playback.hasFile && !playback.playing)
+              }
             >
               {recording ? 'Stop' : 'Record'}
             </button>

@@ -226,4 +226,35 @@ describe('AudioEngine transport', () => {
     expect(engine.time).toBe(0)
     expect(engine.hasFile).toBe(true) // the file itself stays loaded
   })
+
+  it('resume restarts a stopped track from its rewound position', async () => {
+    const engine = new AudioEngine()
+    await engine.playFile(fakeFile)
+    engine.stop() // rewound to 0, not paused
+    engine.resume()
+    expect(engine.isPlaying).toBe(true)
+    expect(engine.isPaused).toBe(false)
+    expect(engine.time).toBe(0)
+  })
+
+  it('resume restarts a naturally-ended track from the start', async () => {
+    const engine = new AudioEngine()
+    await engine.playFile(fakeFile)
+    const node = (engine as unknown as { source: FakeSourceNode }).source
+    node.onended?.() // natural end rewinds to 0
+    engine.resume()
+    expect(engine.isPlaying).toBe(true)
+    expect(engine.time).toBe(0)
+  })
+
+  it('resume is a no-op while already audibly playing', async () => {
+    const engine = new AudioEngine()
+    await engine.playFile(fakeFile)
+    const ctx = (engine as unknown as { ctx: FakeAudioContext }).ctx
+    ctx.currentTime = 4
+    const before = engine.time
+    engine.resume() // must not restart the source (which would reset time to the held offset)
+    expect(engine.isPlaying).toBe(true)
+    expect(engine.time).toBeCloseTo(before)
+  })
 })
