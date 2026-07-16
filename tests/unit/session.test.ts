@@ -393,6 +393,20 @@ describe('parseSession scene.image validation', () => {
     }
     expect(() => parseSession(JSON.stringify(doc))).toThrow(/decodes to/i)
   })
+
+  it('19j) rejects an oversized data string before decoding it', () => {
+    // 1x1 image (4 bytes expected) with a multi-KB data string: the length
+    // guard must reject it without atob walking the whole string.
+    const doc = {
+      ...docWithEvents([]),
+      scene: {
+        id: 'lissajous',
+        params: {},
+        image: { width: 1, height: 1, data: 'A'.repeat(64 * 1024) },
+      },
+    }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/too long/i)
+  })
 })
 
 // --- 4. End-to-end determinism (fake engine) ------------------------------------

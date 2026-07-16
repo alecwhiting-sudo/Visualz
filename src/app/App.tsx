@@ -179,11 +179,22 @@ export function App() {
 
   const onImageFile = async (file: File | undefined) => {
     if (!file || !engineRef.current) return
+    const engineAtPick = engineRef.current
+    const nameBeforePick = imageName
     setImageName(`Loading ${file.name}…`)
     try {
       const img = await loadAndDownscaleImage(file)
+      // The picker is disabled while recording, but a decode picked *before*
+      // Record can resolve mid-recording. The image is a snapshot, not an
+      // event — applying it now would change the live scene without entering
+      // the session, so the export would not match the performance. Discard.
+      if (engineRef.current !== engineAtPick || engineAtPick.isRecording) {
+        setImageName(nameBeforePick)
+        setSessionError('Image not applied: recording started while it was loading')
+        return
+      }
       imageRef.current = img
-      engineRef.current.setSceneImage(img)
+      engineAtPick.setSceneImage(img)
       setImageName(file.name)
     } catch (err) {
       setImageName(null)

@@ -270,6 +270,9 @@ function deriveSwarmData(image: PhotoSwarmImage, side: number, seed: number): Sw
 
   for (let p = 0; p < count; p++) {
     const target = rng() * total
+    // LUMINANCE_FLOOR keeps total > 0, so the uniform fallback never runs;
+    // if the floor is ever removed, note it draws a DIFFERENT number of rng()
+    // values than the taken branch, which would fork determinism per pixel.
     const pixelIndex = total > 0 ? lowerBound(cdf, target) : Math.floor(rng() * n)
     const px = pixelIndex % width
     const py = Math.floor(pixelIndex / width)

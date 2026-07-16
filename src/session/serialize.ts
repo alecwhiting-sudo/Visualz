@@ -84,13 +84,21 @@ export function parseSession(json: string): SessionDoc {
     if (typeof img.data !== 'string') {
       throw new Error('Session scene.image.data must be a base64 string')
     }
+    const expectedLength = width * height * 4
+    // Cheap pre-decode bound: base64 encodes 3 bytes per 4 chars (+ padding),
+    // so a crafted doc can't make atob chew through a huge string that the
+    // byte-length check below would reject anyway.
+    if (img.data.length > Math.ceil(expectedLength / 3) * 4) {
+      throw new Error(
+        `Session scene.image.data is ${img.data.length} chars, too long for width*height*4 = ${expectedLength} bytes`,
+      )
+    }
     let decodedLength: number
     try {
       decodedLength = atob(img.data).length
     } catch (e) {
       throw new Error(`Session scene.image.data is not valid base64: ${e instanceof Error ? e.message : String(e)}`)
     }
-    const expectedLength = width * height * 4
     if (decodedLength !== expectedLength) {
       throw new Error(
         `Session scene.image.data decodes to ${decodedLength} bytes, expected width*height*4 = ${expectedLength}`,
