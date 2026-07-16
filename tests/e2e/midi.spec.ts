@@ -19,11 +19,12 @@ import { expect, test } from '@playwright/test'
  * "not supported" state without throwing, with no device list and no Learn
  * button. A deeper test injecting a fake MIDIAccess via CDP (to exercise the
  * device list / Learn flow end-to-end with simulated hardware) was not
- * attempted — Playwright has no cheap flag to auto-grant WebMIDI permission,
- * and the task called this enhancement optional. attachMidi's device-toggle
- * and learn-binding logic is covered by its own unit tests
- * (tests/unit/midi.test.ts) plus code-level reasoning; this spec covers
- * App.tsx's wiring for the one path that's cheap and deterministic headlessly.
+ * attempted — Playwright has no cheap flag to auto-grant WebMIDI permission.
+ * attachMidi's runtime behavior (device map, hot-plug resync, active-gating,
+ * learn activity, detach) is unit-tested against a fake MIDIAccess in
+ * tests/unit/midiAttach.test.ts; the pure decoder in tests/unit/midi.test.ts;
+ * this spec covers App.tsx's wiring for the one path that's cheap and
+ * deterministic headlessly.
  */
 
 test('MIDI panel reaches "not supported" in headless Chromium and never throws', async ({ page }) => {

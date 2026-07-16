@@ -263,6 +263,14 @@ export function App() {
   const onSceneChange = (id: string) => {
     const canvas = canvasRef.current
     if (!canvas || !SCENES[id]) return
+    // A dropdown scene switch tears down the recorder with the engine; the
+    // in-progress take used to vanish silently (review finding). Stop and
+    // stash it instead — the mid-performance way to change visuals without
+    // ending the take is the handoff switch (docs/HANDOFF.md), not this.
+    if (engineRef.current?.isRecording) {
+      const doc = engineRef.current.stopRecording()
+      if (doc) setLastSession(doc)
+    }
     // The AudioEngine outlives the Engine across a scene switch: the track
     // keeps playing and the transport row stays put (keepAudio skips the
     // dispose-time stop; the new engine adopts it and fast-forwards its
@@ -561,6 +569,14 @@ export function App() {
                 // source now exists (resume creates it in the same call), so
                 // startRecording's not-playing guard passes and audio + the
                 // recording start on the same transport frame.
+                if (armed && engine.audio.contextState !== 'running') {
+                  // iOS: the context can still be waking (ctx.resume is async);
+                  // a recording begun now would open on a frozen clock and then
+                  // time-jump — stay armed, audio starts when the context does,
+                  // and the next ▶ press fires the take. No-op on desktop,
+                  // where the context is already running.
+                  return
+                }
                 if (armed) {
                   setArmed(false)
                   try {
