@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Engine } from '../engine/engine'
 import { SCENES } from '../scenes/registry'
 import { attachKeyboard } from '../mapping/keyboard'
+import { attachMidi, type MidiDevice, type MidiHandle } from '../mapping/midi'
 import { serializeSession, parseSession } from '../session/serialize'
 import type { SessionDoc } from '../session/types'
 import { exportSession } from '../export/client'
@@ -95,12 +96,54 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
+/** The MIDI section's one-line status ("MIDI: 2 inputs" / "no inputs" / "not supported"). */
+function formatMidiStatus(supported: boolean, deviceCount: number): string {
+  if (!supported) return 'MIDI: not supported in this browser'
+  if (deviceCount === 0) return 'MIDI: no inputs'
+  return `MIDI: ${deviceCount} input${deviceCount === 1 ? '' : 's'}`
+}
+
 export function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const engineRef = useRef<Engine | null>(null)
   const detachKeyboardRef = useRef<(() => void) | null>(null)
+  const midiHandleRef = useRef<MidiHandle | null>(null)
   const meterIntervalRef = useRef<number | null>(null)
   const [engine, setEngine] = useState<Engine | null>(null)
+
+  // --- MIDI (ARCHITECTURE.md §3.4's fourth mapping-table frontend) ---------
+  // `midiSupported`/`midiDevices` mirror attachMidi's onChange callback so the
+  // panel can render live device checkboxes; per-device active/inactive state
+  // lives inside the MidiHandle itself (session-scoped only, per the task:
+  // no localStorage here — a full persistence story is a later Electron-wrapper
+  // task). `learnMode` is the global "Learn" toggle; `armedParam` is which
+  // param a slider tweak most recently armed while learn mode is on — the next
+  // CC/note from an *active* device binds to it, then only `armedParam` clears
+  // (learn mode itself stays on so the next tweak can arm another param).
+  const [midiSupported, setMidiSupported] = useState(false)
+  const [midiDevices, setMidiDevices] = useState<MidiDevice[]>([])
+  const [learnMode, setLearnMode] = useState(false)
+  const [armedParam, setArmedParam] = useState<string | null>(null)
+  // Kept in a ref too so the MIDI activity callback — set up once per engine
+  // attach, same lifecycle as attachKeyboard's closure — always reads the
+  // latest armed param rather than whatever was armed when it was created.
+  const armedParamRef = useRef<string | null>(null)
+  useEffect(() => {
+    armedParamRef.current = armedParam
+  }, [armedParam])
+  // Escape (or clicking Learn again, handled in its own onClick) ends learn
+  // mode entirely, per spec — not just clearing whichever param was armed.
+  useEffect(() => {
+    if (!learnMode) return
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        setLearnMode(false)
+        setArmedParam(null)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [learnMode])
   const [sceneId, setSceneId] = useState(DEFAULT_SCENE_ID)
   const [levels, setLevels] = useState<Record<string, number>>({})
   const [trackName, setTrackName] = useState<string | null>(null)
@@ -150,6 +193,32 @@ export function App() {
       })
     }, 100)
     detachKeyboardRef.current = attachKeyboard(window, (event) => e.queueInput(event))
+    midiHandleRef.current = attachMidi(
+      e,
+      (state) => {
+        setMidiSupported(state.supported)
+        setMidiDevices(state.devices)
+      },
+      (signalName) => {
+        // Learn mode: the next CC/note to arrive from an active device while
+        // a param is armed binds it — `midi.cc.<n>`/`midi.note.<n>` are just
+        // signal names, so this is exactly the same `setBinding` path the
+        // expression text field uses (ARCHITECTURE.md §3.8's DSL grammar
+        // already resolves bare identifiers as signals). Clear the ref
+        // synchronously (not just the state) so a burst of messages from the
+        // same encoder tick can't double-bind before React re-renders.
+        const target = armedParamRef.current
+        if (!target) return
+        armedParamRef.current = null
+        try {
+          e.setBinding(target, signalName)
+        } catch {
+          // `midi.cc.<n>`/`midi.note.<n>` always compile; guard anyway rather
+          // than crash on a future change to signal-name validity.
+        }
+        setArmedParam(null)
+      },
+    )
   }
 
   const detachLiveEngine = () => {
@@ -159,6 +228,11 @@ export function App() {
     }
     detachKeyboardRef.current?.()
     detachKeyboardRef.current = null
+    midiHandleRef.current?.detach()
+    midiHandleRef.current = null
+    setMidiDevices([])
+    setLearnMode(false)
+    setArmedParam(null)
   }
 
   useEffect(() => {
@@ -600,6 +674,51 @@ export function App() {
 
         {engine && (
           <section>
+            <h2>MIDI</h2>
+            <p className="session-status">{formatMidiStatus(midiSupported, midiDevices.length)}</p>
+            {midiDevices.length > 0 && (
+              <ul className="midi-devices">
+                {midiDevices.map((d) => (
+                  <li key={d.id}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={d.active}
+                        onChange={(ev) => midiHandleRef.current?.setDeviceActive(d.id, ev.target.checked)}
+                      />
+                      {d.name}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {midiSupported && (
+              <button
+                type="button"
+                className={`session-button${learnMode ? ' midi-learning' : ''}`}
+                onClick={() => {
+                  setLearnMode((on) => {
+                    const next = !on
+                    if (!next) setArmedParam(null)
+                    return next
+                  })
+                }}
+              >
+                {learnMode ? 'Stop learning' : 'Learn'}
+              </button>
+            )}
+            {learnMode && (
+              <p className="session-status">
+                {armedParam
+                  ? `learning "${armedParam}" — move a hardware control (Esc to stop)`
+                  : 'learn mode on — move a param slider to arm it (Esc to stop)'}
+              </p>
+            )}
+          </section>
+        )}
+
+        {engine && (
+          <section>
             <h2>Perform</h2>
             <div className="perform">
               <TriggerPads engine={engine} />
@@ -627,7 +746,13 @@ export function App() {
             </label>
             <h2>{engine.scene.meta.name}</h2>
             {engine.scene.params.map((p) => (
-              <Knob key={p.name} engine={engine} schema={p} />
+              <Knob
+                key={p.name}
+                engine={engine}
+                schema={p}
+                learnArm={learnMode ? () => setArmedParam(p.name) : undefined}
+                armed={armedParam === p.name}
+              />
             ))}
           </section>
         )}
@@ -775,25 +900,51 @@ function XyPad({ engine }: { engine: Engine }) {
 function Knob({
   engine,
   schema,
+  learnArm,
+  armed = false,
 }: {
   engine: Engine
   schema: { name: string; label: string; min: number; max: number; default: number; step?: number }
+  /** Present (and callable) only while the panel's global Learn mode is on;
+   * calling it arms this param as the next MIDI-learn bind target. Slider
+   * drags call it on every change while learn mode is on — the "tweak a
+   * param to arm it" flow (see App's MIDI section). */
+  learnArm?: () => void
+  /** True when this is the currently-armed learn target — highlights the row. */
+  armed?: boolean
 }) {
   const [value, setValue] = useState(engine.scene.getParam(schema.name))
-  const [exprText, setExprText] = useState('')
-  const [bound, setBound] = useState(false)
+  const [exprText, setExprText] = useState(engine.getBinding(schema.name) ?? '')
+  const [bound, setBound] = useState(engine.getBinding(schema.name) !== undefined)
   const [error, setError] = useState<string | null>(null)
+  // Tracks the last binding this component itself observed, so the effect
+  // below can tell "the engine's binding changed under us" (a MIDI-learn
+  // bind, or a fresh engine from a scene switch/session load) apart from our
+  // own applyExpr calls, which already keep exprText/bound in sync.
+  const lastSeenBindingRef = useRef(engine.getBinding(schema.name))
+
+  useEffect(() => {
+    const current = engine.getBinding(schema.name)
+    if (current !== lastSeenBindingRef.current) {
+      lastSeenBindingRef.current = current
+      setExprText(current ?? '')
+      setBound(current !== undefined)
+      setError(null)
+    }
+  })
 
   const applyExpr = (text: string) => {
     const src = text.trim()
     if (src === '') {
       engine.clearBinding(schema.name)
+      lastSeenBindingRef.current = undefined
       setBound(false)
       setError(null)
       return
     }
     try {
       engine.setBinding(schema.name, src)
+      lastSeenBindingRef.current = src
       setBound(true)
       setError(null)
     } catch (e) {
@@ -803,7 +954,7 @@ function Knob({
   }
 
   return (
-    <label className="knob">
+    <label className={`knob${armed ? ' knob-armed' : ''}`}>
       <span>
         {schema.label} <em>{bound ? 'ƒ(t)' : value.toFixed(2)}</em>
       </span>
@@ -818,6 +969,11 @@ function Knob({
           const v = Number(ev.target.value)
           setValue(v)
           engine.setParam(schema.name, v)
+          // The "tweak a param to arm it" half of the learn flow: any slider
+          // move while learn mode is on (re-)arms this param as the bind
+          // target, moving the armed highlight here even if another knob was
+          // armed a moment ago.
+          learnArm?.()
         }}
       />
       <input
