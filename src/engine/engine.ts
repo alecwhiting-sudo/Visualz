@@ -15,11 +15,28 @@ import type { SourceEvent } from '../mapping/types'
 import { SessionRecorder } from '../session/recorder'
 import { SessionPlayer, type PlayerTarget } from '../session/player'
 import type { SessionAudio, SessionDoc } from '../session/types'
+import { decodeImageBase64, encodeImageBase64 } from './imageCodec'
 
 interface Binding {
   src: string
   compiled: CompiledExpr
   state: DslState
+}
+
+/** A scene's imported-media snapshot (Photo Swarm task): duck-typed, not part
+ * of `SceneRuntime` — most scenes have no imported-media concept. */
+export interface SceneImage {
+  width: number
+  height: number
+  data: Uint8ClampedArray
+}
+
+interface ImageCapableScene {
+  setImage(img: SceneImage | null): void
+}
+
+function acceptsImage(scene: SceneRuntime): scene is SceneRuntime & ImageCapableScene {
+  return typeof (scene as unknown as Partial<ImageCapableScene>).setImage === 'function'
 }
 
 export interface EngineOptions {
@@ -56,6 +73,13 @@ export class Engine {
 
   private recorder: SessionRecorder | null = null
   private player: SessionPlayer | null = null
+  /** Last image handed to `setSceneImage`, kept so `startRecording` can
+   * snapshot it and callers can reapply it after swapping to a new scene
+   * instance (App.tsx's scene-switch flow constructs a fresh Engine/scene per
+   * switch, so "reapply on scene change" is that caller's responsibility —
+   * this field is what it reapplies from). `null` after an explicit
+   * `setSceneImage(null)` or a `loadSession` whose doc had no `scene.image`. */
+  private storedImage: SceneImage | null = null
   /** Set by `loadSession` when the loaded doc's audio is `kind: 'file'`; drives
    * signal publishing during replay instead of the (stopped) live AudioEngine. */
   private sessionTimeline: FeatureTimeline | null = null
@@ -196,6 +220,23 @@ export class Engine {
     return this.scene.getShaderSources ? this.scene.getShaderSources() : []
   }
 
+  /**
+   * Image material for image-driven scenes (Photo Swarm task): forwards to
+   * the scene via a duck-typed `setImage` and remembers the snapshot
+   * regardless of whether the current scene accepts it, so a caller that
+   * switches scenes afterward can decide to reapply it. `null` reverts an
+   * image-capable scene to its built-in fallback.
+   */
+  setSceneImage(img: SceneImage | null): void {
+    this.storedImage = img
+    if (acceptsImage(this.scene)) this.scene.setImage(img)
+  }
+
+  /** Duck-type check for the UI: does the current scene accept `setSceneImage`? */
+  sceneAcceptsImage(): boolean {
+    return acceptsImage(this.scene)
+  }
+
   /** True while a session recording is in progress (`startRecording()` ran, `stopRecording()` hasn't). */
   get isRecording(): boolean {
     return this.recorder !== null
@@ -233,6 +274,15 @@ export class Engine {
     const shaders = this.scene.getShaderSources
       ? Object.fromEntries(this.scene.getShaderSources().map((s) => [s.key, s.source]))
       : undefined
+    // Photo Swarm task: the stored image, base64-encoded, or omitted entirely
+    // (not even `{}`) when none has been set — mirrors `shaders` above.
+    const image = this.storedImage
+      ? {
+          width: this.storedImage.width,
+          height: this.storedImage.height,
+          data: encodeImageBase64(this.storedImage.data),
+        }
+      : undefined
     this.recorder = new SessionRecorder({
       seed: this.seed,
       fps: this.transport.fps,
@@ -241,6 +291,7 @@ export class Engine {
       bindings,
       audio,
       shaders,
+      image,
     })
   }
 
@@ -296,6 +347,23 @@ export class Engine {
         )
       }
       this.scene.setShaderSource(key, source)
+    }
+
+    // Photo Swarm task: apply doc.scene.image if present and the scene accepts
+    // images; silently ignored (not thrown) if the scene has no `setImage` —
+    // unlike shaders/bindings, an image-driven scene id is not guaranteed by
+    // `doc.scene.id` alone (a hand-edited doc could carry a stale image field
+    // after a scene swap). Reapplying unconditionally (rather than only when
+    // `doc.scene.image` is present) makes the scene's image state a pure
+    // function of the doc, independent of whatever this Engine/scene instance
+    // rendered before this call.
+    if (acceptsImage(this.scene)) {
+      this.storedImage = doc.scene.image
+        ? { width: doc.scene.image.width, height: doc.scene.image.height, data: decodeImageBase64(doc.scene.image.data) }
+        : null
+      this.scene.setImage(this.storedImage)
+    } else {
+      this.storedImage = null
     }
 
     this.player = new SessionPlayer(doc)

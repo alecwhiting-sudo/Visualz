@@ -21,6 +21,9 @@ function isFiniteNumber(v: unknown): v is number {
 
 const KNOWN_EVENT_TYPES = new Set(['input', 'inputSignal', 'param', 'binding', 'shader'])
 const MAX_SHADER_SOURCE_LENGTH = 100_000
+/** Photo Swarm task: caps `scene.image`'s pixel count (width*height), keeping
+ * the base64 snapshot bounded (~256KB raw at the ceiling) in every session doc. */
+const MAX_IMAGE_PIXELS = 65_536
 
 export function parseSession(json: string): SessionDoc {
   let raw: unknown
@@ -60,6 +63,38 @@ export function parseSession(json: string): SessionDoc {
       if (source.length > MAX_SHADER_SOURCE_LENGTH) {
         throw new Error(`Session scene.shaders.${key} exceeds max length (${MAX_SHADER_SOURCE_LENGTH})`)
       }
+    }
+  }
+  if (raw.scene.image !== undefined) {
+    const img = raw.scene.image
+    if (!isRecord(img)) {
+      throw new Error('Session scene.image must be an object when present')
+    }
+    if (!Number.isInteger(img.width) || (img.width as number) <= 0) {
+      throw new Error('Session scene.image.width must be a positive integer')
+    }
+    if (!Number.isInteger(img.height) || (img.height as number) <= 0) {
+      throw new Error('Session scene.image.height must be a positive integer')
+    }
+    const width = img.width as number
+    const height = img.height as number
+    if (width * height > MAX_IMAGE_PIXELS) {
+      throw new Error(`Session scene.image is ${width}x${height} (${width * height} px), exceeding the ${MAX_IMAGE_PIXELS}px limit`)
+    }
+    if (typeof img.data !== 'string') {
+      throw new Error('Session scene.image.data must be a base64 string')
+    }
+    let decodedLength: number
+    try {
+      decodedLength = atob(img.data).length
+    } catch (e) {
+      throw new Error(`Session scene.image.data is not valid base64: ${e instanceof Error ? e.message : String(e)}`)
+    }
+    const expectedLength = width * height * 4
+    if (decodedLength !== expectedLength) {
+      throw new Error(
+        `Session scene.image.data decodes to ${decodedLength} bytes, expected width*height*4 = ${expectedLength}`,
+      )
     }
   }
   if (!isRecord(raw.bindings)) {

@@ -312,6 +312,89 @@ describe('parseSession validation', () => {
   })
 })
 
+// --- scene.image validation (Photo Swarm task) ----------------------------
+
+/** Base64 of `width*height*4` arbitrary bytes, for image-field fixtures. */
+function imageBase64(width: number, height: number): string {
+  const bytes = new Uint8Array(width * height * 4)
+  for (let i = 0; i < bytes.length; i++) bytes[i] = i % 256
+  return btoa(String.fromCharCode(...bytes))
+}
+
+describe('parseSession scene.image validation', () => {
+  it('19a) accepts a session with no scene.image at all (backward compatible)', () => {
+    const doc = docWithEvents([])
+    expect(() => parseSession(JSON.stringify(doc))).not.toThrow()
+    expect(parseSession(JSON.stringify(doc)).scene.image).toBeUndefined()
+  })
+
+  it('19b) accepts a well-formed scene.image and round-trips it exactly', () => {
+    const doc = {
+      ...docWithEvents([]),
+      scene: { id: 'lissajous', params: {}, image: { width: 2, height: 3, data: imageBase64(2, 3) } },
+    }
+    const parsed = parseSession(JSON.stringify(doc))
+    expect(parsed.scene.image).toEqual(doc.scene.image)
+  })
+
+  it('19c) rejects scene.image that is not an object', () => {
+    const doc = { ...docWithEvents([]), scene: { id: 'lissajous', params: {}, image: 'nope' } }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/scene\.image/i)
+  })
+
+  it('19d) rejects a non-positive or non-integer width', () => {
+    for (const width of [0, -1, 1.5]) {
+      const doc = {
+        ...docWithEvents([]),
+        scene: { id: 'lissajous', params: {}, image: { width, height: 2, data: imageBase64(2, 2) } },
+      }
+      expect(() => parseSession(JSON.stringify(doc))).toThrow(/width/i)
+    }
+  })
+
+  it('19e) rejects a non-positive or non-integer height', () => {
+    for (const height of [0, -1, 2.5]) {
+      const doc = {
+        ...docWithEvents([]),
+        scene: { id: 'lissajous', params: {}, image: { width: 2, height, data: imageBase64(2, 2) } },
+      }
+      expect(() => parseSession(JSON.stringify(doc))).toThrow(/height/i)
+    }
+  })
+
+  it('19f) rejects width*height exceeding the 65536-pixel limit', () => {
+    const doc = {
+      ...docWithEvents([]),
+      scene: { id: 'lissajous', params: {}, image: { width: 300, height: 300, data: '' } },
+    }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/65536/)
+  })
+
+  it('19g) rejects non-string data', () => {
+    const doc = {
+      ...docWithEvents([]),
+      scene: { id: 'lissajous', params: {}, image: { width: 2, height: 2, data: 42 } },
+    }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/data/i)
+  })
+
+  it('19h) rejects data that is not valid base64', () => {
+    const doc = {
+      ...docWithEvents([]),
+      scene: { id: 'lissajous', params: {}, image: { width: 2, height: 2, data: '!!!not base64!!!' } },
+    }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/base64/i)
+  })
+
+  it('19i) rejects data whose decoded length does not match width*height*4', () => {
+    const doc = {
+      ...docWithEvents([]),
+      scene: { id: 'lissajous', params: {}, image: { width: 4, height: 4, data: imageBase64(2, 2) } },
+    }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/decodes to/i)
+  })
+})
+
 // --- 4. End-to-end determinism (fake engine) ------------------------------------
 
 describe('determinism (fake PlayerTarget end-to-end)', () => {

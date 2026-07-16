@@ -37,6 +37,8 @@ export interface SessionDoc {
     /** Initial code-layer sources per shader stage; omitted (not even {})
      * when the recording snapshot had none (ARCHITECTURE.md §3.3 code layer). */
     shaders?: Record<string, string>
+    /** Downscaled RGBA snapshot for image-driven scenes; omitted when none was set. */
+    image?: { width: number; height: number; data: string } // base64 of width*height*4 bytes
   }
   bindings: Record<string, string> // initial expression bindings
   audio: SessionAudio

@@ -6,6 +6,7 @@ import { KaleidoScene } from './builtin/kaleido'
 import { GrayScottScene } from './builtin/grayscott'
 import { MorphogenScene } from './builtin/morphogen'
 import { TunnelScene } from './builtin/tunnel'
+import { PhotoSwarmScene } from './builtin/photoswarm'
 import { CompositeScene, type CompositeChild } from './composite'
 import type { SceneRuntime } from './types'
 
@@ -43,6 +44,7 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
   grayscott: { name: 'Reaction-Diffusion', create: () => new GrayScottScene() },
   morph: { name: 'Morphogen', create: () => new MorphogenScene() },
   tunnel: { name: 'Audio Tunnel', create: () => new TunnelScene() },
+  photoswarm: { name: 'Photo Swarm', create: () => new PhotoSwarmScene() },
   'blend-julia-flow': {
     name: 'Julia × Flow field',
     create: () =>

@@ -9,6 +9,7 @@ import type { ExportAudio } from '../export/encode'
 import { analyzeAudio } from '../audio/analysis'
 import { serializeTimeline } from '../audio/timeline'
 import { mulberry32 } from '../core/prng'
+import { decodeImageBase64 } from '../engine/imageCodec'
 
 /**
  * Headless test harness (ARCHITECTURE.md §5). `/?test=1&seed=S` boots the engine
@@ -71,6 +72,10 @@ export interface VizTestApi {
   setShaderSource(key: string, source: string): string | null
   /** Code layer stages the current scene exposes; `[]` if it has none. */
   getShaderSources(): { key: string; source: string }[]
+  /** Photo Swarm task: decodes a base64 RGBA image and forwards it to
+   * `Engine.setSceneImage`, so specs can exercise the real-image path without
+   * a fixture file crossing the Playwright/page boundary. */
+  setSceneImage(width: number, height: number, base64: string): void
 }
 
 declare global {
@@ -238,6 +243,9 @@ export function bootTestMode(root: HTMLElement): void {
       }
     },
     getShaderSources: () => engine.getShaderSources().map(({ key, source }) => ({ key, source })),
+    setSceneImage: (width, height, base64) => {
+      engine.setSceneImage({ width, height, data: decodeImageBase64(base64) })
+    },
     makeFileSessionDoc: (seconds) => {
       const pcm = synthesizeKickTrackPCM(seconds)
       const timeline = analyzeAudio(pcm, KICK_SAMPLE_RATE)

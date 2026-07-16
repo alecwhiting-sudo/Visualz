@@ -13,6 +13,37 @@ const KEYBOARD_HINT = '1-6 freqX · q/w/e freqY · space pulse drift · f/g flas
 
 const DEFAULT_SCENE_ID = 'lissajous'
 
+// Photo Swarm task: imported images are downscaled to this max dimension
+// before being handed to the engine — keeps the per-session base64 snapshot
+// bounded (MAX_IMAGE_PIXELS in session/serialize.ts is 65536 = 256x256) and
+// keeps CPU importance-sampling cheap regardless of the source photo's size.
+const MAX_IMAGE_DIM = 256
+
+/**
+ * Decodes a picked image file, downscales it (canvas 2D — this is a live-
+ * input adapter, so browser-dependent resampling is fine; REQUIREMENTS.md's
+ * determinism rule is about scene/engine code, not the one-time act of
+ * turning a user file into pixels) so its longer side is at most
+ * `MAX_IMAGE_DIM`, and returns raw RGBA bytes ready for `Engine.setSceneImage`.
+ */
+async function loadAndDownscaleImage(file: File): Promise<{ width: number; height: number; data: Uint8ClampedArray }> {
+  const bitmap = await createImageBitmap(file)
+  try {
+    const scale = Math.min(1, MAX_IMAGE_DIM / Math.max(bitmap.width, bitmap.height))
+    const width = Math.max(1, Math.round(bitmap.width * scale))
+    const height = Math.max(1, Math.round(bitmap.height * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('2D canvas context unavailable')
+    ctx.drawImage(bitmap, 0, 0, width, height)
+    return { width, height, data: ctx.getImageData(0, 0, width, height).data }
+  } finally {
+    bitmap.close()
+  }
+}
+
 /** Creates and starts the normal live-mode engine on a canvas (factored out so
  * it can be re-invoked after a session replay finishes, or after switching
  * scenes from the panel dropdown). */
@@ -65,6 +96,12 @@ export function App() {
   // directly after Stop — no round-trip through the file system (essential on
   // iPhone, where re-picking a just-saved file is clumsy).
   const [lastSession, setLastSession] = useState<SessionDoc | null>(null)
+  // Photo Swarm task: the last image picked via the Image input, kept outside
+  // any single Engine instance so it survives a scene switch, which tears
+  // down the whole Engine (a fresh scene instance per docs/PARTICLES.md §0 —
+  // there's no in-place scene-swap hook) and would otherwise lose it.
+  const imageRef = useRef<{ width: number; height: number; data: Uint8ClampedArray } | null>(null)
+  const [imageName, setImageName] = useState<string | null>(null)
   // iOS: an AudioContext started outside a still-valid user gesture stays
   // suspended and plays SILENTLY (the graph runs, no sound). Detected by
   // polling contextState while a file is "playing"; the fix is a button whose
@@ -116,7 +153,14 @@ export function App() {
     setEngine(null)
     setRecording(false)
     setSceneId(id)
-    attachLiveEngine(createLiveEngine(canvas, id))
+    const newEngine = createLiveEngine(canvas, id)
+    // Reapply the last-picked image to the new scene, if it accepts one — the
+    // new scene is a fresh instance (createLiveEngine builds a whole new
+    // Engine) so it starts with no image of its own.
+    if (imageRef.current && newEngine.sceneAcceptsImage()) {
+      newEngine.setSceneImage(imageRef.current)
+    }
+    attachLiveEngine(newEngine)
   }
 
   const onFile = async (file: File | undefined) => {
@@ -131,6 +175,20 @@ export function App() {
       )
     })
     setTrackName((current) => (current?.startsWith('Loading') ? file.name : current))
+  }
+
+  const onImageFile = async (file: File | undefined) => {
+    if (!file || !engineRef.current) return
+    setImageName(`Loading ${file.name}…`)
+    try {
+      const img = await loadAndDownscaleImage(file)
+      imageRef.current = img
+      engineRef.current.setSceneImage(img)
+      setImageName(file.name)
+    } catch (err) {
+      setImageName(null)
+      setSessionError(err instanceof Error ? err.message : String(err))
+    }
   }
 
   const onToggleRecording = () => {
@@ -188,7 +246,12 @@ export function App() {
       // can fire synchronously (bad scene id) before a queued setSceneId below
       // has re-rendered this closure with the new value.
       const restoreSceneId = SCENES[doc.scene.id] ? doc.scene.id : previousSceneId
-      if (liveCanvas) attachLiveEngine(createLiveEngine(liveCanvas, restoreSceneId))
+      if (!liveCanvas) return
+      const newEngine = createLiveEngine(liveCanvas, restoreSceneId)
+      if (imageRef.current && newEngine.sceneAcceptsImage()) {
+        newEngine.setSceneImage(imageRef.current)
+      }
+      attachLiveEngine(newEngine)
     }
 
     let replayEngine: Engine
@@ -292,6 +355,26 @@ export function App() {
             onChange={(ev) => onFile(ev.target.files?.[0])}
           />
           {trackName ?? 'Load audio file (demo signals until then)'}
+        </label>
+        <label className="file">
+          <input
+            type="file"
+            accept="image/*"
+            // Enabled only when the current scene has an image-driven concept
+            // (Photo Swarm task's `sceneAcceptsImage()` duck-type check), and
+            // disabled while recording: a mid-recording image swap isn't
+            // captured as a timestamped event (it's snapshot-only, taken at
+            // startRecording()), so replaying the recording could never
+            // reproduce it anyway — disabling avoids a swap that silently
+            // doesn't show up on replay.
+            disabled={!engine || !engine.sceneAcceptsImage() || recording}
+            onChange={(ev) => {
+              const file = ev.target.files?.[0]
+              ev.target.value = ''
+              onImageFile(file)
+            }}
+          />
+          {imageName ?? 'Load image (photo-swarm-style scenes only)'}
         </label>
         {audioBlocked && (
           <button

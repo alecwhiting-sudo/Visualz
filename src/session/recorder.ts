@@ -14,6 +14,9 @@ export interface SessionSnapshot {
    * entirely — not even `{}` — from `SessionDoc.scene` when this is undefined,
    * so existing snapshots/tests that don't pass it are unaffected. */
   shaders?: Record<string, string>
+  /** Base64-encoded RGBA snapshot for image-driven scenes (Photo Swarm task).
+   * Omitted entirely from `SessionDoc.scene` when this is undefined. */
+  image?: { width: number; height: number; data: string }
 }
 
 /**
@@ -59,6 +62,7 @@ export class SessionRecorder {
         id: this.snapshot.sceneId,
         params: { ...this.snapshot.params },
         ...(this.snapshot.shaders !== undefined ? { shaders: { ...this.snapshot.shaders } } : {}),
+        ...(this.snapshot.image !== undefined ? { image: { ...this.snapshot.image } } : {}),
       },
       bindings: { ...this.snapshot.bindings },
       audio: this.snapshot.audio ?? { kind: 'demo' },
