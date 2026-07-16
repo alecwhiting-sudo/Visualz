@@ -17,6 +17,10 @@ export interface PlayerTarget {
    * error here means the doc is corrupt (it was recorded with a compiling
    * shader), so it throws rather than swallowing the failure. */
   setShaderSource(key: string, source: string): void
+  /** Scene handoff (docs/HANDOFF.md §4): in-place switch to scene `id`. Routed
+   * straight to `Engine.switchScene`, which never re-records while a player
+   * is driving it (recorder is null during replay/export) — invariant I6. */
+  switchScene(id: string): void
 }
 
 /**
@@ -59,6 +63,9 @@ export class SessionPlayer {
           break
         case 'shader':
           target.setShaderSource(event.key, event.source)
+          break
+        case 'switch':
+          target.switchScene(event.toScene)
           break
       }
       this.cursor++

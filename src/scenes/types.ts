@@ -24,6 +24,32 @@ export interface SceneMeta {
   family: 'geometry' | 'particles' | 'simulation'
 }
 
+/**
+ * Scene handoff (docs/HANDOFF.md): the normalized RGBA readback of a scene's
+ * final rendered frame, capped at `INGEST_MAX` (`src/gpu/snapshot.ts`) on the
+ * long axis. Structurally identical to `engine.ts`'s `SceneImage`/
+ * photoswarm's `PhotoSwarmImage` on purpose — TS's structural typing makes
+ * them mutually assignable with no adapter code.
+ */
+export interface SceneSnapshot {
+  width: number
+  height: number
+  data: Uint8ClampedArray
+}
+
+/**
+ * Duck-typed capability (like `setImage` in engine.ts) — NOT part of
+ * `SceneRuntime`, since most scenes hold no spatial field to seed from a
+ * handoff snapshot. `Engine.switchScene` detects it structurally
+ * (`typeof scene.ingest === 'function'`) and calls it immediately after
+ * `init`, before the scene's first `update` (docs/HANDOFF.md §2/§4).
+ * Implementations must be a pure function of (snapshot, the scene's own
+ * seed) — seeded PRNG only, no `Date.now`/`Math.random` (invariant I4).
+ */
+export interface IngestingScene {
+  ingest(snapshot: SceneSnapshot): void
+}
+
 export interface ShaderStage {
   key: string          // stable id, e.g. 'line-fs', 'update-fs', 'render-fs'
   label: string        // human label for the editor dropdown

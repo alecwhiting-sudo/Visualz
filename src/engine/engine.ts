@@ -8,13 +8,15 @@ import { sampleTimeline, serializeTimeline, parseTimeline } from '../audio/timel
 import type { FeatureTimeline } from '../audio/analysis'
 import { compile, type CompiledExpr } from '../dsl/compile'
 import { DslState } from '../dsl/state'
-import type { SceneRuntime, ShaderStage } from '../scenes/types'
+import type { IngestingScene, SceneRuntime, SceneSnapshot, ShaderStage } from '../scenes/types'
+import { SCENES } from '../scenes/registry'
 import { MappingRuntime } from '../mapping/runtime'
 import { DEFAULT_MAPPINGS } from '../mapping/defaults'
 import type { SourceEvent } from '../mapping/types'
 import { SessionRecorder } from '../session/recorder'
 import { SessionPlayer, type PlayerTarget } from '../session/player'
 import type { SessionAudio, SessionDoc } from '../session/types'
+import { readSurfaceSnapshot } from '../gpu/snapshot'
 import { decodeImageBase64, encodeImageBase64 } from './imageCodec'
 
 interface Binding {
@@ -37,6 +39,12 @@ interface ImageCapableScene {
 
 function acceptsImage(scene: SceneRuntime): scene is SceneRuntime & ImageCapableScene {
   return typeof (scene as unknown as Partial<ImageCapableScene>).setImage === 'function'
+}
+
+/** Scene handoff (docs/HANDOFF.md §2/§4): duck-type check for the ingest
+ * capability, mirroring `acceptsImage` above. */
+function hasIngest(scene: SceneRuntime): scene is SceneRuntime & IngestingScene {
+  return typeof (scene as unknown as Partial<IngestingScene>).ingest === 'function'
 }
 
 export interface EngineOptions {
@@ -63,7 +71,15 @@ export class Engine {
   readonly gpu: Gpu
   readonly audio: AudioEngine
   readonly events = new AudioEventDetector()
-  readonly scene: SceneRuntime
+  /** Mutable (docs/HANDOFF.md §9, core-interface change, architect-approved):
+   * an in-place scene switch must reassign this. Backed by a private field +
+   * public getter rather than a bare mutable property so every external
+   * reader (App.tsx: `engine.scene.params`, `.meta`, …) keeps going through
+   * one property access that always observes the current scene. */
+  private _scene: SceneRuntime
+  get scene(): SceneRuntime {
+    return this._scene
+  }
   readonly seed: number
   readonly mappings: MappingRuntime
   /** The canvas as the scene's render destination — always this in v1 (no
@@ -114,13 +130,17 @@ export class Engine {
       }
       this.scene.setShaderSource(key, source)
     },
+    // Scene handoff (docs/HANDOFF.md §4): reuses `switchScene` directly —
+    // recorder is always null while a player drives this (replay/export),
+    // so the call never re-records itself (invariant I6).
+    switchScene: (id) => this.switchScene(id),
   }
 
   constructor(canvas: HTMLCanvasElement | OffscreenCanvas, scene: SceneRuntime, opts: EngineOptions) {
     this.transport = new Transport(opts.mode, opts.fps ?? 60)
     this.gpu = new Gpu(canvas, { width: opts.width, height: opts.height })
     this.surface = new DefaultSurface(this.gpu)
-    this.scene = scene
+    this._scene = scene
     this.seed = opts.seed
     this.audio = opts.audio ?? new AudioEngine()
     this.mappings = new MappingRuntime(DEFAULT_MAPPINGS)
@@ -297,6 +317,56 @@ export class Engine {
     return acceptsImage(this.scene)
   }
 
+  /**
+   * Scene handoff (docs/HANDOFF.md §4): hand off to another scene mid-session
+   * IN PLACE — no Engine rebuild, so the transport, recorder, signal history,
+   * and mappings survive the swap. A's final rendered frame becomes B's
+   * initial conditions via a duck-typed `ingest(snapshot)`; scenes without
+   * `ingest` (julia/mandeldive/morphogen) just boot fresh — a plain hard cut.
+   *
+   * Live callers (the App button/hotkey) and the session player both call
+   * this; the only difference is replay runs with `recorder` null, so it's
+   * never re-recorded (invariant I6). Throws on an unknown scene id — a
+   * corrupt doc must fail loudly, never silently keep rendering A (invariant
+   * I8: the throw can only come from `entry` lookup, `next.init`, or
+   * `next.ingest`, all of which run before A is touched, so a throw always
+   * leaves A intact and nothing recorded).
+   */
+  switchScene(toId: string): void {
+    const entry = SCENES[toId]
+    if (!entry) throw new Error(`switchScene: unknown scene "${toId}"`)
+
+    // 1. Capture A's frame BEFORE building B — B.init() typically ends with a
+    //    gl.clear() on the default framebuffer and would wipe the surface we
+    //    need. Bind the default surface explicitly (§4 note: B's init/render
+    //    may have left a different framebuffer/viewport bound).
+    this.surface.bind()
+    const snapshot: SceneSnapshot = readSurfaceSnapshot(this.gpu.gl, this.gpu.width, this.gpu.height)
+
+    // 2. Build + init + ingest B while A is still alive, so any failure
+    //    leaves A intact (I8) — both calls may throw (e.g. a float-renderable
+    //    check, or a malformed snapshot).
+    const next = entry.create()
+    next.init(this.gpu, this.seed) // seed continuity (I9): always the session seed, never time/switch-derived
+    if (hasIngest(next)) next.ingest(snapshot)
+
+    // 3. Commit: record, dispose A, swap, clear A-scoped state.
+    if (this.recorder) this.recorder.recordSwitch(this.transport.frame, toId)
+    this._scene.dispose()
+    this._scene = next
+    // Bindings reference A's param names; the clear is implicit in the switch
+    // event (no per-param clearBinding events are emitted — replay's
+    // switchScene clears them identically, invariant I6). Mappings/ramps are
+    // left untouched: a stray `params.set(unknownName, …)` write is harmless.
+    this.bindings.clear()
+    // ARCHITECT AMENDMENT (§5a, invariant I11): when B ingested the snapshot,
+    // it becomes the stored image, so a recording started at ANY point after
+    // this switch serializes it into `doc.scene.image` and replays B's true
+    // initial state; non-ingesting B clears it (a plain hard cut has no
+    // material to restore).
+    this.storedImage = hasIngest(next) ? snapshot : null
+  }
+
   /** True while a session recording is in progress (`startRecording()` ran, `stopRecording()` hasn't). */
   get isRecording(): boolean {
     return this.recorder !== null
@@ -425,11 +495,29 @@ export class Engine {
     // `doc.scene.image` is present) makes the scene's image state a pure
     // function of the doc, independent of whatever this Engine/scene instance
     // rendered before this call.
+    //
+    // ARCHITECT AMENDMENT (§5a): `doc.scene.image` may equally be a handoff
+    // snapshot from a switch recorded before `startRecording` (invariant
+    // I11) — `setImage`-only scenes (photoswarm) keep this exact branch
+    // unchanged (its `ingest` is a one-line delegate to `setImage`, so
+    // behavior is identical either way, and only `setImage` can express the
+    // "revert to null/fallback" case `ingest`'s signature can't). Scenes that
+    // ingest but don't accept a plain `setImage` (grayscott/kaleido/tunnel/
+    // flowfield) gain faithful restore via `ingest` when an image is present;
+    // absent an image, their own `init()` above already produced the correct
+    // seeded state, so there is nothing to reapply.
     if (acceptsImage(this.scene)) {
       this.storedImage = doc.scene.image
         ? { width: doc.scene.image.width, height: doc.scene.image.height, data: decodeImageBase64(doc.scene.image.data) }
         : null
       this.scene.setImage(this.storedImage)
+    } else if (hasIngest(this.scene) && doc.scene.image) {
+      this.storedImage = {
+        width: doc.scene.image.width,
+        height: doc.scene.image.height,
+        data: decodeImageBase64(doc.scene.image.data),
+      }
+      this.scene.ingest(this.storedImage)
     } else {
       this.storedImage = null
     }

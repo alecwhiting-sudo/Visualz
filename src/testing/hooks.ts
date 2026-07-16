@@ -28,6 +28,8 @@ export interface VizTestApi {
   startRecording(): void
   stopRecording(): unknown
   loadSession(doc: unknown): void
+  /** Scene handoff (docs/HANDOFF.md §10 step 9): in-place switch to scene `id`. */
+  switchScene(id: string): void
   /**
    * FNV-1a hash of the canvas's current pixels (readPixels). Exact equality of
    * two hashes on the same machine/context proves byte-identical frames — a far
@@ -208,6 +210,7 @@ export function bootTestMode(root: HTMLElement): void {
     startRecording: () => engine.startRecording(),
     stopRecording: () => engine.stopRecording(),
     loadSession: (doc) => engine.loadSession(doc as SessionDoc),
+    switchScene: (id) => engine.switchScene(id),
     pixelHash: () => {
       const { gl } = engine.gpu
       const { width, height } = engine.gpu

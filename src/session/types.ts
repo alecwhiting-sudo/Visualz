@@ -17,6 +17,7 @@ export type SessionEvent =
   | { frame: number; type: 'param'; name: string; value: number } // UI knob
   | { frame: number; type: 'binding'; param: string; src: string | null } // null = cleared
   | { frame: number; type: 'shader'; key: string; source: string } // code-layer hot-recompile
+  | { frame: number; type: 'switch'; toScene: string } // scene handoff (docs/HANDOFF.md)
 
 /**
  * `demo` sessions drive signals from `publishDemoSignals`/the live detector, same

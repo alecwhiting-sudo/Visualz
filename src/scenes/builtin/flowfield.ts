@@ -2,7 +2,8 @@ import { mulberry32 } from '../../core/prng'
 import type { Gpu } from '../../gpu/context'
 import { checkFloatRenderable, FullscreenPass, PingPong, type RenderSurface } from '../../gpu/targets'
 import { snapCountToSide, DEFAULT_COUNT, DEFAULT_SIDE } from '../families/particles/gpgpu'
-import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../types'
+import { importanceSampleState } from '../families/particles/imageSample'
+import type { FrameContext, ParamSchema, SceneRuntime, SceneSnapshot, ShaderStage } from '../types'
 
 /**
  * Particles family, scene 1 (docs/PARTICLES.md §5): a GPGPU flow field. Particle
@@ -211,6 +212,19 @@ export class FlowFieldScene implements SceneRuntime {
 
     gl.clearColor(0, 0, 0, 1)
     gl.clear(gl.COLOR_BUFFER_BIT)
+  }
+
+  /**
+   * Scene handoff (docs/HANDOFF.md §2): importance-samples initial particle
+   * *positions* from A's frame luminance (bright -> dense), velocity zero,
+   * via the same shared sampler photoswarm's home derivation is modeled on
+   * (`imageSample.ts`). Colors are speed-derived in this scene's own render
+   * pass, so there's no color to ingest. Resets the onset-pulse envelope so a
+   * stale shockwave doesn't immediately scatter the freshly-seeded swarm.
+   */
+  ingest(snap: SceneSnapshot): void {
+    this.pp.resize(this.side, importanceSampleState(snap, this.seed, this.side * this.side))
+    this.pulse = 0
   }
 
   setParam(name: string, value: number): void {

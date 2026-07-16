@@ -1,7 +1,8 @@
 import { mulberry32 } from '../../core/prng'
 import type { Gpu } from '../../gpu/context'
 import { checkFloatRenderable, FullscreenPass, PingPong, type RenderSurface } from '../../gpu/targets'
-import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../types'
+import { sampleLuminance } from '../families/particles/imageSample'
+import type { FrameContext, ParamSchema, SceneRuntime, SceneSnapshot, ShaderStage } from '../types'
 
 /**
  * Simulation family, scene 1 (docs/GRAYSCOTT.md): Gray-Scott reaction-diffusion.
@@ -235,6 +236,30 @@ export class GrayScottScene implements SceneRuntime {
 
     gl.clearColor(0, 0, 0, 1)
     gl.clear(gl.COLOR_BUFFER_BIT)
+  }
+
+  /**
+   * Scene handoff (docs/HANDOFF.md §2): luminance -> chemistry, mirroring the
+   * spot-seed's `U=0.5,V=0.25` convention (`V = 0.5*L`, `U = 1-V` per grid
+   * cell). Bright regions of A's frame become active reaction nuclei. Hard-
+   * resets the (U,V) field via `pp.resize`, same "performative reset"
+   * contract as `setGridSize`/the particle family's count re-init.
+   */
+  ingest(snap: SceneSnapshot): void {
+    const side = this.grid
+    const field = new Float32Array(side * side * 4)
+    for (let y = 0; y < side; y++) {
+      for (let x = 0; x < side; x++) {
+        const L = sampleLuminance(snap, x / side, y / side)
+        const i = (y * side + x) * 4
+        const V = 0.5 * L
+        field[i] = 1 - V
+        field[i + 1] = V
+        field[i + 2] = 0
+        field[i + 3] = 1
+      }
+    }
+    this.pp.resize(side, field)
   }
 
   setParam(name: string, value: number): void {

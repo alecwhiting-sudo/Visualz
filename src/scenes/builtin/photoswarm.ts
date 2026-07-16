@@ -2,7 +2,7 @@ import { mulberry32 } from '../../core/prng'
 import type { Gpu } from '../../gpu/context'
 import { checkFloatRenderable, FloatTarget, FullscreenPass, PingPong, type RenderSurface } from '../../gpu/targets'
 import { snapCountToSide, DEFAULT_COUNT, DEFAULT_SIDE } from '../families/particles/gpgpu'
-import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../types'
+import type { FrameContext, ParamSchema, SceneRuntime, SceneSnapshot, ShaderStage } from '../types'
 
 /**
  * Particles family: "Photo Swarm" — an imported photo (or a procedural
@@ -426,6 +426,16 @@ export class PhotoSwarmScene implements SceneRuntime {
 
   private resolveImage(): PhotoSwarmImage {
     return this.userImage ?? generateFallbackImage(this.seed)
+  }
+
+  /**
+   * Scene handoff (docs/HANDOFF.md §2): the snapshot *is* the photo — one line,
+   * since `SceneSnapshot` is structurally identical to `PhotoSwarmImage`. The
+   * swarm re-homes to A's frame and keeps reforming it, exactly like any other
+   * `setImage` call.
+   */
+  ingest(snap: SceneSnapshot): void {
+    this.setImage(snap)
   }
 
   setParam(name: string, value: number): void {

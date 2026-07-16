@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { COUNT_LADDER, hash32, lattice2, snapCountToSide } from '../../src/scenes/families/particles/gpgpu'
+import { importanceSampleState, resampleToRGBA8, sampleLuminance } from '../../src/scenes/families/particles/imageSample'
 import { seedFlowState } from '../../src/scenes/builtin/flowfield'
+import type { SceneSnapshot } from '../../src/scenes/types'
 
 // A WebGL context isn't available under vitest/node (tests/unit/targets.test.ts
 // is not feasible per the task), so this file covers the CPU-side pieces of the
@@ -85,6 +87,95 @@ describe('seedFlowState (docs/PARTICLES.md §5 CPU init)', () => {
       expect(px).toBeLessThanOrEqual(1.5)
       expect(py).toBeGreaterThanOrEqual(-1.5)
       expect(py).toBeLessThanOrEqual(1.5)
+      expect(vx).toBe(0)
+      expect(vy).toBe(0)
+    }
+  })
+})
+
+// --- Scene handoff ingest helpers (docs/HANDOFF.md §2/§8/§10) ---------------
+
+/** A small deterministic gradient snapshot fixture: red ramps left->right,
+ * green ramps top->bottom, so per-pixel luminance/color both vary. */
+function gradientSnapshot(width: number, height: number): SceneSnapshot {
+  const data = new Uint8ClampedArray(width * height * 4)
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4
+      data[i] = Math.round((x / Math.max(1, width - 1)) * 255)
+      data[i + 1] = Math.round((y / Math.max(1, height - 1)) * 255)
+      data[i + 2] = 64
+      data[i + 3] = 255
+    }
+  }
+  return { width, height, data }
+}
+
+describe('sampleLuminance (docs/HANDOFF.md §2 ingest helper)', () => {
+  it('is a pure function of (snapshot, u, v) — same input, same output twice', () => {
+    const snap = gradientSnapshot(16, 16)
+    expect(sampleLuminance(snap, 0.3, 0.7)).toBe(sampleLuminance(snap, 0.3, 0.7))
+  })
+
+  it('returns higher luminance for brighter pixels', () => {
+    const snap = gradientSnapshot(16, 16)
+    // (0,0) is darkest (r=0,g=0); the far corner is brightest (r=255,g=255).
+    expect(sampleLuminance(snap, 0.99, 0.99)).toBeGreaterThan(sampleLuminance(snap, 0.01, 0.01))
+  })
+
+  it('stays within [0, 1]', () => {
+    const snap = gradientSnapshot(8, 8)
+    for (let i = 0; i < 8; i++) {
+      const v = sampleLuminance(snap, i / 8, i / 8)
+      expect(v).toBeGreaterThanOrEqual(0)
+      expect(v).toBeLessThanOrEqual(1)
+    }
+  })
+})
+
+describe('resampleToRGBA8 (docs/HANDOFF.md §2 ingest helper — kaleido)', () => {
+  it('is a pure function of (snapshot, w, h) — same input, same output twice', () => {
+    const snap = gradientSnapshot(20, 12)
+    const a = resampleToRGBA8(snap, 32, 32)
+    const b = resampleToRGBA8(snap, 32, 32)
+    expect(a).toEqual(b)
+  })
+
+  it('produces exactly w*h*4 bytes', () => {
+    const snap = gradientSnapshot(20, 12)
+    expect(resampleToRGBA8(snap, 8, 5).length).toBe(8 * 5 * 4)
+  })
+})
+
+describe('importanceSampleState (docs/HANDOFF.md §2 ingest helper — grayscott/flowfield)', () => {
+  it('is a pure function of (snapshot, seed) — same input, same output twice', () => {
+    const snap = gradientSnapshot(16, 16)
+    const a = importanceSampleState(snap, 42, 256)
+    const b = importanceSampleState(snap, 42, 256)
+    expect(a).toEqual(b)
+  })
+
+  it('diverges for different seeds', () => {
+    const snap = gradientSnapshot(16, 16)
+    const a = importanceSampleState(snap, 1, 256)
+    const b = importanceSampleState(snap, 2, 256)
+    expect(a).not.toEqual(b)
+  })
+
+  it('produces count*4 floats with zero velocity (zw=0) and positions within [-1,1]', () => {
+    const snap = gradientSnapshot(16, 16)
+    const count = 128
+    const out = importanceSampleState(snap, 7, count)
+    expect(out.length).toBe(count * 4)
+    for (let i = 0; i < count; i++) {
+      const x = out[i * 4 + 0]
+      const y = out[i * 4 + 1]
+      const vx = out[i * 4 + 2]
+      const vy = out[i * 4 + 3]
+      expect(x).toBeGreaterThanOrEqual(-1)
+      expect(x).toBeLessThanOrEqual(1)
+      expect(y).toBeGreaterThanOrEqual(-1)
+      expect(y).toBeLessThanOrEqual(1)
       expect(vx).toBe(0)
       expect(vy).toBe(0)
     }

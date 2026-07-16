@@ -1,6 +1,6 @@
 import type { Gpu } from '../../gpu/context'
 import { FloatTarget, FullscreenPass, type RenderSurface } from '../../gpu/targets'
-import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../types'
+import type { FrameContext, ParamSchema, SceneRuntime, SceneSnapshot, ShaderStage } from '../types'
 
 /**
  * Geometry family: a polar "tunnel" flying through a 512-frame ring history
@@ -136,6 +136,41 @@ export class TunnelScene implements SceneRuntime {
 
     gl.clearColor(0, 0, 0, 1)
     gl.clear(gl.COLOR_BUFFER_BIT)
+  }
+
+  /**
+   * Scene handoff (docs/HANDOFF.md §2 — flagged as the weakest fit: tunnel
+   * state is audio history, not a spatial field, but this keeps the ingest
+   * honest rather than force-fitting a fake signal). Prefills the 512-texel
+   * ring from A's frame: texel `i` samples the snapshot's `i/512` column,
+   * averaged over its full height, writing `(r,g,b,luma) -> (bass,mid,high,
+   * rms)`. A's horizontal structure becomes the tunnel's depth rings.
+   */
+  ingest(snap: SceneSnapshot): void {
+    const ring = new Float32Array(HISTORY_SIZE * 4)
+    for (let i = 0; i < HISTORY_SIZE; i++) {
+      const x = Math.min(snap.width - 1, Math.max(0, Math.floor((i / HISTORY_SIZE) * snap.width)))
+      let r = 0
+      let g = 0
+      let b = 0
+      const n = Math.max(1, snap.height)
+      for (let y = 0; y < snap.height; y++) {
+        const idx = (y * snap.width + x) * 4
+        r += snap.data[idx]
+        g += snap.data[idx + 1]
+        b += snap.data[idx + 2]
+      }
+      r /= n * 255
+      g /= n * 255
+      b /= n * 255
+      const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
+      const o = i * 4
+      ring[o] = r
+      ring[o + 1] = g
+      ring[o + 2] = b
+      ring[o + 3] = luma
+    }
+    this.historyTex.upload(ring)
   }
 
   setParam(name: string, value: number): void {

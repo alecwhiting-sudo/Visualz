@@ -252,6 +252,31 @@ body {
   font-size: 13px;
 }
 
+/* Scene handoff controls (docs/HANDOFF.md §6): target selector + "Switch
+   (hand off)" button, shared between the studio Scene section and the
+   perform strip. */
+.switch-control {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.switch-control .scene-select {
+  flex: 1;
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.perform-strip .switch-control {
+  margin-bottom: 0;
+  align-items: center;
+}
+
+.perform-strip .switch-control .scene-select {
+  min-width: 160px;
+}
+
 .keyboard-hint {
   margin-top: 10px;
   font-size: 11px;

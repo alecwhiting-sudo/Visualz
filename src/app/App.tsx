@@ -202,6 +202,25 @@ export function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [learnMode])
   const [sceneId, setSceneId] = useState(DEFAULT_SCENE_ID)
+  // Scene handoff (docs/HANDOFF.md §6): `switchTargetId` is the currently
+  // selected hand-off target (a registry id, independent of the cold-swap
+  // scene dropdown above); `sceneVersion` bumps on every successful switch so
+  // the scene-derived sections below (params panel, shader panel) remount and
+  // re-read state from `engine.scene` — switchScene mutates the SAME Engine
+  // instance in place, so `engine`'s own object identity never changes and
+  // can't be relied on to trigger a refresh the way a scene-dropdown rebuild does.
+  const [switchTargetId, setSwitchTargetId] = useState<string>(() => {
+    const ids = Object.keys(SCENES)
+    return ids.find((id) => id !== DEFAULT_SCENE_ID) ?? ids[0] ?? DEFAULT_SCENE_ID
+  })
+  const [sceneVersion, setSceneVersion] = useState(0)
+  // Mirrors armedParamRef below: the hotkey listener is attached once and must
+  // always read the latest selected target, not whatever was selected when it
+  // was set up.
+  const switchTargetIdRef = useRef(switchTargetId)
+  useEffect(() => {
+    switchTargetIdRef.current = switchTargetId
+  }, [switchTargetId])
   const [levels, setLevels] = useState<Record<string, number>>({})
   const [trackName, setTrackName] = useState<string | null>(null)
   const [recording, setRecording] = useState(false)
@@ -420,6 +439,48 @@ export function App() {
     attachLiveEngine(newEngine)
   }
 
+  /**
+   * Scene handoff (docs/HANDOFF.md §4/§6): hands off to `targetId` IN PLACE —
+   * unlike `onSceneChange` above, this does NOT tear down/rebuild the Engine;
+   * `engine.switchScene` captures the live frame, builds B, ingests it, and
+   * swaps `engine.scene` under the hood. Every path (button, hotkey, replay)
+   * funnels through this one engine method so recording/replay stay identical
+   * (invariant I6). Re-syncs the scene-derived UI afterward (§6): `setSceneId`
+   * updates the label/dropdowns, `setSceneVersion` forces the params/shader
+   * panels below to remount and re-read `engine.scene`, since the Engine
+   * object itself never changes reference on an in-place switch.
+   */
+  const onSwitchScene = (targetId: string) => {
+    const e = engineRef.current
+    if (!e) return
+    try {
+      e.switchScene(targetId)
+      setSceneId(targetId)
+      setSceneVersion((v) => v + 1)
+      setSessionError(null)
+    } catch (err) {
+      // Fail-safe per invariant I8: a throw (unknown id, B.init/B.ingest
+      // failure) leaves the previous scene live and nothing recorded — just
+      // surface the error, the engine already kept a working scene.
+      setSessionError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  // Hotkey (docs/HANDOFF.md §6): "x", handled directly in App (not through the
+  // mapping table — see the spec's rationale) — hands off to whichever target
+  // is currently selected in the switch-control dropdown. Same guards as "v"'s
+  // view-cycle listener (no repeat, not while typing in a form field).
+  useEffect(() => {
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.repeat || isFormFieldTarget(ev.target)) return
+      if (ev.key.toLowerCase() !== 'x') return
+      onSwitchScene(switchTargetIdRef.current)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reads engineRef/switchTargetIdRef, both refs kept fresh independently
+  }, [])
+
   const onFile = async (file: File | undefined) => {
     if (!file || !engineRef.current) return
     // A new file auto-plays on decode; firing an armed recording off that
@@ -631,6 +692,14 @@ export function App() {
         {viewMode === 'perform' && (
           <div className="perform-strip">
             <SceneSelect sceneId={sceneId} onChange={onSceneChange} disabled={replay !== null || exporting !== null} />
+            {engine && (
+              <SwitchControl
+                targetId={switchTargetId}
+                onTargetChange={setSwitchTargetId}
+                onSwitch={() => onSwitchScene(switchTargetId)}
+                disabled={replay !== null || exporting !== null}
+              />
+            )}
             {engine && playback.hasFile && (
               <TransportRow
                 engine={engine}
@@ -893,8 +962,19 @@ export function App() {
         )}
 
         {engine && (
-          <section>
+          // `key` forces this section to remount after a handoff (§6): an
+          // in-place switchScene mutates `engine.scene` without changing the
+          // Engine object's own identity, so `sceneVersion` is the only signal
+          // that scene-derived state (Knobs' initial values, in particular)
+          // needs to be re-read from scratch rather than reused across renders.
+          <section key={`scene-${sceneId}-${sceneVersion}`}>
             <SceneSelect sceneId={sceneId} onChange={onSceneChange} disabled={replay !== null || exporting !== null} />
+            <SwitchControl
+              targetId={switchTargetId}
+              onTargetChange={setSwitchTargetId}
+              onSwitch={() => onSwitchScene(switchTargetId)}
+              disabled={replay !== null || exporting !== null}
+            />
             <h2>{engine.scene.meta.name}</h2>
             {engine.scene.params.map((p) => (
               <Knob
@@ -908,7 +988,7 @@ export function App() {
           </section>
         )}
 
-        {engine && <ShaderPanel engine={engine} />}
+        {engine && <ShaderPanel engine={engine} key={`shader-${sceneId}-${sceneVersion}`} />}
       </aside>
       )}
     </div>
@@ -938,6 +1018,44 @@ function SceneSelect({
         ))}
       </select>
     </label>
+  )
+}
+
+/**
+ * Scene handoff controls (docs/HANDOFF.md §6): a target-scene selector +
+ * "Switch (hand off)" button, reused between the studio panel's Scene section
+ * and the perform strip (one component so the two never drift). Deliberately
+ * a separate dropdown from `SceneSelect` above — that one is the existing
+ * cold full-teardown scene change; this picks B for `engine.switchScene`,
+ * which hands off IN PLACE (A's final frame seeds B's initial state).
+ */
+function SwitchControl({
+  targetId,
+  onTargetChange,
+  onSwitch,
+  disabled,
+}: {
+  targetId: string
+  onTargetChange: (id: string) => void
+  onSwitch: () => void
+  disabled: boolean
+}) {
+  return (
+    <div className="switch-control">
+      <label className="scene-select">
+        Hand off to
+        <select value={targetId} disabled={disabled} onChange={(ev) => onTargetChange(ev.target.value)}>
+          {Object.entries(SCENES).map(([id, entry]) => (
+            <option key={id} value={id}>
+              {entry.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button type="button" className="session-button" onClick={onSwitch} disabled={disabled}>
+        Switch (hand off)
+      </button>
+    </div>
   )
 }
 

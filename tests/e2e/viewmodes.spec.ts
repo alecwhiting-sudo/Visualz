@@ -61,7 +61,12 @@ test('switching to perform mode hides the panel and shows the slim strip', async
   await expect(page.locator('.panel')).toHaveCount(0)
   const strip = page.locator('.perform-strip')
   await expect(strip).toBeVisible()
-  await expect(strip.locator('.scene-select')).toBeVisible()
+  // .first(): the strip now also renders the scene-handoff target selector
+  // (docs/HANDOFF.md §6), which reuses the `.scene-select` label style, so
+  // .scene-select resolves to two elements — the cold-swap dropdown first,
+  // then the hand-off target picker.
+  await expect(strip.locator('.scene-select').first()).toBeVisible()
+  await expect(strip.locator('.switch-control')).toBeVisible()
   await expect(strip.getByRole('button', { name: 'Record' })).toBeVisible()
   await expect(strip.getByRole('button', { name: 'Studio' })).toBeVisible()
   // Meters, MIDI section, shader editor etc. must not be rendered at all.

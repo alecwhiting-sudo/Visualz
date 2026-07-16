@@ -1,6 +1,7 @@
 import { FloatTarget, FullscreenPass, type RenderSurface } from '../../gpu/targets'
 import type { Gpu } from '../../gpu/context'
-import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../types'
+import { resampleToRGBA8 } from '../families/particles/imageSample'
+import type { FrameContext, ParamSchema, SceneRuntime, SceneSnapshot, ShaderStage } from '../types'
 
 /**
  * Geometry family: a kaleidoscope frame-feedback scene. State is two RGBA8
@@ -192,6 +193,20 @@ export class KaleidoScene implements SceneRuntime {
 
     gl.clearColor(0, 0, 0, 1)
     gl.clear(gl.COLOR_BUFFER_BIT)
+  }
+
+  /**
+   * Scene handoff (docs/HANDOFF.md §2): primes the feedback loop — A's frame
+   * is literally what the kaleidoscope starts folding. Resamples the snapshot
+   * to the sim's square resolution and uploads it into BOTH ping-pong
+   * targets (so the very first feedback pass reads *something* meaningful
+   * regardless of which one `src`/`dst` resolve to), resetting `flip`.
+   */
+  ingest(snap: SceneSnapshot): void {
+    const rgba = resampleToRGBA8(snap, SIM_SIZE, SIM_SIZE)
+    this.targets[0].upload(rgba)
+    this.targets[1].upload(rgba)
+    this.flip = false
   }
 
   setParam(name: string, value: number): void {

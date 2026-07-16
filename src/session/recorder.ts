@@ -53,6 +53,13 @@ export class SessionRecorder {
     this.events.push({ frame, type: 'shader', key, source })
   }
 
+  /** Scene handoff (docs/HANDOFF.md §5): records only the target scene id —
+   * the handoff snapshot itself is never serialized (invariant I7); it is
+   * recomputed on replay by re-capturing A's re-rendered frame. */
+  recordSwitch(frame: number, toScene: string): void {
+    this.events.push({ frame, type: 'switch', toScene })
+  }
+
   finish(frame: number): SessionDoc {
     return {
       version: 1,

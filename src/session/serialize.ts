@@ -19,7 +19,7 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
 }
 
-const KNOWN_EVENT_TYPES = new Set(['input', 'inputSignal', 'param', 'binding', 'shader'])
+const KNOWN_EVENT_TYPES = new Set(['input', 'inputSignal', 'param', 'binding', 'shader', 'switch'])
 const MAX_SHADER_SOURCE_LENGTH = 100_000
 /** Photo Swarm task: caps `scene.image`'s pixel count (width*height), keeping
  * the base64 snapshot bounded (~256KB raw at the ceiling) in every session doc. */
@@ -186,6 +186,15 @@ export function parseSession(json: string): SessionDoc {
         }
         if ((e.source as string).length > MAX_SHADER_SOURCE_LENGTH) {
           throw new Error(`Session events[${i}].source exceeds max length (${MAX_SHADER_SOURCE_LENGTH})`)
+        }
+        break
+      case 'switch':
+        // Deliberately NOT checked against the scene registry here (this
+        // module is registry-decoupled — it doesn't validate scene.id
+        // either). An unknown id surfaces at apply time when switchScene
+        // throws (docs/HANDOFF.md §5).
+        if (typeof e.toScene !== 'string' || e.toScene.length === 0) {
+          throw new Error(`Session events[${i}].toScene must be a non-empty string`)
         }
         break
     }

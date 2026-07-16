@@ -42,6 +42,7 @@ function fakeTarget() {
     setBinding: (param, src) => calls.push({ fn: 'setBinding', args: [param, src] }),
     clearBinding: (param) => calls.push({ fn: 'clearBinding', args: [param] }),
     setShaderSource: (key, source) => calls.push({ fn: 'setShaderSource', args: [key, source] }),
+    switchScene: (id) => calls.push({ fn: 'switchScene', args: [id] }),
   }
   return { target, calls }
 }
@@ -113,6 +114,23 @@ describe('SessionRecorder', () => {
       baseSnapshot({ shaders: { 'line-fs': 'A', 'fade-fs': 'B' } }),
     ).finish(0)
     expect(doc.scene.shaders).toEqual({ 'line-fs': 'A', 'fade-fs': 'B' })
+  })
+
+  it('4e) recordSwitch appends a switch event stamped with the given frame/target (docs/HANDOFF.md §5)', () => {
+    const recorder = new SessionRecorder(baseSnapshot())
+    recorder.recordSwitch(12, 'photoswarm')
+    const doc = recorder.finish(20)
+    expect(doc.events).toEqual([{ frame: 12, type: 'switch', toScene: 'photoswarm' }])
+  })
+
+  it('4f) finish() includes switch events in frame order alongside other event kinds', () => {
+    const recorder = new SessionRecorder(baseSnapshot())
+    recorder.recordParam(1, 'freqX', 4)
+    recorder.recordSwitch(3, 'flowfield')
+    recorder.recordInput(5, { type: 'trigger', index: 0 })
+    const doc = recorder.finish(10)
+    expect(doc.events.map((e) => e.type)).toEqual(['param', 'switch', 'input'])
+    expect(doc.events[1]).toEqual({ frame: 3, type: 'switch', toScene: 'flowfield' })
   })
 })
 
@@ -205,6 +223,35 @@ describe('SessionPlayer', () => {
     player.applyUpTo(0, target)
     expect(calls).toEqual([{ fn: 'setShaderSource', args: ['line-fs', 'void main() {}'] }])
   })
+
+  it('11c) a switch event calls target.switchScene(toScene) exactly once (docs/HANDOFF.md §10)', () => {
+    const doc = docWithEvents([{ frame: 2, type: 'switch', toScene: 'photoswarm' }])
+    const player = new SessionPlayer(doc)
+    const { target, calls } = fakeTarget()
+    player.applyUpTo(1, target)
+    expect(calls).toEqual([])
+    player.applyUpTo(2, target)
+    expect(calls).toEqual([{ fn: 'switchScene', args: ['photoswarm'] }])
+    // Never re-applied on a later call, same as every other event kind.
+    player.applyUpTo(10, target)
+    expect(calls).toEqual([{ fn: 'switchScene', args: ['photoswarm'] }])
+  })
+
+  it('11d) chained switches (A->B->C) fire in frame order via the monotonic cursor (invariant I10)', () => {
+    const doc = docWithEvents([
+      { frame: 0, type: 'switch', toScene: 'flowfield' },
+      { frame: 5, type: 'switch', toScene: 'photoswarm' },
+      { frame: 5, type: 'switch', toScene: 'grayscott' },
+    ])
+    const player = new SessionPlayer(doc)
+    const { target, calls } = fakeTarget()
+    for (let frame = 0; frame <= 5; frame++) player.applyUpTo(frame, target)
+    expect(calls).toEqual([
+      { fn: 'switchScene', args: ['flowfield'] },
+      { fn: 'switchScene', args: ['photoswarm'] },
+      { fn: 'switchScene', args: ['grayscott'] },
+    ])
+  })
 })
 
 // --- 3. serialize / parse -------------------------------------------------------
@@ -226,6 +273,14 @@ describe('serializeSession / parseSession round-trip', () => {
       [{ frame: 0, type: 'shader', key: 'line-fs', source: 'void main() { outColor = vec4(1.0); }' }],
       { scene: { id: 'lissajous', params: { freqX: 3, freqY: 2 }, shaders: { 'line-fs': 'X', 'fade-fs': 'Y' } } },
     )
+    expect(parseSession(serializeSession(doc))).toEqual(doc)
+  })
+
+  it('12c) round-trips a doc with switch events (docs/HANDOFF.md §5/§10)', () => {
+    const doc = docWithEvents([
+      { frame: 0, type: 'switch', toScene: 'flowfield' },
+      { frame: 3, type: 'switch', toScene: 'photoswarm' },
+    ])
     expect(parseSession(serializeSession(doc))).toEqual(doc)
   })
 })
@@ -309,6 +364,22 @@ describe('parseSession validation', () => {
     const doc = docWithEvents([])
     expect(() => parseSession(JSON.stringify(doc))).not.toThrow()
     expect(parseSession(JSON.stringify(doc)).scene.shaders).toBeUndefined()
+  })
+
+  it('18i) rejects a switch event with a non-string toScene', () => {
+    const doc = { ...docWithEvents([]), events: [{ frame: 0, type: 'switch', toScene: 42 }] }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/toScene/i)
+  })
+
+  it('18j) rejects a switch event with an empty toScene', () => {
+    const doc = { ...docWithEvents([]), events: [{ frame: 0, type: 'switch', toScene: '' }] }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/toScene/i)
+  })
+
+  it('18k) accepts a syntactically valid but unknown toScene — serialize.ts is registry-decoupled (docs/HANDOFF.md §5)', () => {
+    const doc = { ...docWithEvents([]), events: [{ frame: 0, type: 'switch', toScene: 'not-a-real-scene-id' }] }
+    expect(() => parseSession(JSON.stringify(doc))).not.toThrow()
+    expect(parseSession(JSON.stringify(doc)).events).toEqual([{ frame: 0, type: 'switch', toScene: 'not-a-real-scene-id' }])
   })
 })
 
