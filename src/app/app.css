@@ -38,7 +38,14 @@ body {
    of the visuals with dials). */
 .app {
   width: 100vw;
+  /* dvh where supported (review finding): on iOS Safari 100vh is the LARGE
+     viewport (URL bar retracted), so with the bars expanded the bottom
+     ~130px — the pinned transport/record footer — sat below the visible
+     area with no way to scroll to it (the shell is overflow: hidden and
+     inner-panel scroll never retracts the URL bar). dvh tracks the visible
+     viewport dynamically; the vh line is the fallback for older browsers. */
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   display: flex;
 }
@@ -85,6 +92,7 @@ body {
 .panel {
   width: 320px;
   height: 100vh;
+  height: 100dvh; /* see .app — keeps the pinned footer on-screen on iOS */
   padding: 20px 16px;
   background: var(--bg-panel);
   border-left: 1px solid var(--border);
@@ -521,6 +529,7 @@ body {
   }
   .app-studio .stage {
     flex: 0 0 55vh;
+    flex-basis: 55dvh; /* see .app — visible-viewport share on iOS */
     min-height: 0;
   }
   .app-studio .panel {
