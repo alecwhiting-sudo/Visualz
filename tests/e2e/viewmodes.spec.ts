@@ -9,7 +9,7 @@ import { expect, test, type Page } from '@playwright/test'
  * isn't practical without a user-gesture-gated AudioContext) — `playback.hasFile`
  * stays false throughout, so the transport row itself never renders (same as
  * studio mode with no file: `.transport-row` has count 0). What these tests
- * verify instead is the strip's *structure* (scene select + Record button +
+ * verify instead is the strip's *structure* (scene select + Arm button +
  * view-mode buttons all present) and that switching to it doesn't blank the
  * canvas or leave the panel showing.
  *
@@ -161,7 +161,7 @@ test('switching to perform mode hides the panel and shows the slim strip', async
   // then the hand-off target picker.
   await expect(strip.locator('.scene-select').first()).toBeVisible()
   await expect(strip.locator('.switch-control')).toBeVisible()
-  await expect(strip.getByRole('button', { name: 'Record' })).toBeVisible()
+  await expect(strip.getByRole('button', { name: 'Arm' })).toBeVisible()
   await expect(strip.getByRole('button', { name: 'Studio' })).toBeVisible()
   // Meters, MIDI section, shader editor etc. must not be rendered at all.
   await expect(page.locator('section', { has: page.locator('h2', { hasText: 'Signals' }) })).toHaveCount(0)

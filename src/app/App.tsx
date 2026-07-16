@@ -37,6 +37,11 @@ export interface VizLiveTestApi {
   getParam(name: string): number
   /** The live scene's param schemas, for positional macro assertions. */
   sceneParams(): { name: string; min: number; max: number; default: number }[]
+  /** `lastSession.durationFrames / lastSession.fps` (seconds), or `null` if no
+   * take has ended yet — lets an e2e test verify a take's recorded length
+   * against real elapsed wall time (tests/e2e/performanceModel.spec.ts) without
+   * scraping the take card's rendered mm:ss text. */
+  lastTakeDuration(): number | null
 }
 
 declare global {
@@ -140,6 +145,23 @@ function formatMidiStatus(supported: boolean, deviceCount: number): string {
   if (!supported) return 'MIDI: not supported in this browser'
   if (deviceCount === 0) return 'MIDI: no inputs'
   return `MIDI: ${deviceCount} input${deviceCount === 1 ? '' : 's'}`
+}
+
+// --- Performance model (rehearsal / armed / performing) ---------------------
+// User-reported problem: record/play/export read as "a confusing mess", and
+// takes came out LONGER than the actual performance because the transport ⏹
+// was a no-op while recording (engine.stopAudio's isRecording gate) — the
+// user stopped nothing, and the take kept running until they found the
+// Record button's own Stop. The fix is an explicit three-state model with
+// exactly one way to end a take: REHEARSAL (default, nothing recorded) ->
+// ARMED (▶ starts audio+take together) -> PERFORMING (⏹ ends the take AND
+// stops the audio at that instant; the track's natural end also ends it).
+// `recording`/`armed` already carry this as two booleans; `performanceModeOf`
+// is just the one-line derivation shared by the footer and the perform strip.
+type PerformanceMode = 'rehearsal' | 'armed' | 'performing'
+
+function performanceModeOf(recording: boolean, armed: boolean): PerformanceMode {
+  return recording ? 'performing' : armed ? 'armed' : 'rehearsal'
 }
 
 // --- View modes -------------------------------------------------------------
@@ -330,11 +352,29 @@ export function App() {
   const [paramValues, setParamValues] = useState<Record<string, number>>({})
   const [trackName, setTrackName] = useState<string | null>(null)
   const [recording, setRecording] = useState(false)
-  // Hot-armed recording: with a track loaded but not playing, Record becomes
-  // Arm, and the next ▶ press starts audio AND the session recording in the
+  // Three-state performance model (rehearsal/armed/performing — see
+  // PerformanceModeLine below): "Arm" with a track loaded but not playing
+  // just arms; the next ▶ press starts audio AND the session recording in the
   // same tick — a synced start, so takes armed from a full stop align exactly
-  // with the beginning of the track.
+  // with the beginning of the track. Arm pressed WHILE playing (or in demo
+  // mode, which is always "dancing") arms-and-starts immediately — one
+  // button, one concept, replacing the old separate instant-Record path.
   const [armed, setArmed] = useState(false)
+  // The transport.frame a take started on (see beginTake) — the live "● TAKE
+  // 0:23" counter (100ms poll, attachLiveEngine) is (transport.frame - this) /
+  // transport.fps, deterministic frame arithmetic rather than a wall-clock
+  // read (this file is src/app/, so Date.now()/performance.now() would be
+  // ALLOWED per the hard rule, but the frame counter is already exactly
+  // right and stays correct even if a tab throttles rAF).
+  const recordingStartFrameRef = useRef<number | null>(null)
+  const [takeElapsedSec, setTakeElapsedSec] = useState(0)
+  // True whenever `lastSession` holds a take that ended (Stop/End
+  // take/natural end/scene-switch-mid-take) but hasn't been exported or
+  // discarded yet — drives the SESSION tab's dot badge and the footer's
+  // "take ready" one-liner (task 3). Cleared by the take card's own Export
+  // and Discard actions; loading/replaying an unrelated saved-take file never
+  // touches it.
+  const [takeReady, setTakeReady] = useState(false)
   const [replay, setReplay] = useState<{ frame: number; total: number } | null>(null)
   const [exporting, setExporting] = useState<{ frame: number; total: number } | null>(null)
   const [sessionError, setSessionError] = useState<string | null>(null)
@@ -353,6 +393,13 @@ export function App() {
   // directly after Stop — no round-trip through the file system (essential on
   // iPhone, where re-picking a just-saved file is clumsy).
   const [lastSession, setLastSession] = useState<SessionDoc | null>(null)
+  // Mirrors armedParamRef/switchTargetIdRef above: window.__vizLive.lastTakeDuration
+  // is defined once per engine attach but must always read the CURRENT
+  // lastSession, not whichever one existed when that closure was created.
+  const lastSessionRef = useRef<SessionDoc | null>(null)
+  useEffect(() => {
+    lastSessionRef.current = lastSession
+  }, [lastSession])
   // Photo Swarm task: the last image picked via the Image input, kept outside
   // any single Engine instance so it survives a scene switch, which tears
   // down the whole Engine (a fresh scene instance per docs/PARTICLES.md §0 —
@@ -474,6 +521,10 @@ export function App() {
       getParam: (name) => e.scene.getParam(name),
       sceneParams: () =>
         e.scene.params.map((p) => ({ name: p.name, min: p.min, max: p.max, default: p.default })),
+      lastTakeDuration: () => {
+        const doc = lastSessionRef.current
+        return doc ? doc.durationFrames / doc.fps : null
+      },
     }
     meterIntervalRef.current = window.setInterval(() => {
       setLevels(e.bus.snapshot())
@@ -490,6 +541,23 @@ export function App() {
       const values: Record<string, number> = {}
       for (const p of e.scene.params) values[p.name] = e.scene.getParam(p.name)
       setParamValues(values)
+      // Footer/perform-strip "● TAKE 0:23" counter: frame arithmetic against
+      // the deterministic transport, not a wall-clock read (see
+      // recordingStartFrameRef's comment).
+      if (e.isRecording && recordingStartFrameRef.current !== null) {
+        setTakeElapsedSec(Math.max(0, (e.transport.frame - recordingStartFrameRef.current) / e.transport.fps))
+      }
+      // PERFORMING has exactly one way to end (task): the track reaching its
+      // natural end must end the take automatically, same as a manual ⏹.
+      // While recording, every other transport control (pause/seek/stop) is
+      // gated off both in the UI and by the engine's isRecording no-op guard,
+      // so `hasFile && !isPlaying` here can only mean the source's `onended`
+      // fired — never a pause the user triggered. endTake() re-checks
+      // `engine.isRecording` itself, so this can never double-fire against a
+      // manual ⏹ click that landed the same tick.
+      if (e.isRecording && e.audio.hasFile && !e.audio.isPlaying) {
+        endTake()
+      }
     }, 100)
     detachKeyboardRef.current = attachKeyboard(window, (event) => e.queueInput(event))
     // docs/MACROS.md CC-remap seam: `attachMidi`/`mapping/midi.ts` stay exactly
@@ -638,8 +706,7 @@ export function App() {
     // stash it instead — the mid-performance way to change visuals without
     // ending the take is the handoff switch (docs/HANDOFF.md), not this.
     if (engineRef.current?.isRecording) {
-      const doc = engineRef.current.stopRecording()
-      if (doc) setLastSession(doc)
+      stashTake(engineRef.current.stopRecording())
     }
     // The AudioEngine outlives the Engine across a scene switch: the track
     // keeps playing and the transport row stays put (keepAudio skips the
@@ -652,6 +719,7 @@ export function App() {
     setEngine(null)
     setRecording(false)
     setArmed(false)
+    recordingStartFrameRef.current = null
     setSceneId(id)
     const newEngine = createLiveEngine(canvas, id, audio)
     // Reapply the last-picked image to the new scene, if it accepts one — the
@@ -747,27 +815,68 @@ export function App() {
     }
   }
 
+  /** Stashes a just-finished take's doc (if any) as `lastSession` and marks
+   * the SESSION tab badge/footer "take ready" line live — the one path every
+   * take-ending route (manual ⏹, RecordButton's "End take", the natural-end
+   * poll, and a mid-take scene-dropdown switch) funnels through, so none of
+   * them can forget to arm the badge. */
+  const stashTake = (doc: SessionDoc | null) => {
+    if (!doc) return
+    setLastSession(doc)
+    setTakeReady(true)
+  }
+
+  /** The ONE way a take ends (task): stop recording FIRST (clears
+   * engine.isRecording) so the subsequent stopAudio() actually passes its
+   * isRecording no-op gate — engine.ts's gate stays as the safety net, this
+   * is the orchestration that makes it fire in the right order. Idempotent:
+   * guards on `engine.isRecording` so the manual ⏹/"End take" click and the
+   * natural-end poll (attachLiveEngine) can never double-fire against each
+   * other. */
+  const endTake = () => {
+    const e = engineRef.current
+    if (!e || !e.isRecording) return
+    stashTake(e.stopRecording())
+    setRecording(false)
+    recordingStartFrameRef.current = null
+    e.stopAudio()
+  }
+
+  /** Starts a take: engine.startRecording() (throws against a frozen
+   * transport — should be unreachable given onToggleRecording's arm branch
+   * and TransportRow's armed-play gate, both of which only call this once
+   * audio is actually running) plus the App-side bookkeeping every take-start
+   * path needs (the elapsed-counter baseline, the `recording` flag). Shared
+   * by onToggleRecording's "arm while playing" branch and TransportRow's
+   * armed ▶ press, so both starts look identical to everything downstream. */
+  const beginTake = () => {
+    const e = engineRef.current
+    if (!e) return
+    try {
+      e.startRecording()
+      recordingStartFrameRef.current = e.transport.frame
+      setRecording(true)
+    } catch (err) {
+      setSessionError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   const onToggleRecording = () => {
     const e = engineRef.current
     if (!e) return
     if (e.isRecording) {
-      const doc = e.stopRecording()
-      setRecording(false)
-      if (doc) setLastSession(doc)
+      endTake()
     } else if (e.audio.hasFile && !e.audio.isPlaying) {
       // Recording can't start against a frozen transport (engine throws), so
       // with a stopped/paused track the button ARMS instead: the next ▶ press
       // starts audio and the recording together on the same frame.
       setArmed((a) => !a)
     } else {
-      try {
-        e.startRecording()
-        setRecording(true)
-      } catch (err) {
-        // Should be unreachable given the arm branch above; keeps UI state
-        // honest if engine.startRecording ever rejects for a new reason.
-        setSessionError(err instanceof Error ? err.message : String(err))
-      }
+      // Already playing (or demo mode, which is always "dancing", so there's
+      // nothing to wait for) — Arm pressed here starts the take immediately.
+      // This replaces the old separate instant-Record path: one button, one
+      // concept (task).
+      beginTake()
     }
   }
 
@@ -961,15 +1070,19 @@ export function App() {
                   recording={recording}
                   armed={armed}
                   setArmed={setArmed}
-                  setRecording={setRecording}
-                  setSessionError={setSessionError}
+                  beginTake={beginTake}
+                  endTake={endTake}
                 />
               )}
+              <PerformanceModeLine
+                mode={performanceModeOf(recording, armed)}
+                hasFile={playback.hasFile}
+                takeSeconds={takeElapsedSec}
+                compact
+              />
               <RecordButton
                 recording={recording}
                 armed={armed}
-                hasFile={playback.hasFile}
-                playing={playback.playing}
                 disabled={!engine || replay !== null || exporting !== null}
                 onToggleRecording={onToggleRecording}
               />
@@ -1035,6 +1148,11 @@ export function App() {
               onClick={() => setActiveTab(tab)}
             >
               {label}
+              {/* Task 3: dot badge while an unexported take is sitting in the
+                 SESSION tab's take card — cleared by that card's own Export
+                 and Discard actions (same `takeReady` flag as the footer's
+                 one-liner). */}
+              {tab === 'session' && lastSession && takeReady && <span className="tab-badge" aria-hidden="true" />}
             </button>
           ))}
         </div>
@@ -1101,9 +1219,12 @@ export function App() {
             )}
           </div>
 
-          {/* SESSION: export format, Replay/Export/Save + "from file…", status
-             lines. Record/Arm lives ONLY in the pinned footer now (task: two
-             instances of the same button fighting each other). */}
+          {/* SESSION: export format, the take card (task 3 — Export/Replay/
+             Save/Discard for whatever `lastSession` just finished), then a
+             visually separate "load a saved take" section for re-opening an
+             OLD session from a file. Record/Arm lives ONLY in the pinned
+             footer now (task: two instances of the same button fighting
+             each other). */}
           <div className="panel-tab-content" role="tabpanel" hidden={activeTab !== 'session'}>
             <section>
               <h2>Session</h2>
@@ -1119,65 +1240,91 @@ export function App() {
                   <option value="webm">WebM (VP9)</option>
                 </select>
               </label>
-              <div className="session-controls">
-                <label className="file session-file">
-                  <input
-                    type="file"
-                    accept="application/json,.json"
-                    disabled={replay !== null || exporting !== null}
-                    onChange={(ev) => {
-                      const file = ev.target.files?.[0]
-                      ev.target.value = ''
-                      onLoadSession(file)
-                    }}
-                  />
-                  Replay from file…
-                </label>
-                <label className="file session-file">
-                  <input
-                    type="file"
-                    accept="application/json,.json"
-                    disabled={replay !== null || exporting !== null}
-                    onChange={(ev) => {
-                      const file = ev.target.files?.[0]
-                      ev.target.value = ''
-                      onExportVideo(file)
-                    }}
-                  />
-                  Export from file…
-                </label>
-              </div>
+
               {lastSession && (
-                <div className="session-controls">
-                  <button
-                    type="button"
-                    className="session-button"
-                    disabled={replay !== null || exporting !== null}
-                    onClick={() => replaySession(lastSession)}
-                  >
-                    Replay
-                  </button>
-                  <button
-                    type="button"
-                    className="session-button"
-                    disabled={replay !== null || exporting !== null}
-                    onClick={() => exportVideo(lastSession)}
-                  >
-                    Export video
-                  </button>
-                  <button
-                    type="button"
-                    className="session-button"
-                    disabled={replay !== null || exporting !== null}
-                    onClick={() => downloadSession(lastSession)}
-                  >
-                    Save
-                  </button>
+                <div className="take-card">
+                  <p className="take-card-duration">
+                    Last take: {formatTime(lastSession.durationFrames / lastSession.fps)}
+                  </p>
+                  <div className="session-controls">
+                    <button
+                      type="button"
+                      className="session-button session-button-primary"
+                      disabled={replay !== null || exporting !== null}
+                      onClick={() => {
+                        // Clears the badge/footer-echo on the FIRST export
+                        // attempt (task: "clear the badge after the first
+                        // export or discard") — reuses exportVideo verbatim,
+                        // this is re-presentation, not new plumbing.
+                        setTakeReady(false)
+                        void exportVideo(lastSession)
+                      }}
+                    >
+                      Export video
+                    </button>
+                    <button
+                      type="button"
+                      className="session-button"
+                      disabled={replay !== null || exporting !== null}
+                      onClick={() => replaySession(lastSession)}
+                    >
+                      Replay
+                    </button>
+                    <button
+                      type="button"
+                      className="session-button"
+                      disabled={replay !== null || exporting !== null}
+                      onClick={() => downloadSession(lastSession)}
+                    >
+                      Save JSON
+                    </button>
+                    <button
+                      type="button"
+                      className="session-button"
+                      disabled={replay !== null || exporting !== null}
+                      onClick={() => {
+                        setLastSession(null)
+                        setTakeReady(false)
+                      }}
+                    >
+                      Discard
+                    </button>
+                  </div>
                 </div>
               )}
-              {armed && !recording && (
-                <p className="session-status">armed — press ▶ to start the track and the recording together</p>
-              )}
+
+              <div className="session-subsection">
+                <h3 className="session-section-heading">Load a saved take</h3>
+                <div className="session-controls">
+                  <label className="file session-file">
+                    <input
+                      type="file"
+                      accept="application/json,.json"
+                      disabled={replay !== null || exporting !== null}
+                      onChange={(ev) => {
+                        const file = ev.target.files?.[0]
+                        ev.target.value = ''
+                        onLoadSession(file)
+                      }}
+                    />
+                    Replay from file…
+                  </label>
+                  <label className="file session-file">
+                    <input
+                      type="file"
+                      accept="application/json,.json"
+                      disabled={replay !== null || exporting !== null}
+                      onChange={(ev) => {
+                        const file = ev.target.files?.[0]
+                        ev.target.value = ''
+                        onExportVideo(file)
+                      }}
+                    />
+                    Export from file…
+                  </label>
+                </div>
+              </div>
+
               {replay && (
                 <p className="session-status">
                   replaying… frame {replay.frame}/{replay.total}
@@ -1393,10 +1540,15 @@ export function App() {
         </div>
 
         {/* Pinned footer — outside the tabs, always visible regardless of
-           which tab is active: the transport row (when a file is loaded)
-           and the Record/Arm button are performance-critical and must never
-           be scrolled away or hidden by tab choice. */}
+           which tab is active: the transport row (when a file is loaded),
+           the mode line, and the Arm/End-take button are performance-critical
+           and must never be scrolled away or hidden by tab choice. */}
         <div className="panel-footer">
+          <PerformanceModeLine
+            mode={performanceModeOf(recording, armed)}
+            hasFile={playback.hasFile}
+            takeSeconds={takeElapsedSec}
+          />
           {engine && playback.hasFile && (
             <TransportRow
               engine={engine}
@@ -1404,18 +1556,24 @@ export function App() {
               recording={recording}
               armed={armed}
               setArmed={setArmed}
-              setRecording={setRecording}
-              setSessionError={setSessionError}
+              beginTake={beginTake}
+              endTake={endTake}
             />
           )}
           <RecordButton
             recording={recording}
             armed={armed}
-            hasFile={playback.hasFile}
-            playing={playback.playing}
             disabled={!engine || replay !== null || exporting !== null}
             onToggleRecording={onToggleRecording}
           />
+          {/* Task 3: a compact echo of the take card once a fresh take just
+             ended — cleared the moment the SESSION tab's Export/Discard
+             actions clear `takeReady`. */}
+          {!recording && !armed && lastSession && takeReady && (
+            <p className="session-status">
+              take {formatTime(lastSession.durationFrames / lastSession.fps)} ready — export in SESSION tab
+            </p>
+          )}
         </div>
       </aside>
       )}
@@ -1491,18 +1649,20 @@ function SwitchControl({
  * and the perform strip. Label logic matches onToggleRecording's state machine
  * (App): Stop while recording, Arm/Armed while a file is loaded but paused,
  * Record otherwise. */
+/** One button, one concept everywhere (task): "Arm" while not recording
+ * (pulsing red once actually armed-and-waiting), "End take" while performing
+ * — never "Record", which used to name a THIRD, separate instant-start
+ * action. onToggleRecording (App) already collapses that old path into the
+ * same Arm button (pressing it while playing/in demo mode arms-and-starts
+ * immediately), so the label only needs two states. */
 function RecordButton({
   recording,
   armed,
-  hasFile,
-  playing,
   disabled,
   onToggleRecording,
 }: {
   recording: boolean
   armed: boolean
-  hasFile: boolean
-  playing: boolean
   disabled: boolean
   onToggleRecording: () => void
 }) {
@@ -1513,30 +1673,37 @@ function RecordButton({
       onClick={onToggleRecording}
       disabled={disabled}
     >
-      {recording ? 'Stop' : hasFile && !playing ? (armed ? 'Armed ●' : 'Arm') : 'Record'}
+      {recording ? 'End take' : armed ? 'Armed ●' : 'Arm'}
     </button>
   )
 }
 
 /** The play/pause/stop/scrub/time transport row — shared between the studio
  * panel and the perform strip. Only rendered by callers once `playback.hasFile`
- * is true, same guard as the original inline block this was extracted from. */
+ * is true, same guard as the original inline block this was extracted from.
+ * PERFORMING has exactly one way to end (task): ⏹ now calls `onEndTake`
+ * (App's `endTake` — stopRecording THEN stopAudio, in that order, so the
+ * engine's own isRecording no-op gate passes) instead of no-oping like the
+ * plain `engine.stopAudio()` it used to call unconditionally. Pause/scrub
+ * stay disabled while recording — the take's length must track wall-clock
+ * performance time exactly, so no mid-take pause/seek is possible.
+ */
 function TransportRow({
   engine,
   playback,
   recording,
   armed,
   setArmed,
-  setRecording,
-  setSessionError,
+  beginTake,
+  endTake,
 }: {
   engine: Engine
   playback: { time: number; duration: number; playing: boolean; hasFile: boolean }
   recording: boolean
   armed: boolean
   setArmed: React.Dispatch<React.SetStateAction<boolean>>
-  setRecording: React.Dispatch<React.SetStateAction<boolean>>
-  setSessionError: React.Dispatch<React.SetStateAction<string | null>>
+  beginTake: () => void
+  endTake: () => void
 }) {
   return (
     <div className="transport-row">
@@ -1555,8 +1722,8 @@ function TransportRow({
           engine.resumeAudio()
           // Armed recording fires here, synchronously after resume — the
           // source now exists (resume creates it in the same call), so
-          // startRecording's not-playing guard passes and audio + the
-          // recording start on the same transport frame.
+          // beginTake's startRecording call passes its not-playing guard and
+          // audio + the recording start on the same transport frame.
           if (armed && engine.audio.contextState !== 'running') {
             // iOS: the context can still be waking (ctx.resume is async);
             // a recording begun now would open on a frozen clock and then
@@ -1567,12 +1734,7 @@ function TransportRow({
           }
           if (armed) {
             setArmed(false)
-            try {
-              engine.startRecording()
-              setRecording(true)
-            } catch (err) {
-              setSessionError(err instanceof Error ? err.message : String(err))
-            }
+            beginTake()
           }
         }}
         aria-label={playback.playing ? 'Pause' : 'Play'}
@@ -1582,9 +1744,16 @@ function TransportRow({
       <button
         type="button"
         className="session-button"
-        disabled={recording}
-        onClick={() => engine.stopAudio()}
-        aria-label="Stop and rewind"
+        // Enabled while recording (task fix): this is now one of the two
+        // affordances (with RecordButton's "End take") for the take's ONE
+        // way to end. Previously `disabled={recording}` made this a no-op —
+        // the root cause of takes running long, since the only way to stop
+        // was hunting down the Record button's own Stop.
+        onClick={() => {
+          if (recording) endTake()
+          else engine.stopAudio()
+        }}
+        aria-label={recording ? 'Stop (ends the take)' : 'Stop and rewind'}
       >
         ⏹
       </button>
@@ -1603,6 +1772,33 @@ function TransportRow({
       </span>
     </div>
   )
+}
+
+/** Task 1: the always-visible, one-line state indicator for the
+ * rehearsal/armed/performing model — shared between the panel-footer (own
+ * line, block layout) and the perform strip (`compact`: inline flex item,
+ * no wrap). Rehearsal's line only makes sense once there's something whose
+ * tweaks AREN'T being recorded — hidden in demo mode. */
+function PerformanceModeLine({
+  mode,
+  hasFile,
+  takeSeconds,
+  compact = false,
+}: {
+  mode: PerformanceMode
+  hasFile: boolean
+  takeSeconds: number
+  compact?: boolean
+}) {
+  const className = `perf-mode-line${compact ? ' perf-mode-line-compact' : ''}`
+  if (mode === 'rehearsal') {
+    if (!hasFile) return null
+    return <p className={className}>rehearsal — tweaks are not recorded</p>
+  }
+  if (mode === 'armed') {
+    return <p className={className}>armed — ▶ starts the take</p>
+  }
+  return <p className={`${className} perf-mode-line-performing`}>● TAKE {formatTime(takeSeconds)}</p>
 }
 
 /**

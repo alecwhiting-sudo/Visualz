@@ -607,6 +607,78 @@ body {
   color: var(--text-dim);
 }
 
+/* Task 1: the always-visible rehearsal/armed/performing state line — shared
+   between the panel-footer (own block line, above the transport row) and
+   the perform strip (`.perf-mode-line-compact`: an inline, non-wrapping flex
+   item alongside the strip's other controls). Performing is red, matching
+   `.record-armed`'s "this is destructive/recording" color — never accent. */
+.perf-mode-line {
+  margin: 0 0 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.perf-mode-line-performing {
+  color: #e05656;
+  font-weight: 600;
+}
+
+.perf-mode-line-compact {
+  margin: 0;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Task 3: the SESSION tab's take card — Export/Replay/Save/Discard for
+   whatever `lastSession` just finished, visually distinct (accent-tinted
+   border/background) from the plain "load a saved take" controls below it,
+   so the four buttons read as belonging to ONE take rather than a loose
+   grab-bag. */
+.take-card {
+  padding: 12px;
+  margin-bottom: 4px;
+  border: 1px solid var(--accent-dim);
+  border-radius: 8px;
+  background: rgba(240, 134, 42, 0.07);
+}
+
+.take-card-duration {
+  margin: 0 0 10px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+}
+
+.session-button-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1a1206;
+  font-weight: 700;
+}
+
+.session-button-primary:hover:not(:disabled) {
+  background: #ffa04a;
+  border-color: #ffa04a;
+  color: #1a1206;
+}
+
+/* The "load a saved take" file-input section, set apart from the take card
+   above it with its own rule + heading (task 4). */
+.session-subsection {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.session-section-heading {
+  margin: 0 0 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
 .shader-editor {
   display: block;
   width: 100%;
