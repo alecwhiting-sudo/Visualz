@@ -55,7 +55,15 @@ export function RotaryKnob({
 
   const displayValue = bound ? liveValue : value
 
-  const commit = (v: number) => {
+  const commit = (raw: number) => {
+    // Snap to the schema's step (review finding): the studio slider is
+    // step-constrained by its range input, so the rotary must be too —
+    // otherwise integer params (lissajous freqX, kaleido segments, …) get
+    // fractional values the slider can never produce.
+    const step = schema.step
+    const v = step
+      ? Math.min(schema.max, Math.max(schema.min, Math.round((raw - schema.min) / step) * step + schema.min))
+      : raw
     setValue(v)
     engine.setParam(schema.name, v)
     learnArm?.()
