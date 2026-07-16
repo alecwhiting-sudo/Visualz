@@ -49,7 +49,7 @@ async function loadAndDownscaleImage(file: File): Promise<{ width: number; heigh
 /** Creates and starts the normal live-mode engine on a canvas (factored out so
  * it can be re-invoked after a session replay finishes, or after switching
  * scenes from the panel dropdown). */
-function createLiveEngine(canvas: HTMLCanvasElement, sceneId: string): Engine {
+function createLiveEngine(canvas: HTMLCanvasElement, sceneId: string, audio?: Engine['audio']): Engine {
   const entry = SCENES[sceneId]
   if (!entry) throw new Error(`unknown scene ${sceneId}`)
   const e = new Engine(canvas, entry.create(), {
@@ -57,6 +57,9 @@ function createLiveEngine(canvas: HTMLCanvasElement, sceneId: string): Engine {
     seed: 42,
     width: 960,
     height: 540,
+    // Scene switches hand the previous engine's AudioEngine through so the
+    // loaded track (and the transport row) survives the rebuild.
+    audio,
   })
   e.start()
   return e
@@ -148,6 +151,11 @@ export function App() {
   const [levels, setLevels] = useState<Record<string, number>>({})
   const [trackName, setTrackName] = useState<string | null>(null)
   const [recording, setRecording] = useState(false)
+  // Hot-armed recording: with a track loaded but not playing, Record becomes
+  // Arm, and the next ▶ press starts audio AND the session recording in the
+  // same tick — a synced start, so takes armed from a full stop align exactly
+  // with the beginning of the track.
+  const [armed, setArmed] = useState(false)
   const [replay, setReplay] = useState<{ frame: number; total: number } | null>(null)
   const [exporting, setExporting] = useState<{ frame: number; total: number } | null>(null)
   const [sessionError, setSessionError] = useState<string | null>(null)
@@ -233,6 +241,7 @@ export function App() {
     setMidiDevices([])
     setLearnMode(false)
     setArmedParam(null)
+    setArmed(false)
   }
 
   useEffect(() => {
@@ -254,13 +263,19 @@ export function App() {
   const onSceneChange = (id: string) => {
     const canvas = canvasRef.current
     if (!canvas || !SCENES[id]) return
+    // The AudioEngine outlives the Engine across a scene switch: the track
+    // keeps playing and the transport row stays put (keepAudio skips the
+    // dispose-time stop; the new engine adopts it and fast-forwards its
+    // transport to the audio position on start).
+    const audio = engineRef.current?.audio
     detachLiveEngine()
-    engineRef.current?.dispose()
+    engineRef.current?.dispose({ keepAudio: true })
     engineRef.current = null
     setEngine(null)
     setRecording(false)
+    setArmed(false)
     setSceneId(id)
-    const newEngine = createLiveEngine(canvas, id)
+    const newEngine = createLiveEngine(canvas, id, audio)
     // Reapply the last-picked image to the new scene, if it accepts one — the
     // new scene is a fresh instance (createLiveEngine builds a whole new
     // Engine) so it starts with no image of its own.
@@ -272,6 +287,9 @@ export function App() {
 
   const onFile = async (file: File | undefined) => {
     if (!file || !engineRef.current) return
+    // A new file auto-plays on decode; firing an armed recording off that
+    // implicit start would be a surprise take — arming is per-track.
+    setArmed(false)
     // Playback starts as soon as the file decodes; the offline analysis pass
     // runs in a background Worker with progress reported here, and the beat
     // grid hot-swaps in when it completes.
@@ -316,14 +334,18 @@ export function App() {
       const doc = e.stopRecording()
       setRecording(false)
       if (doc) setLastSession(doc)
+    } else if (e.audio.hasFile && !e.audio.isPlaying) {
+      // Recording can't start against a frozen transport (engine throws), so
+      // with a stopped/paused track the button ARMS instead: the next ▶ press
+      // starts audio and the recording together on the same frame.
+      setArmed((a) => !a)
     } else {
       try {
         e.startRecording()
         setRecording(true)
       } catch (err) {
-        // Recording rejected (e.g. track paused/stopped — engine.startRecording
-        // guards against frozen-transport takes). The button is disabled in
-        // that state too; this catch keeps UI state honest if it's ever hit.
+        // Should be unreachable given the arm branch above; keeps UI state
+        // honest if engine.startRecording ever rejects for a new reason.
         setSessionError(err instanceof Error ? err.message : String(err))
       }
     }
@@ -529,7 +551,26 @@ export function App() {
               // Keyed on `playing` (an audible source exists), not `paused`:
               // stopped and naturally-ended tracks must also show ▶, and
               // resumeAudio restarts those from the rewound offset.
-              onClick={() => (playback.playing ? engine.pauseAudio() : engine.resumeAudio())}
+              onClick={() => {
+                if (playback.playing) {
+                  engine.pauseAudio()
+                  return
+                }
+                engine.resumeAudio()
+                // Armed recording fires here, synchronously after resume — the
+                // source now exists (resume creates it in the same call), so
+                // startRecording's not-playing guard passes and audio + the
+                // recording start on the same transport frame.
+                if (armed) {
+                  setArmed(false)
+                  try {
+                    engine.startRecording()
+                    setRecording(true)
+                  } catch (err) {
+                    setSessionError(err instanceof Error ? err.message : String(err))
+                  }
+                }
+              }}
               aria-label={playback.playing ? 'Pause' : 'Play'}
             >
               {playback.playing ? '⏸' : '▶'}
@@ -588,20 +629,17 @@ export function App() {
           <div className="session-controls">
             <button
               type="button"
-              className="session-button"
+              className={`session-button${armed && !recording ? ' record-armed' : ''}`}
               onClick={onToggleRecording}
-              // Also blocked while a loaded track isn't audibly playing:
-              // recording against a frozen transport would replay/export as a
-              // different video than the frozen live view (engine.startRecording
-              // throws on this too).
-              disabled={
-                !engine ||
-                replay !== null ||
-                exporting !== null ||
-                (!recording && playback.hasFile && !playback.playing)
-              }
+              disabled={!engine || replay !== null || exporting !== null}
             >
-              {recording ? 'Stop' : 'Record'}
+              {recording
+                ? 'Stop'
+                : playback.hasFile && !playback.playing
+                  ? armed
+                    ? 'Armed ●'
+                    : 'Arm'
+                  : 'Record'}
             </button>
             <label className="file session-file">
               <input
@@ -657,6 +695,9 @@ export function App() {
                 Save
               </button>
             </div>
+          )}
+          {armed && !recording && (
+            <p className="session-status">armed — press ▶ to start the track and the recording together</p>
           )}
           {replay && (
             <p className="session-status">

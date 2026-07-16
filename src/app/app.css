@@ -363,3 +363,14 @@ body {
 @keyframes pulse-attn {
   50% { background: #16302c; }
 }
+
+.record-armed {
+  border-color: #e05656;
+  color: #e05656;
+  font-weight: 600;
+  animation: pulse-armed 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-armed {
+  50% { background: #331616; }
+}

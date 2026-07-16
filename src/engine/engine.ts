@@ -46,6 +46,10 @@ export interface EngineOptions {
   height: number
   /** Fixed-timestep rate for render mode. */
   fps?: number
+  /** Adopt an existing AudioEngine instead of creating a fresh one — used by
+   * scene switches, which rebuild the whole Engine but must keep the loaded
+   * track playing (and its transport row alive) across the swap. */
+  audio?: AudioEngine
 }
 
 /**
@@ -57,7 +61,7 @@ export class Engine {
   readonly transport: Transport
   readonly bus = new SignalBus()
   readonly gpu: Gpu
-  readonly audio = new AudioEngine()
+  readonly audio: AudioEngine
   readonly events = new AudioEventDetector()
   readonly scene: SceneRuntime
   readonly seed: number
@@ -118,6 +122,7 @@ export class Engine {
     this.surface = new DefaultSurface(this.gpu)
     this.scene = scene
     this.seed = opts.seed
+    this.audio = opts.audio ?? new AudioEngine()
     this.mappings = new MappingRuntime(DEFAULT_MAPPINGS)
     scene.init(this.gpu, opts.seed)
   }
@@ -125,6 +130,12 @@ export class Engine {
   /** Live mode: start the rAF loop. */
   start(): void {
     if (this.transport.mode !== 'live' || this.running) return
+    // An adopted AudioEngine (scene switch) may already be minutes into a
+    // track; without this the first advanceTo would produce one giant dt (the
+    // full elapsed time) and every dt-clocked scene and stateful DSL helper
+    // would lurch forward in a single frame. Starting the transport AT the
+    // audio position makes the first frame's dt ordinary.
+    if (this.audio.hasFile) this.transport.reset(this.audio.time)
     this.running = true
     let fallbackClock = 0
     const loop = () => {
@@ -437,9 +448,14 @@ export class Engine {
     return this.player !== null && this.player.done
   }
 
-  /** Stops the loop and releases scene GPU resources — call before discarding an engine. */
-  dispose(): void {
+  /** Stops the loop, silences audio, and releases scene GPU resources — call
+   * before discarding an engine. `keepAudio` skips the audio stop for callers
+   * that hand the AudioEngine to a successor engine (scene switches): without
+   * the default stop, a discarded engine's track kept playing as an orphan
+   * (audible during replays, doubled after reloads). */
+  dispose(opts?: { keepAudio?: boolean }): void {
     this.stop()
+    if (!opts?.keepAudio) this.audio.stop()
     this.scene.dispose()
   }
 
