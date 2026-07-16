@@ -118,13 +118,14 @@ test('export muxes an Opus audio track', async ({ page }) => {
   expect(audible.size).toBeGreaterThan(silent.size + 5000)
 })
 
-test('codec detection prefers VP9 where supported', async ({ page }) => {
+test('codec detection falls back to VP9 when a complete MP4 is unsupported', async ({ page }) => {
   await boot(page, 42)
   const doc = await recordSession(page)
 
   // No `codec` option at all — proves detectExportCodec() actually runs (not
-  // just a hardcoded default) and picks 'vp9' in this Chromium build, which
-  // supports VP9/Opus encode but not H.264/AAC (see export/encode.ts).
+  // just a hardcoded default). Preference is H.264/AAC MP4 (REQUIREMENTS.md
+  // §5.2), but this Chromium build supports VP9/Opus encode and not H.264/AAC,
+  // so detection must land on 'vp9' (see export/encode.ts).
   const result = await page.evaluate((sessionDoc) => {
     return window.__viz!.exportSession(sessionDoc, { width: 320, height: 180, fps: 30 })
   }, doc)

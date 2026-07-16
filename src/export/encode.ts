@@ -8,8 +8,10 @@ import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp
  * supports H.264 too, and iOS/macOS Safari's `VideoEncoder` supports H.264+AAC
  * but does NOT support VP9/Opus encode at all. So codec choice can't be a fixed
  * default: `createVideoSink` detects what the running browser actually supports
- * (`detectExportCodec`, preferring VP9 for its smaller files where available)
- * unless the caller pins one explicitly via `opts.codec`.
+ * (`detectExportCodec`, preferring a complete H.264/AAC MP4 — REQUIREMENTS.md
+ * §5.2 makes MP4 primary because it plays on iPhone and uploads to all three
+ * target platforms, which WebM does not) unless the caller pins one explicitly
+ * via `opts.codec`.
  */
 
 export type ExportCodec = 'vp9' | 'h264'
@@ -90,13 +92,21 @@ function pickH264CodecString(width: number, height: number, fps: number): string
 }
 
 /**
- * Probes `VideoEncoder.isConfigSupported` at a fixed 1280x720@30 to find the
- * first working codec in preference order `['vp9', 'h264']` — VP9 first since
- * it's smaller for the same quality and is what every CI/desktop-Chrome target
- * already supports; H.264 is the fallback that makes iOS/macOS Safari exports
- * work, since Safari's `VideoEncoder` doesn't support VP9 at all. Throws a
- * clear error naming both codecs when neither is supported, rather than
- * failing deep inside `createVideoSink`.
+ * Probes `VideoEncoder`/`AudioEncoder.isConfigSupported` at a fixed 1280x720@30
+ * to pick the export codec. Preference (REQUIREMENTS.md §5.2: MP4 primary,
+ * WebM fallback — MP4 is what iPhones play natively and what all three target
+ * platforms accept for upload):
+ *
+ *  1. `h264` when the browser can produce a COMPLETE MP4 — H.264 video AND AAC
+ *     audio (iOS/macOS Safari). Requiring AAC matters: desktop Chrome encodes
+ *     H.264 but not AAC, and picking MP4 there would silently export a video
+ *     with no soundtrack (see `createH264Sink`'s audioSkipped path) — worse
+ *     for a music visualizer than a WebM the user may need to convert.
+ *  2. `vp9` (WebM, Opus audio) — desktop Chrome and CI Chromium.
+ *  3. `h264` even without AAC, when VP9 isn't available either.
+ *
+ * Throws a clear error naming both codecs when neither is supported, rather
+ * than failing deep inside `createVideoSink`.
  */
 export async function detectExportCodec(): Promise<ExportCodec> {
   if (typeof VideoEncoder === 'undefined') {
@@ -105,15 +115,6 @@ export async function detectExportCodec(): Promise<ExportCodec> {
         'is available — VideoEncoder is not defined in this context (WebCodecs unsupported)',
     )
   }
-  const vp9Support = await VideoEncoder.isConfigSupported({
-    codec: VP9_CODEC_STRING,
-    width: 1280,
-    height: 720,
-    bitrate: DEFAULT_BITRATE,
-    framerate: 30,
-  })
-  if (vp9Support.supported) return 'vp9'
-
   const h264Support = await VideoEncoder.isConfigSupported({
     codec: H264_BASELINE_720P30,
     width: 1280,
@@ -122,6 +123,24 @@ export async function detectExportCodec(): Promise<ExportCodec> {
     framerate: 30,
     avc: { format: 'avc' },
   })
+  if (h264Support.supported && typeof AudioEncoder !== 'undefined') {
+    const aacSupport = await AudioEncoder.isConfigSupported({
+      codec: AAC_CODEC_STRING,
+      sampleRate: 44100,
+      numberOfChannels: 2,
+      bitrate: AAC_BITRATE,
+    })
+    if (aacSupport.supported) return 'h264'
+  }
+
+  const vp9Support = await VideoEncoder.isConfigSupported({
+    codec: VP9_CODEC_STRING,
+    width: 1280,
+    height: 720,
+    bitrate: DEFAULT_BITRATE,
+    framerate: 30,
+  })
+  if (vp9Support.supported) return 'vp9'
   if (h264Support.supported) return 'h264'
 
   throw new Error(
