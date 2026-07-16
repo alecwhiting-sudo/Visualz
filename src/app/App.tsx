@@ -525,15 +525,29 @@ export function App() {
           const m = /^midi\.cc\.(\d+)$/.exec(signalName)
           if (m) {
             const cc = Number(m[1])
-            setMacroCcBySlot((prev) => {
-              const next = [...prev]
-              next[macro.slot - 1] = cc
-              return next
-            })
+            // DISTINCT-CC guard (review finding): a single encoder sweep emits
+            // dozens of CC messages, and native MIDI events flush React state
+            // between them — without a synchronous check one knob turn could
+            // claim several sequential slots (all with the same CC). The spec
+            // says "each DISTINCT CC claims the next slot": a CC already
+            // mapped to any slot is a no-op (doesn't advance), and the armed
+            // slot is advanced on the REF synchronously, mirroring the
+            // per-param path's burst defense below.
+            const already = macroCcBySlotRef.current.indexOf(cc)
+            if (macro.mode === 'sequential' && already >= 0) return
+            const claimed = [...macroCcBySlotRef.current]
+            // Single-mode re-learn MOVES a CC (clears its old slot) rather
+            // than refusing it — re-arranging hardware must stay possible.
+            if (already >= 0) claimed[already] = null
+            claimed[macro.slot - 1] = cc
+            macroCcBySlotRef.current = claimed
+            setMacroCcBySlot(claimed)
             if (macro.mode === 'single' || macro.slot >= MACRO_SLOT_COUNT) {
+              macroLearnRef.current = null
               setMacroLearn(null)
             } else {
-              setMacroLearn({ mode: 'sequential', slot: macro.slot + 1 })
+              macroLearnRef.current = { mode: 'sequential', slot: macro.slot + 1 }
+              setMacroLearn(macroLearnRef.current)
             }
           }
           return
