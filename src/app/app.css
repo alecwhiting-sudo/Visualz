@@ -493,6 +493,18 @@ body {
   color: var(--accent);
 }
 
+.scene-params-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.scene-params-header h2 {
+  margin-bottom: 0;
+}
+
 .session-file {
   flex: 1;
   margin-bottom: 0;

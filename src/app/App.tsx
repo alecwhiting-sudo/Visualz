@@ -863,7 +863,34 @@ export function App() {
                   onSwitch={() => onSwitchScene(switchTargetId)}
                   disabled={replay !== null || exporting !== null}
                 />
-                <h2>{engine.scene.meta.name}</h2>
+                <div className="scene-params-header">
+                  <h2>{engine.scene.meta.name}</h2>
+                  {/* Same global learn toggle as the MIDI disclosure (INPUTS
+                     tab) — surfaced here too because binding hardware to THIS
+                     scene's params is a SCENE-tab activity (user request). */}
+                  {midiSupported && (
+                    <button
+                      type="button"
+                      className={`session-button tab-button${learnMode ? ' midi-learning' : ''}`}
+                      onClick={() => {
+                        setLearnMode((on) => {
+                          const next = !on
+                          if (!next) setArmedParam(null)
+                          return next
+                        })
+                      }}
+                    >
+                      {learnMode ? 'Stop learning' : 'MIDI learn'}
+                    </button>
+                  )}
+                </div>
+                {learnMode && (
+                  <p className="session-status">
+                    {armedParam
+                      ? `learning "${armedParam}" — move a hardware control (Esc to stop)`
+                      : 'learn on — move a param slider, then a hardware control (Esc to stop)'}
+                  </p>
+                )}
                 {engine.scene.params.map((p) => (
                   <Knob
                     key={p.name}
