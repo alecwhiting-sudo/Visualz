@@ -13,7 +13,7 @@ import { expect, test } from '@playwright/test'
  *    resets deterministically (a live/manual test can't observe "would this
  *    have engaged the same way on a second run").
  * 2. Real UI (no `window.__viz` — the real App shell doesn't boot that
- *    harness, see transport-ui.spec.ts): the perform strip's RotaryKnob must
+ *    harness, see transport-ui.spec.ts): the studio panel's Knob must
  *    visibly go dormant -> engaged when a ctl.N value arrives. Headless
  *    Chromium's WebMIDI always rejects (midi.spec.ts), so hardware can't be
  *    simulated — `window.__vizLive.setInputSignal` (App.tsx) is the seam,
@@ -120,25 +120,24 @@ test('a slot engaged before a switch does not drive the new scene until re-engag
 
 // --- 2. Real UI: dormant -> touch -> engaged (no window.__viz here) --------
 
-test('perform-strip rotary goes dormant -> engaged when a ctl.N value arrives', async ({ page }) => {
+test('studio knob goes dormant -> engaged when a ctl.N value arrives', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('.panel')).toBeVisible()
   await page.waitForFunction(() => window.__vizLive !== undefined)
 
-  await page.getByRole('button', { name: 'Stage view' }).click()
-  const freqXKnob = page.locator('.rotary-knob').filter({ hasText: 'X frequency' })
+  const freqXKnob = page.locator('.knob').filter({ hasText: 'X frequency' })
   await expect(freqXKnob).toBeVisible()
-  const valueEl = freqXKnob.locator('.rotary-knob-value')
+  const valueEl = freqXKnob.locator('em')
 
   // Dormant: renders freqX's plain numeric value (default 3), no macro class.
   await expect(valueEl).toHaveText('3.00')
-  await expect(freqXKnob).not.toHaveClass(/rotary-knob-macro/)
+  await expect(freqXKnob).not.toHaveClass(/knob-macro/)
 
   // Touch: a ctl.1 value arrives (what a mapped hardware CC would publish) —
-  // the rotary must go live within one 100ms poll tick.
+  // the knob must go live within one 100ms poll tick.
   await page.evaluate(() => window.__vizLive!.setInputSignal('ctl.1', 1))
 
   // Engaged: source hint flips to "ctl 1" and the accent macro styling kicks in.
   await expect(valueEl).toHaveText('ctl 1')
-  await expect(freqXKnob).toHaveClass(/rotary-knob-macro/)
+  await expect(freqXKnob).toHaveClass(/knob-macro/)
 })

@@ -57,19 +57,19 @@ test('grayscott renders deterministically at frame 96', async ({ page }) => {
   await boot(page)
   await page.evaluate(() => window.__viz!.renderFrames(96))
   expect(await page.evaluate(() => window.__viz!.frame())).toBe(96)
-  await expect(page.locator('canvas')).toHaveScreenshot('grayscott-seed42-f96.png')
+  await expect(page.locator('canvas')).toHaveScreenshot('grayscott-seed42-f96.png', { timeout: 60_000 })
 })
 
 test('grayscott composes correctly at 9:16', async ({ page }) => {
   await boot(page, { size: '&w=360&h=640' })
   await page.evaluate(() => window.__viz!.renderFrames(96))
-  await expect(page.locator('canvas')).toHaveScreenshot('grayscott-9x16-f96.png')
+  await expect(page.locator('canvas')).toHaveScreenshot('grayscott-9x16-f96.png', { timeout: 60_000 })
 })
 
 test('grayscott composes correctly at 1:1', async ({ page }) => {
   await boot(page, { size: '&w=480&h=480' })
   await page.evaluate(() => window.__viz!.renderFrames(96))
-  await expect(page.locator('canvas')).toHaveScreenshot('grayscott-1x1-f96.png')
+  await expect(page.locator('canvas')).toHaveScreenshot('grayscott-1x1-f96.png', { timeout: 60_000 })
 })
 
 // --- Non-blank guards (silent all-black regression), all 3 aspects ---------

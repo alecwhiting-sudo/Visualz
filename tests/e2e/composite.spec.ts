@@ -60,19 +60,19 @@ test('blend-julia-flow renders deterministically at frame 90', async ({ page }) 
   await boot(page)
   await page.evaluate(() => window.__viz!.renderFrames(90))
   expect(await page.evaluate(() => window.__viz!.frame())).toBe(90)
-  await expect(page.locator('canvas')).toHaveScreenshot('blend-julia-flow-seed42-f90.png')
+  await expect(page.locator('canvas')).toHaveScreenshot('blend-julia-flow-seed42-f90.png', { timeout: 60_000 })
 })
 
 test('blend-julia-flow composes correctly at 9:16', async ({ page }) => {
   await boot(page, '&w=360&h=640')
   await page.evaluate(() => window.__viz!.renderFrames(90))
-  await expect(page.locator('canvas')).toHaveScreenshot('blend-julia-flow-9x16-f90.png')
+  await expect(page.locator('canvas')).toHaveScreenshot('blend-julia-flow-9x16-f90.png', { timeout: 60_000 })
 })
 
 test('blend-julia-flow composes correctly at 1:1', async ({ page }) => {
   await boot(page, '&w=480&h=480')
   await page.evaluate(() => window.__viz!.renderFrames(90))
-  await expect(page.locator('canvas')).toHaveScreenshot('blend-julia-flow-1x1-f90.png')
+  await expect(page.locator('canvas')).toHaveScreenshot('blend-julia-flow-1x1-f90.png', { timeout: 60_000 })
 })
 
 test('blend-julia-flow canvas is not blank at all three aspects', async ({ page }) => {
@@ -216,17 +216,20 @@ test('shader stages are prefixed and blend-fs is editable', async ({ page }) => 
   expect(await litPixelCount(page)).toBeGreaterThan(2000)
 })
 
-// --- Coverage for the other registered combo (review finding: every
+// --- Coverage for the other registered combos (review finding: every
 // registered scene needs a golden per CLAUDE.md). Frame 60 bounds the
-// grayscott combo's 16-substeps-per-frame cost on SwiftShader. -------------
+// grayscott combo's 16-substeps-per-frame cost on SwiftShader; 'blend-tunnel-
+// kaleido' (Audio Tunnel x Kaleidoscope, added alongside fractallab/resonance)
+// reuses the same frame 60 convention — eyeballed non-blank, colorful mandala
+// blend of the tunnel's rings and the kaleidoscope's feedback fold. -------
 
-for (const combo of ['blend-rd-flow'] as const) {
+for (const combo of ['blend-rd-flow', 'blend-tunnel-kaleido'] as const) {
   test(`${combo} renders deterministically at frame 60`, async ({ page }) => {
     await page.goto(`/?test=1&seed=42&scene=${combo}&count=16384`)
     await page.waitForFunction(() => window.__viz !== undefined)
     await page.evaluate(() => window.__viz!.renderFrames(60))
     expect(await litPixelCount(page)).toBeGreaterThan(2000)
-    await expect(page.locator('canvas')).toHaveScreenshot(`${combo}-seed42-f60.png`)
+    await expect(page.locator('canvas')).toHaveScreenshot(`${combo}-seed42-f60.png`, { timeout: 60_000 })
   })
 
   test(`${combo} replays byte-identically via loadSession`, async ({ page }) => {

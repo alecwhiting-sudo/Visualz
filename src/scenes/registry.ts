@@ -6,6 +6,8 @@ import { KaleidoScene } from './builtin/kaleido'
 import { GrayScottScene } from './builtin/grayscott'
 import { MorphogenScene } from './builtin/morphogen'
 import { TunnelScene } from './builtin/tunnel'
+import { FractalLabScene } from './builtin/fractallab'
+import { ResonanceScene } from './builtin/resonance'
 import { PhotoSwarmScene } from './builtin/photoswarm'
 import { CompositeScene, type CompositeChild } from './composite'
 import type { SceneRuntime } from './types'
@@ -44,6 +46,8 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
   grayscott: { name: 'Reaction-Diffusion', create: () => new GrayScottScene() },
   morph: { name: 'Morphogen', create: () => new MorphogenScene() },
   tunnel: { name: 'Audio Tunnel', create: () => new TunnelScene() },
+  fractallab: { name: 'Fractal Lab', create: () => new FractalLabScene() },
+  resonance: { name: 'Resonance', create: () => new ResonanceScene() },
   photoswarm: { name: 'Photo Swarm', create: () => new PhotoSwarmScene() },
   'blend-julia-flow': {
     name: 'Julia × Flow field',
@@ -79,6 +83,15 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
         { id: 'blend-tunnel-morph', name: 'Tunnel × Morphogen', family: 'geometry' },
         tunnelChild,
         morphChild,
+      ),
+  },
+  'blend-tunnel-kaleido': {
+    name: 'Tunnel × Kaleido',
+    create: () =>
+      new CompositeScene(
+        { id: 'blend-tunnel-kaleido', name: 'Tunnel × Kaleido', family: 'geometry' },
+        tunnelChild,
+        kaleidoChild,
       ),
   },
 }

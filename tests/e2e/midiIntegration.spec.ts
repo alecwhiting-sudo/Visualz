@@ -86,3 +86,63 @@ test('macro-mapped hardware knobs keep driving params across a handoff', async (
     .poll(() => getParam(page, flowParam1.name))
     .toBeCloseTo(flowParam1.max, 1)
 })
+
+/**
+ * MIDI setup persistence (user report: "mapped all 8 controls, then knobs
+ * went dead" — a page reload was wiping the session-scoped macroCcBySlot
+ * table). `bootWithFakeMidi`'s `addInitScript` re-applies to every
+ * subsequent navigation on the same page, so `page.reload()` still lands on
+ * the fake MIDIAccess.
+ */
+test('macro mapping persists across a page reload', async ({ page }) => {
+  await bootWithFakeMidi(page)
+
+  await page.getByRole('button', { name: 'Map controls…' }).click()
+  await cc(page, 31, 10)
+  await page.getByRole('button', { name: /Stop mapping/ }).click()
+  await expect(page.getByText('CC 31')).toBeVisible()
+
+  await page.reload()
+  await page.locator('.panel-tabs button', { hasText: 'INPUTS' }).click()
+  await page.getByRole('button', { name: 'MIDI' }).click()
+  await expect(page.getByText('CC 31')).toBeVisible()
+
+  // Not just a display artifact: the restored mapping actually drives params.
+  const param0 = await page.evaluate(() => window.__vizLive!.sceneParams()[0])
+  await cc(page, 31, 127)
+  await expect.poll(() => getParam(page, param0.name)).toBeCloseTo(param0.max, 1)
+})
+
+test('seeding localStorage before boot restores the Controls 1-8 rows', async ({ page }) => {
+  // The Controls 1-8 block only renders once `midiSupported` is true, which
+  // headless Chromium's real WebMIDI never is (midi.spec.ts) — layer the
+  // localStorage seed in BEFORE `bootWithFakeMidi`'s own addInitScript+goto;
+  // Playwright applies every registered init script, in order, to each
+  // subsequent navigation, so both take effect on the same first load.
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      'visualz.midi.macroSlots.v1',
+      JSON.stringify([40, 41, null, null, null, null, null, null]),
+    )
+  })
+  await bootWithFakeMidi(page)
+  await expect(page.getByText('CC 40')).toBeVisible()
+  await expect(page.getByText('CC 41')).toBeVisible()
+})
+
+test('"Clear mapping" resets all 8 slots, and the reset itself persists across a reload', async ({ page }) => {
+  await bootWithFakeMidi(page)
+
+  await page.getByRole('button', { name: 'Map controls…' }).click()
+  await cc(page, 50, 10)
+  await page.getByRole('button', { name: /Stop mapping/ }).click()
+  await expect(page.getByText('CC 50')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Clear mapping' }).click()
+  await expect(page.getByText('CC 50')).toHaveCount(0)
+
+  await page.reload()
+  await page.locator('.panel-tabs button', { hasText: 'INPUTS' }).click()
+  await page.getByRole('button', { name: 'MIDI' }).click()
+  await expect(page.getByText('CC 50')).toHaveCount(0)
+})

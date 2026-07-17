@@ -28,14 +28,9 @@ body {
 }
 
 /* The app shell never scrolls the page — height is pinned to exactly one
-   viewport and each mode divides that space between a stage region and a
-   chrome region (panel/strip), never by growing past it. Studio and full
-   share the row layout below (studio: stage + panel side by side; full: the
-   lone .stage child fills the row); perform overrides to a column so the
-   strip sits BELOW the stage in normal flow instead of overlaying it (see
-   .app-perform / .perform-strip below — this fixes a bug where the strip
-   used to be position: fixed on top of a 100vh canvas, covering the bottom
-   of the visuals with dials). */
+   viewport. Studio (stage + panel side by side) and full (the lone .stage
+   child fills the row) share the same row layout below — full mode has no
+   extra chrome of its own, it's just studio with the panel gone. */
 .app {
   width: 100vw;
   /* dvh where supported (review finding): on iOS Safari 100vh is the LARGE
@@ -50,17 +45,12 @@ body {
   display: flex;
 }
 
-.app-perform {
-  flex-direction: column;
-}
-
 /* The canvas fills its .stage region in EVERY mode: width/height: 100% plus
    object-fit: contain scales the engine's fixed 960x540 framebuffer up or
    down to fit, letterboxed on .stage's black background — object-fit only
    affects how the bitmap is drawn inside the box, never the box's own
    (bounding-rect) size, which is what actually grows/shrinks per mode below.
-   Studio keeps a small inset + rounded corners; perform/full run edge to
-   edge. */
+   Studio keeps a small inset + rounded corners; full runs edge to edge. */
 .stage {
   position: relative;
   flex: 1;
@@ -117,6 +107,19 @@ body {
   display: flex;
   gap: 6px;
   flex: 0 0 auto;
+}
+
+/* Bug fix (user report): the SCENE->PERFORM rename made the four tab labels
+   (SCENE/PERFORM, SESSION, INPUTS, CODE) wider than the panel's 288px inner
+   width, clipping CODE off the right edge. Each button now shares the row
+   exactly — equal widths, no wrapping — with slightly tighter horizontal
+   padding than the base `.tab-button` rule (still mono/uppercase, just
+   narrower) so even PERFORM (the widest label) fits comfortably. */
+.panel-tabs .tab-button {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 6px 4px;
+  text-align: center;
 }
 
 /* The only scrolling region in the studio panel. flex: 1 1 auto + min-height:
@@ -250,16 +253,27 @@ body {
   accent-color: var(--accent);
 }
 
-.knob-armed {
-  outline: 1px solid var(--accent);
-  outline-offset: 4px;
-  border-radius: 4px;
-}
-
 /* docs/MACROS.md §5: macro-driven rows get the same accent as a bound row's
    "ƒ(t)" text, without disabling the slider (edits stay allowed). */
 .knob-macro em {
   color: var(--accent);
+}
+
+/* task #34: every param row always shows its 1-8 positional slot number (dim
+   mono, next to the label) so the Controls 1-8 positional model stays
+   visible even when nothing is currently mapped — a param at position 9+
+   simply has no `.knob-slot-num` rendered at all (App.tsx gates it). */
+.knob-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.knob-slot-num {
+  font-family: var(--mono);
+  color: var(--text-dim);
+  opacity: 0.6;
+  font-size: 11px;
 }
 
 .knob .expr {
@@ -295,9 +309,7 @@ body {
 }
 
 /* Pads/PERFORM batch: wraps the trigger-pad grid (or the XY pad) together
-   with its own "?" guidance popover, so the two always render as one unit
-   regardless of which block (PERFORM tab, full-size; perform strip,
-   compact) is asking for it. */
+   with its own "?" guidance popover, so the two always render as one unit. */
 .pads-block,
 .xy-pad-block {
   display: flex;
@@ -310,16 +322,6 @@ body {
   grid-template-columns: repeat(2, 1fr);
   gap: 6px;
   width: 88px;
-}
-
-/* Compact sizing for the perform strip (item 5): ~32px pad cells. */
-.trigger-grid-compact {
-  width: 70px;
-  gap: 4px;
-}
-
-.trigger-grid-compact .trigger-pad {
-  font-size: 9px;
 }
 
 .trigger-pad {
@@ -354,12 +356,6 @@ body {
   flex-shrink: 0;
 }
 
-/* Compact sizing for the perform strip (item 5): ~96px square. */
-.xy-pad-compact {
-  width: 96px;
-  height: 96px;
-}
-
 .xy-pad-dot {
   position: absolute;
   width: 12px;
@@ -369,12 +365,6 @@ body {
   background: var(--accent);
   box-shadow: 0 0 8px var(--accent);
   pointer-events: none;
-}
-
-.xy-pad-compact .xy-pad-dot {
-  width: 8px;
-  height: 8px;
-  margin: -4px;
 }
 
 /* --- "?" guidance popover (Pads/PERFORM batch) --------------------------- */
@@ -423,14 +413,6 @@ body {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
 }
 
-/* Inside the perform strip the popover would otherwise open downward off the
-   bottom of the viewport (the strip sits at the page's bottom edge) —
-   flip it to open upward instead. */
-.perform-strip-main .info-popover-content {
-  top: auto;
-  bottom: 24px;
-}
-
 .scene-select {
   display: block;
   margin-bottom: 12px;
@@ -450,8 +432,7 @@ body {
 }
 
 /* Scene handoff controls (docs/HANDOFF.md §6): target selector + "Switch
-   (hand off)" button, shared between the studio Scene section and the
-   perform strip. */
+   (hand off)" button. */
 .switch-control {
   display: flex;
   align-items: flex-end;
@@ -463,18 +444,6 @@ body {
   flex: 1;
   margin-bottom: 0;
   min-width: 0;
-}
-
-/* Alignment fix (see .perform-strip-main above): no longer overrides
-   align-items to `center` — falls back to the general `.switch-control`
-   rule's `flex-end`, so the "Switch (hand off)" button bottom-aligns with
-   its own "Hand off to" select, consistent with the rest of the strip. */
-.perform-strip .switch-control {
-  margin-bottom: 0;
-}
-
-.perform-strip .switch-control .scene-select {
-  min-width: 160px;
 }
 
 .keyboard-hint {
@@ -634,6 +603,11 @@ body {
   color: var(--text-dim);
 }
 
+.macro-controls-header-buttons {
+  display: flex;
+  gap: 6px;
+}
+
 .macro-slots {
   list-style: none;
   margin: 0;
@@ -739,10 +713,8 @@ body {
   color: var(--text-dim);
 }
 
-/* Task 1: the always-visible rehearsal/armed/performing state line — shared
-   between the panel-footer (own block line, above the transport row) and
-   the perform strip (`.perf-mode-line-compact`: an inline, non-wrapping flex
-   item alongside the strip's other controls). Performing is red, matching
+/* Task 1: the always-visible rehearsal/armed/performing state line, pinned
+   in the panel footer above the transport row. Performing is red, matching
    `.record-armed`'s "this is destructive/recording" color — never accent. */
 .perf-mode-line {
   margin: 0 0 6px;
@@ -754,12 +726,6 @@ body {
 .perf-mode-line-performing {
   color: #e05656;
   font-weight: 600;
-}
-
-.perf-mode-line-compact {
-  margin: 0;
-  flex: 0 0 auto;
-  white-space: nowrap;
 }
 
 /* Task 3: the SESSION tab's take card — Export/Replay/Save/Discard for
@@ -900,83 +866,120 @@ body {
   50% { background: #331616; }
 }
 
-/* Perform mode's slim control strip (REQUIREMENTS.md §1's "nerdy UI goes
-   deep, casual use stays shallow" — here inverted for live performance:
-   everything except the essentials is hidden so the visual reads big). Sits
-   in NORMAL FLOW below the stage (.app-perform is a column flex container;
-   the stage takes flex: 1 and the strip takes its natural height) — this
-   used to be position: fixed, overlaying the bottom of a 100vh canvas so the
-   dials covered the visuals; now the stage shrinks to make room instead, so
-   canvas and strip never overlap. One translucent backdrop for the whole
-   strip; internally a thin params row (rotaries) sits above the main control
-   row (task: "ONE compact bar (params row may be a second thin row above the
-   main strip row)"). */
-.perform-strip {
-  flex: 0 0 auto;
+/* --- CODE tab: "What does this code do?" disclosure ---------------------- */
+
+.shader-docs {
+  margin-bottom: 4px;
+}
+
+.shader-docs-content {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: var(--bg-control);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #cfcfe0;
+}
+
+.shader-docs-content p {
+  margin: 0 0 8px;
+}
+
+.shader-docs-heading {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.shader-docs-try-list {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+
+.shader-docs-try-list li {
+  margin-bottom: 6px;
+}
+
+.shader-docs-try-list code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+  background: rgba(240, 134, 42, 0.1);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.shader-docs-safety {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* --- Frame buttons F1-F8 (task #35) --------------------------------------- */
+
+.frames-block {
+  margin-top: 14px;
+}
+
+.frames-header {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 6px;
-  padding: 8px 16px 10px;
-  background: rgba(26, 26, 28, 0.86);
-  backdrop-filter: blur(6px);
-  border-top: 1px solid var(--border);
+  margin-bottom: 8px;
 }
 
-/* Alignment fix (user screenshot): the Scene/"Hand off to" selects render a
-   small label ABOVE the control (taller box) while SWITCH/ARM/MIDI LEARN are
-   bare buttons (shorter box) — `align-items: center` made their vertical
-   centers match instead of their controls' bottoms, reading as ragged.
-   `flex-end` bottom-aligns every direct child instead: buttons sit flush
-   with the selects' bottoms, and the selects' labels simply ride above. */
-.perform-strip-main {
+.frames-header h3 {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.frames-row {
   display: flex;
-  align-items: flex-end;
-  gap: 12px;
   flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
-.perform-strip .scene-select {
-  margin-bottom: 0;
-  min-width: 160px;
+.frame-button {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-control);
+  color: #cfcfe0;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
 }
 
-.perform-strip .transport-row {
-  flex: 1;
-  min-width: 200px;
-  margin-top: 0;
+.frame-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
-/* Params row: one rotary per current-scene param, scrolling horizontally
-   rather than wrapping so the strip's own height stays fixed regardless of
-   how many params a scene exposes. */
-.perform-strip-params {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  overflow-x: auto;
-  padding-bottom: 2px;
+/* Occupied frames get a lit style so it's visible at a glance which of the
+   8 slots actually hold a stored snapshot. */
+.frame-button-occupied {
+  border-color: var(--accent-dim);
+  background: rgba(240, 134, 42, 0.12);
+  color: var(--accent);
 }
 
-/* Pads/PERFORM batch (item 5): the compact pads/XY block and the view-mode
-   buttons are grouped under one `margin-left: auto` wrapper (`.perform-strip-
-   right`) so the pair sits together flush at the strip's right edge —
-   `.view-mode-buttons` itself no longer carries the auto margin. */
-.perform-strip-right {
-  display: flex;
-  align-items: flex-end;
-  gap: 14px;
-  margin-left: auto;
-}
-
-.perform-strip-pads {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-}
-
-.view-mode-buttons {
-  display: flex;
-  gap: 8px;
+/* Store toggle: accent-lit (not the red `.record-armed` — storing a frame
+   isn't destructive the way recording is) while store mode is armed. */
+.store-armed {
+  border-color: var(--accent);
+  color: var(--accent);
+  animation: pulse-attn 1.6s ease-in-out infinite;
 }
 
 /* --- Rotary knob (SampleArk style) --------------------------------------- */

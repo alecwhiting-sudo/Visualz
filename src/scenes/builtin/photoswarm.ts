@@ -1,7 +1,7 @@
 import { mulberry32 } from '../../core/prng'
 import type { Gpu } from '../../gpu/context'
 import { checkFloatRenderable, FloatTarget, FullscreenPass, PingPong, type RenderSurface } from '../../gpu/targets'
-import { snapCountToSide, DEFAULT_COUNT, DEFAULT_SIDE } from '../families/particles/gpgpu'
+import { snapCountToSide, DEFAULT_SIDE } from '../families/particles/gpgpu'
 import type { FrameContext, ParamSchema, SceneRuntime, SceneSnapshot, ShaderStage } from '../types'
 
 /**
@@ -333,12 +333,15 @@ interface RenderLocs {
 export class PhotoSwarmScene implements SceneRuntime {
   meta = { id: 'photoswarm', name: 'Photo Swarm', family: 'particles' as const }
 
+  // Defaults set per the user's spec (screenshot, 2026-07-17): max particle
+  // density, gentle spring, and NO audio agitation by default — the photo
+  // forms crisp and still; turbulence/shockwave are opt-in performance moves.
   params: ParamSchema[] = [
-    { name: 'count', label: 'Particle count', min: 4096, max: 262144, default: DEFAULT_COUNT, step: 1024 },
-    { name: 'return', label: 'Spring return', min: 0.5, max: 12, default: 6.0 },
-    { name: 'turbulence', label: 'Turbulence', min: 0, max: 4, default: 1.2 },
-    { name: 'shockwave', label: 'Shockwave', min: 0, max: 4, default: 1.0 },
-    { name: 'pointSize', label: 'Point size', min: 1, max: 6, default: 2.2 },
+    { name: 'count', label: 'Particle count', min: 4096, max: 262144, default: 262144, step: 1024 },
+    { name: 'return', label: 'Spring return', min: 0.5, max: 12, default: 0.5 },
+    { name: 'turbulence', label: 'Turbulence', min: 0, max: 4, default: 0 },
+    { name: 'shockwave', label: 'Shockwave', min: 0, max: 4, default: 0 },
+    { name: 'pointSize', label: 'Point size', min: 1, max: 6, default: 1 },
   ]
 
   private values = new Map<string, number>()

@@ -1,15 +1,15 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 
 /**
  * Pads/PERFORM batch: real-app coverage (no `?test=1` harness — see
  * transport-ui.spec.ts for why) for
  *   1. the trigger pads + XY pad now living in the PERFORM tab (moved from
- *      INPUTS) with their "?" guidance popovers,
+ *      INPUTS) with their "?" guidance popovers, and
  *   2. positional pad targeting actually driving a NON-Lissajous scene's own
  *      param (the bug this batch fixes — T1-T4 used to be hardcoded to
- *      Lissajous param names, dead on every other scene),
- *   3. compact pads + XY also rendering in the perform strip, and
- *   4. the perform strip's main-row baseline alignment fix.
+ *      Lissajous param names, dead on every other scene).
+ * (The perform strip's compact pads/XY variant and its main-row alignment
+ * fix were removed along with the strip itself — see viewmodes.spec.ts.)
  */
 
 const PADS_HELP_SNIPPET = 'Momentary hits: T1-T4 each pulse'
@@ -98,62 +98,3 @@ test('a pad press on a non-Lissajous scene (Julia) visibly changes its own pulse
   expect(after - before).toBeGreaterThan(fullAmount * 0.3)
 })
 
-async function switchToPerformStrip(page: Page) {
-  await page.goto('/')
-  await page.waitForTimeout(200)
-  await page.getByRole('button', { name: 'Stage view' }).click()
-  await expect(page.locator('.perform-strip')).toBeVisible()
-}
-
-test('compact trigger pads + XY pad also render in the perform strip', async ({ page }) => {
-  await switchToPerformStrip(page)
-  const strip = page.locator('.perform-strip')
-
-  const compactPads = strip.locator('.perform-strip-pads .trigger-grid-compact')
-  const compactXy = strip.locator('.perform-strip-pads .xy-pad-compact')
-  await expect(compactPads).toBeVisible()
-  await expect(compactXy).toBeVisible()
-  await expect(compactPads.getByRole('button', { name: 'T1' })).toBeVisible()
-
-  // Both compact controls carry their own "?" popovers too.
-  await expect(strip.locator('.perform-strip-pads').getByRole('button', { name: 'Trigger pads info' })).toBeVisible()
-  await expect(strip.locator('.perform-strip-pads').getByRole('button', { name: 'XY pad info' })).toBeVisible()
-
-  // The strip stays in-flow and lean — still doesn't eat the canvas.
-  const canvasBox = await page.locator('canvas').boundingBox()
-  const stripBox = await page.locator('.perform-strip').boundingBox()
-  expect(canvasBox).not.toBeNull()
-  expect(stripBox).not.toBeNull()
-  if (!canvasBox || !stripBox) return
-  expect(canvasBox.y + canvasBox.height).toBeLessThanOrEqual(stripBox.y + 1)
-})
-
-/**
- * Alignment fix (user screenshot, item 4): the Scene/"Hand off to" selects
- * (label above control) and the bare SWITCH/ARM buttons used to look ragged
- * under `align-items: center`. `flex-end` should bottom-align every direct
- * child of `.perform-strip-main` — checked here as a cheap bounding-box
- * comparison rather than a pixel diff.
- */
-test('perform strip main row bottom-aligns its controls', async ({ page }) => {
-  await switchToPerformStrip(page)
-  const strip = page.locator('.perform-strip')
-
-  const sceneSelectBox = await strip.locator('.scene-select', { hasText: 'Scene' }).locator('select').boundingBox()
-  const switchButtonBox = await strip.getByRole('button', { name: /Switch \(hand off\)/i }).boundingBox()
-  const armButtonBox = await strip.getByRole('button', { name: 'Arm' }).boundingBox()
-
-  expect(sceneSelectBox).not.toBeNull()
-  expect(switchButtonBox).not.toBeNull()
-  expect(armButtonBox).not.toBeNull()
-  if (!sceneSelectBox || !switchButtonBox || !armButtonBox) return
-
-  const bottoms = [
-    sceneSelectBox.y + sceneSelectBox.height,
-    switchButtonBox.y + switchButtonBox.height,
-    armButtonBox.y + armButtonBox.height,
-  ]
-  const maxBottom = Math.max(...bottoms)
-  const minBottom = Math.min(...bottoms)
-  expect(maxBottom - minBottom).toBeLessThanOrEqual(6)
-})

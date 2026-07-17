@@ -9,20 +9,31 @@ import type { SessionDoc } from '../session/types'
 import { exportSession } from '../export/client'
 import { sliceExportAudioFromSeconds, type ExportProgress } from '../export/render'
 import type { ExportCodec } from '../export/encode'
-import { RotaryKnob } from './RotaryKnob'
 import { InfoPopover } from './InfoPopover'
 import { useParamBinding } from './paramBinding'
 import { framesToRenderForAudioSync } from './replayPacing'
+import { snapToStep } from '../scenes/paramStep'
+import { SHADER_DOCS } from '../scenes/shaderDocs'
+import { easedValue } from './frameGlide'
+import { TransitionSpeedKnob } from './TransitionSpeedKnob'
+import {
+  blankMacroCcBySlot,
+  DEVICE_ACTIVE_STORAGE_KEY,
+  MACRO_CC_STORAGE_KEY,
+  parseDeviceActiveMap,
+  parseMacroCcBySlot,
+} from './midiPersistence'
 import './app.css'
 
 // Pads/PERFORM batch: shared guidance copy for the "?" popovers beside the
-// trigger-pad grid and the XY pad — identical wherever either control
-// renders (the PERFORM tab's full-size versions, the perform strip's compact
-// versions), so the two never drift.
+// trigger-pad grid and the XY pad.
 const PADS_HELP_TEXT =
   "Momentary hits: T1-T4 each pulse one of the current scene's first four parameters — a kick of ~30% of its range decaying over half a second. Scenes with fewer than four parameters leave spare pads inert. MIDI notes and mapped keys fire them too. Hits are recorded into takes."
 const XY_HELP_TEXT =
   'XY performance pad — writes the pad.x / pad.y signals; bind them to any parameter with an expression like pad.x * 2.'
+// Frame buttons F1-F8 (task #35): guidance copy for the "?" popover beside them.
+const FRAMES_HELP_TEXT =
+  "Frames store the 8 controller positions. Press = jump, Shift+press = glide at the transition speed. Frames are positional, so they apply to whatever scene is live — through handoffs too."
 
 const SIGNAL_NAMES = ['rms', 'bass', 'mid', 'high', 'beat', 'onset']
 const KEYBOARD_HINT = '1-6 freqX · q/w/e freqY · space pulse drift · f/g flash/fade trail'
@@ -30,10 +41,10 @@ const KEYBOARD_HINT = '1-6 freqX · q/w/e freqY · space pulse drift · f/g flas
 /**
  * A narrow Playwright-only hook onto the REAL App's engine (docs/MACROS.md
  * §6): `window.__viz` (src/testing/hooks.ts) only exists under the `?test=1`
- * harness, which bypasses React entirely (see main.tsx) — there is no
- * RotaryKnob/perform-strip DOM there at all. But the macro e2e spec needs to
- * assert a REAL perform-strip rotary visibly tracks a macro-driven param, and
- * headless Chromium's WebMIDI always rejects (see midi.spec.ts's docstring),
+ * harness, which bypasses React entirely (see main.tsx) — there is no studio
+ * panel DOM there at all. But the macro e2e spec needs to assert a REAL
+ * studio Knob visibly tracks a macro-driven param, and headless Chromium's
+ * WebMIDI always rejects (see midi.spec.ts's docstring),
  * so real hardware can't be simulated either. `__vizLive.setInputSignal` is
  * the seam: it's exactly what a mapped MIDI CC would have written, called
  * directly, against the real live-mode Engine backing the real UI. Kept
@@ -43,6 +54,11 @@ const KEYBOARD_HINT = '1-6 freqX · q/w/e freqY · space pulse drift · f/g flas
  */
 export interface VizLiveTestApi {
   setInputSignal(name: string, value: number): void
+  /** Write a param value directly (bypassing any UI control) — Frame F1-F8
+   * e2e coverage (tests/e2e/frames.spec.ts) uses this to move a param away
+   * from its stored position before asserting a frame press/glide restores
+   * it, without depending on a specific slider's drag mechanics. */
+  setParam(name: string, value: number): void
   /** Read a live param value — full-chain MIDI integration assertions
    * (tests/e2e/midiIntegration.spec.ts) verify hardware→router→param. */
   getParam(name: string): number
@@ -169,6 +185,42 @@ function formatMidiStatus(supported: boolean, deviceCount: number): string {
   return `MIDI: ${deviceCount} input${deviceCount === 1 ? '' : 's'}`
 }
 
+// --- MIDI setup persistence (localStorage) -----------------------------------
+// User report: mapped all 8 controls, then a page reload wiped them — the
+// mapping table was session-scoped App state with no localStorage backing.
+// REQUIREMENTS.md §6 already calls for mappings persisting locally; parsing
+// lives in midiPersistence.ts (pure, unit-tested), these are just the
+// try/catch'd localStorage reads/writes (quota, private-browsing Safari, or
+// simply no `localStorage` at all must never crash the app).
+function loadMacroCcBySlot(): (number | null)[] {
+  try {
+    return parseMacroCcBySlot(localStorage.getItem(MACRO_CC_STORAGE_KEY))
+  } catch {
+    return parseMacroCcBySlot(null)
+  }
+}
+function saveMacroCcBySlot(v: (number | null)[]): void {
+  try {
+    localStorage.setItem(MACRO_CC_STORAGE_KEY, JSON.stringify(v))
+  } catch {
+    // Ignore — a failed save just means the mapping won't survive a reload.
+  }
+}
+function loadDeviceActiveMap(): Record<string, boolean> {
+  try {
+    return parseDeviceActiveMap(localStorage.getItem(DEVICE_ACTIVE_STORAGE_KEY))
+  } catch {
+    return {}
+  }
+}
+function saveDeviceActiveMap(v: Record<string, boolean>): void {
+  try {
+    localStorage.setItem(DEVICE_ACTIVE_STORAGE_KEY, JSON.stringify(v))
+  } catch {
+    // Ignore, same reasoning as saveMacroCcBySlot.
+  }
+}
+
 // --- Performance model (rehearsal / armed / performing) ---------------------
 // User-reported problem: record/play/export read as "a confusing mess", and
 // takes came out LONGER than the actual performance because the transport ⏹
@@ -187,26 +239,28 @@ function performanceModeOf(recording: boolean, armed: boolean): PerformanceMode 
 }
 
 // --- View modes -------------------------------------------------------------
-// studio: the original layout (this file, untouched below). perform: canvas
-// almost-fullscreen with a single slim control strip — the "flick to big
-// visuals, tweak via MIDI hardware" mode. full: true Fullscreen-API fullscreen
-// on the stage container, zero chrome — Esc (browser-handled) or V exits.
-type ViewMode = 'studio' | 'perform' | 'full'
+// studio: the original layout (this file, untouched below) — the PERFORM tab
+// already holds the full control surface (scene picker, hand-off, param
+// knobs, pads/XY, frames), so there is no longer an intermediate slim-strip
+// mode. full: true Fullscreen-API fullscreen on the stage container, zero
+// chrome — Esc (browser-handled) or V exits, straight back to studio.
+type ViewMode = 'studio' | 'full'
 
 /** Studio panel's SampleArk-style tab row (task: regroup the panel into
  * tabs so the column stops growing to whatever-is-expanded height). The
  * 'scene' tab (internal id kept as-is to minimize churn) is labeled PERFORM
- * — it holds the scene picker, param knobs, hand-off control, AND (Pads/
- * PERFORM batch) the trigger-pad grid + XY pad, so "Perform" now
- * unambiguously names this tab rather than also meaning the view mode (see
- * the panel-header button below, renamed "Stage view" for the same reason).
- * It's the default so casual use (knobs, pads) is one click away;
- * SESSION/INPUTS/CODE hold the deeper tools. */
+ * — it holds the scene picker, param knobs, hand-off control, pads/XY, and
+ * frames, so "Perform" now unambiguously names this tab rather than also
+ * meaning the view mode (the panel-header button is "Full screen" instead).
+ * Visual tab ORDER follows the workflow (task: "load inputs -> perform ->
+ * manage takes -> deep-edit code"): INPUTS | PERFORM | SESSION | CODE — but
+ * PERFORM stays the DEFAULT active tab (`activeTab` state below) regardless
+ * of its position, since it's the home surface casual use never leaves. */
 type StudioTab = 'scene' | 'session' | 'inputs' | 'code'
 const STUDIO_TABS: Array<[StudioTab, string]> = [
+  ['inputs', 'INPUTS'],
   ['scene', 'PERFORM'],
   ['session', 'SESSION'],
-  ['inputs', 'INPUTS'],
   ['code', 'CODE'],
 ]
 
@@ -270,74 +324,73 @@ export function App() {
   // panel can render live device checkboxes; per-device active/inactive state
   // lives inside the MidiHandle itself (session-scoped only, per the task:
   // no localStorage here — a full persistence story is a later Electron-wrapper
-  // task). `learnMode` is the global "Learn" toggle; `armedParam` is which
-  // param a slider tweak most recently armed while learn mode is on — the next
-  // CC/note from an *active* device binds to it, then only `armedParam` clears
-  // (learn mode itself stays on so the next tweak can arm another param).
+  // task).
   const [midiSupported, setMidiSupported] = useState(false)
   const [midiDevices, setMidiDevices] = useState<MidiDevice[]>([])
-  const [learnMode, setLearnMode] = useState(false)
-  const [armedParam, setArmedParam] = useState<string | null>(null)
   // Collapsed by default (task: MIDI settings behind a button) — the tab
-  // button itself is the only chrome shown until opened; learn mode keeps
-  // working while collapsed since the armed highlight lives on the param
-  // controls themselves, not inside this disclosure.
+  // button itself is the only chrome shown until opened.
   const [midiOpen, setMidiOpen] = useState(false)
-  // Kept in a ref too so the MIDI activity callback — set up once per engine
-  // attach, same lifecycle as attachKeyboard's closure — always reads the
-  // latest armed param rather than whatever was armed when it was created.
-  const armedParamRef = useRef<string | null>(null)
-  useEffect(() => {
-    armedParamRef.current = armedParam
-  }, [armedParam])
-  // Escape (or clicking Learn again, handled in its own onClick) ends learn
-  // mode entirely, per spec — not just clearing whichever param was armed.
-  useEffect(() => {
-    if (!learnMode) return
-    const onKeyDown = (ev: KeyboardEvent) => {
-      if (ev.key === 'Escape') {
-        setLearnMode(false)
-        setArmedParam(null)
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [learnMode])
 
   // --- Macro controls (docs/MACROS.md) -------------------------------------
+  // task #34 (unify MIDI learn onto the 8 macro slots): hardware mapping is
+  // now exclusively a Controls 1-8 activity — the old per-param "tweak a
+  // slider, then move a hardware control" learn flow (which wrote a
+  // range-mapped expression BINDING straight onto a param, dying on every
+  // scene handoff) is fully retired. Mapping hardware happens only via
+  // "Map controls…" (sequential, below) or a per-row relearn (single) on the
+  // Controls 1-8 list; Knob rows keep only their ALWAYS-visible slot number
+  // (1-8) so the positional model stays legible, and typed expressions in the
+  // knob fields remain the untouched, outranking "advanced" layer.
+  //
   // `macroCcBySlot[i]` is the learned CC number for slot i+1 (`ctl.${i+1}`),
   // or `null` if unmapped. This is the "MIDI CC -> ctl.N" hardware mapping —
-  // deliberately App-level state, not Engine state: it's scene-independent
-  // and must survive every switch (§1/§3), and it outlives even a cold
-  // scene-dropdown swap (attachLiveEngine/detachLiveEngine never touch it)
-  // since remapping hardware after every scene change would defeat the whole
-  // point of macros. Kept in a ref too, mirroring armedParamRef above, so the
-  // MIDI activity callback (set up once per engine attach) always reads the
-  // latest mapping rather than whatever it was when attached.
-  const [macroCcBySlot, setMacroCcBySlot] = useState<(number | null)[]>(() => new Array(MACRO_SLOT_COUNT).fill(null))
+  // App-level state, not Engine state: it's scene-independent and must
+  // survive every switch (§1/§3), and it outlives even a cold scene-dropdown
+  // swap (attachLiveEngine/detachLiveEngine never touch it) since remapping
+  // hardware after every scene change would defeat the whole point of
+  // macros. It ALSO now survives a page reload (user report: "mapped all 8
+  // controls, then knobs went dead" — a reload was wiping this table) —
+  // seeded from localStorage at mount and re-saved on every change (the sync
+  // effect below is the natural hook: it already runs on every update).
+  // Kept in a ref too, so the MIDI activity callback (set up once per engine
+  // attach) always reads the latest mapping rather than whatever it was when
+  // attached.
+  const [macroCcBySlot, setMacroCcBySlot] = useState<(number | null)[]>(() => loadMacroCcBySlot())
   const macroCcBySlotRef = useRef(macroCcBySlot)
   useEffect(() => {
     macroCcBySlotRef.current = macroCcBySlot
+    saveMacroCcBySlot(macroCcBySlot)
   }, [macroCcBySlot])
+  // Per-device active flags (task: same persistence story as the CC table) —
+  // a map of Web MIDI port id -> active, seeded from localStorage at mount.
+  // `restoredDeviceIdsRef` tracks which device ids have already had their
+  // stored flag (re)applied THIS attach cycle, so the one-time restore in the
+  // `attachMidi` onChange callback below can't loop (setDeviceActive fires
+  // `onChange` again) and can't fight a manual toggle afterward. Reset on
+  // every `attachLiveEngine` (a scene switch tears down and rebuilds the MIDI
+  // handle, so its freshly-resynced device list needs restoring again).
+  const deviceActiveMapRef = useRef<Record<string, boolean>>(loadDeviceActiveMap())
+  const restoredDeviceIdsRef = useRef<Set<string>>(new Set())
+  /** Wraps a manual device-active toggle (the INPUTS tab's checkbox) so the
+   * new flag is both applied live AND persisted — and marked "already
+   * restored" so a later resync on this same handle never overwrites the
+   * user's own just-made choice. */
+  const onToggleDeviceActive = (id: string, active: boolean) => {
+    midiHandleRef.current?.setDeviceActive(id, active)
+    deviceActiveMapRef.current = { ...deviceActiveMapRef.current, [id]: active }
+    restoredDeviceIdsRef.current.add(id)
+    saveDeviceActiveMap(deviceActiveMapRef.current)
+  }
   // Non-null while "Map controls…" (sequential) or a per-row relearn (single)
   // is in progress; `slot` is the next (or the only, for `single`) slot a
-  // matching CC will claim. Mirrors armedParamRef's ref-shadow pattern for
-  // the same reason: the activity callback must see live updates.
+  // matching CC will claim. Kept in a ref too for the same reason as
+  // `macroCcBySlotRef` above: the activity callback must see live updates.
   const [macroLearn, setMacroLearn] = useState<{ mode: 'sequential' | 'single'; slot: number } | null>(null)
   const macroLearnRef = useRef(macroLearn)
   useEffect(() => {
     macroLearnRef.current = macroLearn
   }, [macroLearn])
-  /** Ends any in-progress per-param learn — called when macro learn starts,
-   * so the two learn flows (per-param vs. Controls 1-8) never fight over the
-   * same incoming CC (docs/MACROS.md §5: the per-param flow "stays untouched"
-   * but the two are still mutually exclusive UI *modes*). */
-  const cancelParamLearn = () => {
-    setLearnMode(false)
-    setArmedParam(null)
-  }
-  // Esc ends an in-progress macro-learn early (spec: "Esc/click ends early"),
-  // same pattern as the per-param learnMode effect above.
+  // Esc ends an in-progress macro-learn early (spec: "Esc/click ends early").
   useEffect(() => {
     if (!macroLearn) return
     const onKeyDown = (ev: KeyboardEvent) => {
@@ -360,7 +413,7 @@ export function App() {
     return ids.find((id) => id !== DEFAULT_SCENE_ID) ?? ids[0] ?? DEFAULT_SCENE_ID
   })
   const [sceneVersion, setSceneVersion] = useState(0)
-  // Mirrors armedParamRef below: the hotkey listener is attached once and must
+  // Mirrors macroLearnRef above: the hotkey listener is attached once and must
   // always read the latest selected target, not whatever was selected when it
   // was set up.
   const switchTargetIdRef = useRef(switchTargetId)
@@ -445,7 +498,7 @@ export function App() {
   // directly after Stop — no round-trip through the file system (essential on
   // iPhone, where re-picking a just-saved file is clumsy).
   const [lastSession, setLastSession] = useState<SessionDoc | null>(null)
-  // Mirrors armedParamRef/switchTargetIdRef above: window.__vizLive.lastTakeDuration
+  // Mirrors macroLearnRef/switchTargetIdRef above: window.__vizLive.lastTakeDuration
   // is defined once per engine attach but must always read the CURRENT
   // lastSession, not whichever one existed when that closure was created.
   const lastSessionRef = useRef<SessionDoc | null>(null)
@@ -464,6 +517,128 @@ export function App() {
   // tap (a guaranteed-valid gesture) resumes the context.
   const [audioBlocked, setAudioBlocked] = useState(false)
 
+  // --- Frame buttons F1-F8 (task #35) --------------------------------------
+  // Eight positional snapshot slots, session-scoped App state (no
+  // persistence; survives scene switches for free, since nothing here reads
+  // sceneId/engine identity) — each slot holds the current scene's first-8
+  // param values NORMALIZED ((value-min)/(max-min)) at store time, so
+  // pressing it later re-applies those same POSITIONS to whatever scene is
+  // live, exactly like Controls 1-8's macro slots (docs/MACROS.md), just
+  // captured as a one-shot snapshot instead of driven live by hardware.
+  const [frames, setFrames] = useState<(number[] | null)[]>(() => new Array(MACRO_SLOT_COUNT).fill(null))
+  // Store mode: click Store, then a frame button captures into that slot;
+  // store mode exits after exactly one capture (single-shot, not a toggle
+  // you have to remember to turn back off).
+  const [storeArmed, setStoreArmed] = useState(false)
+  // Shift+press glide duration, seconds (0.1-10s) — App-local performance-rig
+  // state, deliberately NOT a scene param: it can't be macro/MIDI-mapped or
+  // recorded into a session, since it governs HOW a frame press plays out,
+  // not what the take itself reproduces (the param VALUES it lands on are
+  // what gets recorded, via the ordinary `engine.setParam` calls below).
+  const [transitionSpeed, setTransitionSpeed] = useState(1)
+  // The in-flight glide animator's own identity token + rAF handle — any new
+  // frame press (jump OR glide) cancels whatever glide was already running
+  // (see applyFrame below); comparing against `glideRef.current` inside the
+  // step closure is what lets a stale, superseded glide notice it's been
+  // cancelled and stop calling itself.
+  const glideRef = useRef<{
+    targets: { name: string; from: number; to: number }[]
+    startedAt: number
+    durationMs: number
+  } | null>(null)
+  const glideRafRef = useRef<number | null>(null)
+
+  const cancelGlide = () => {
+    if (glideRafRef.current !== null) {
+      cancelAnimationFrame(glideRafRef.current)
+      glideRafRef.current = null
+    }
+    glideRef.current = null
+  }
+
+  const startGlide = (targets: { name: string; from: number; to: number }[]) => {
+    if (targets.length === 0) return
+    const state = {
+      targets,
+      startedAt: performance.now(),
+      durationMs: Math.max(0.1, Math.min(10, transitionSpeed)) * 1000,
+    }
+    glideRef.current = state
+    const step = () => {
+      const e = engineRef.current
+      if (!e || glideRef.current !== state) return // superseded/cancelled
+      const progress = (performance.now() - state.startedAt) / state.durationMs
+      for (const t of state.targets) e.setParam(t.name, easedValue(t.from, t.to, progress))
+      if (progress >= 1) {
+        glideRef.current = null
+        glideRafRef.current = null
+        return
+      }
+      glideRafRef.current = requestAnimationFrame(step)
+    }
+    glideRafRef.current = requestAnimationFrame(step)
+  }
+
+  /** Captures the CURRENT scene's first-8 param values, normalized to [0,1]
+   * over each param's own range, into frame slot `index`. Re-storing
+   * overwrites; store mode always exits after exactly one capture. */
+  const storeFrame = (index: number) => {
+    const e = engineRef.current
+    if (!e) return
+    const snapshot = e.scene.params.slice(0, MACRO_SLOT_COUNT).map((p) => {
+      const range = p.max - p.min
+      const v = e.scene.getParam(p.name)
+      return range === 0 ? 0 : Math.min(1, Math.max(0, (v - p.min) / range))
+    })
+    setFrames((prev) => {
+      const next = [...prev]
+      next[index] = snapshot
+      return next
+    })
+    setStoreArmed(false)
+  }
+
+  /** Applies a stored frame POSITIONALLY onto whatever scene is currently
+   * live (docs/MACROS.md-style positional carry-over, but a one-shot capture
+   * instead of a live-driven signal): slot i's normalized value maps onto the
+   * current scene's i-th param, range-mapped and step-snapped identically to
+   * a manual knob commit. Params with an explicit expression binding are
+   * skipped (bindings outrank, same precedence Controls 1-8 uses). `glide`
+   * interpolates each affected param from its CURRENT value to the target
+   * over `transitionSpeed` seconds (ease-in-out) via `engine.setParam` calls
+   * every tick, so it records like an ordinary CC sweep; a plain press jumps
+   * instantly via one `setParam` call each. Either way, any already-running
+   * glide is cancelled first. */
+  const applyFrame = (index: number, glide: boolean) => {
+    const e = engineRef.current
+    const snapshot = frames[index]
+    if (!e || !snapshot) return
+    cancelGlide()
+    const params = e.scene.params
+    const glideTargets: { name: string; from: number; to: number }[] = []
+    for (let i = 0; i < snapshot.length && i < params.length; i++) {
+      const p = params[i]
+      if (e.getBinding(p.name) !== undefined) continue
+      const target = snapToStep(p.min + snapshot[i] * (p.max - p.min), p.min, p.max, p.step)
+      if (glide) {
+        glideTargets.push({ name: p.name, from: e.scene.getParam(p.name), to: target })
+      } else {
+        e.setParam(p.name, target)
+      }
+    }
+    if (glide) startGlide(glideTargets)
+  }
+
+  /** A frame button's own click: store-mode intercepts it (captures instead
+   * of applying); otherwise applies the frame, gliding if Shift was held. */
+  const onFrameClick = (index: number, shiftKey: boolean) => {
+    if (storeArmed) {
+      storeFrame(index)
+      return
+    }
+    applyFrame(index, shiftKey)
+  }
+
   // --- View modes (studio / perform / full) --------------------------------
   const [viewMode, setViewMode] = useState<ViewMode>('studio')
   // Computed once — feature detection, not per-frame state — and used both to
@@ -478,17 +653,14 @@ export function App() {
   // disclosure's open/closed state, learn mode).
   const [activeTab, setActiveTab] = useState<StudioTab>('scene')
 
-  /** studio -> perform -> full -> studio; skips 'full' entirely where the
-   * Fullscreen API is unavailable, so it becomes a plain two-state toggle. */
+  /** studio <-> full. A no-op where the Fullscreen API is unavailable (e.g.
+   * iPhone Safari) — there is no other mode left to toggle into. */
   const cycleViewMode = () => {
-    setViewMode((v) => {
-      if (v === 'studio') return 'perform'
-      if (v === 'perform') return fullscreenSupported ? 'full' : 'studio'
-      return 'studio'
-    })
+    if (!fullscreenSupported) return
+    setViewMode((v) => (v === 'studio' ? 'full' : 'studio'))
   }
 
-  // Mirrors switchTargetIdRef/armedParamRef below: requestFullscreenOn's
+  // Mirrors switchTargetIdRef/macroLearnRef below: requestFullscreenOn's
   // promise resolves asynchronously, so the effect that awaits it needs a
   // way to read the LATEST viewMode rather than whatever it closed over when
   // the request was fired.
@@ -519,9 +691,9 @@ export function App() {
           })
           .catch(() => {
             // Fullscreen request rejected (e.g. no user-activation left, or a
-            // feature-detection false positive) — fall back to perform rather
+            // feature-detection false positive) — fall back to studio rather
             // than leaving viewMode stuck on an unrealized 'full'.
-            setViewMode('perform')
+            setViewMode('studio')
           })
       }
     } else if (currentFullscreenElement() === stage) {
@@ -535,7 +707,7 @@ export function App() {
   useEffect(() => {
     const onFullscreenChange = () => {
       if (!currentFullscreenElement()) {
-        setViewMode((v) => (v === 'full' ? 'perform' : v))
+        setViewMode((v) => (v === 'full' ? 'studio' : v))
       }
     }
     document.addEventListener('fullscreenchange', onFullscreenChange)
@@ -570,6 +742,7 @@ export function App() {
     setEngine(e)
     window.__vizLive = {
       setInputSignal: (name, value) => e.setInputSignal(name, value),
+      setParam: (name, value) => e.setParam(name, value),
       getParam: (name) => e.scene.getParam(name),
       sceneParams: () =>
         e.scene.params.map((p) => ({ name: p.name, min: p.min, max: p.max, default: p.default })),
@@ -594,7 +767,7 @@ export function App() {
       const values: Record<string, number> = {}
       for (const p of e.scene.params) values[p.name] = e.scene.getParam(p.name)
       setParamValues(values)
-      // Footer/perform-strip "● TAKE 0:23" counter: frame arithmetic against
+      // Footer "● TAKE 0:23" counter: frame arithmetic against
       // the deterministic transport, not a wall-clock read (see
       // recordingStartFrameRef's comment).
       if (e.isRecording && recordingStartFrameRef.current !== null) {
@@ -637,79 +810,62 @@ export function App() {
         if (slotIndex >= 0) e.setInputSignal(`ctl.${slotIndex + 1}`, value)
       },
     }
+    restoredDeviceIdsRef.current = new Set()
     midiHandleRef.current = attachMidi(
       midiSink,
       (state) => {
         setMidiSupported(state.supported)
+        // Restore persisted per-device active flags exactly once per device
+        // per attach cycle (task): applying a stored flag calls
+        // `setDeviceActive`, which fires this same callback again with the
+        // corrected list — `restoredDeviceIdsRef` is what stops that from
+        // looping or re-fighting a manual toggle made in the meantime.
+        for (const d of state.devices) {
+          const stored = deviceActiveMapRef.current[d.id]
+          if (stored !== undefined && stored !== d.active && !restoredDeviceIdsRef.current.has(d.id)) {
+            restoredDeviceIdsRef.current.add(d.id)
+            midiHandleRef.current?.setDeviceActive(d.id, stored)
+          }
+        }
         setMidiDevices(state.devices)
       },
       (signalName) => {
-        // Controls 1-8 mapping (docs/MACROS.md §5) takes priority when a
-        // sequential "Map controls…" pass or a per-row relearn is in progress:
-        // the next CC claims the armed slot instead of (also) feeding the
-        // per-param learn flow below. Notes don't claim macro slots (the spec
-        // frames this as "turn hardware knobs" — CCs only) but are still
-        // swallowed here so a stray note during Map Controls can't fall
-        // through and arm a per-param bind.
+        // Controls 1-8 mapping (docs/MACROS.md §5, task #34): hardware
+        // mapping is now exclusively this flow — a sequential "Map
+        // controls…" pass or a per-row relearn (`macroLearn` non-null) is the
+        // ONLY way a CC ever gets written into `macroCcBySlot`. Nothing to do
+        // if neither is in progress (the old per-param "tweak a slider, then
+        // move a hardware control" learn flow is fully retired). Notes don't
+        // claim macro slots (the spec frames this as "turn hardware knobs" —
+        // CCs only) but are still swallowed while a mapping pass is active.
         const macro = macroLearnRef.current
-        if (macro) {
-          const m = /^midi\.cc\.(\d+)$/.exec(signalName)
-          if (m) {
-            const cc = Number(m[1])
-            // DISTINCT-CC guard (review finding): a single encoder sweep emits
-            // dozens of CC messages, and native MIDI events flush React state
-            // between them — without a synchronous check one knob turn could
-            // claim several sequential slots (all with the same CC). The spec
-            // says "each DISTINCT CC claims the next slot": a CC already
-            // mapped to any slot is a no-op (doesn't advance), and the armed
-            // slot is advanced on the REF synchronously, mirroring the
-            // per-param path's burst defense below.
-            const already = macroCcBySlotRef.current.indexOf(cc)
-            if (macro.mode === 'sequential' && already >= 0) return
-            const claimed = [...macroCcBySlotRef.current]
-            // Single-mode re-learn MOVES a CC (clears its old slot) rather
-            // than refusing it — re-arranging hardware must stay possible.
-            if (already >= 0) claimed[already] = null
-            claimed[macro.slot - 1] = cc
-            macroCcBySlotRef.current = claimed
-            setMacroCcBySlot(claimed)
-            if (macro.mode === 'single' || macro.slot >= MACRO_SLOT_COUNT) {
-              macroLearnRef.current = null
-              setMacroLearn(null)
-            } else {
-              macroLearnRef.current = { mode: 'sequential', slot: macro.slot + 1 }
-              setMacroLearn(macroLearnRef.current)
-            }
-          }
-          return
+        if (!macro) return
+        const m = /^midi\.cc\.(\d+)$/.exec(signalName)
+        if (!m) return
+        const cc = Number(m[1])
+        // DISTINCT-CC guard (review finding): a single encoder sweep emits
+        // dozens of CC messages, and native MIDI events flush React state
+        // between them — without a synchronous check one knob turn could
+        // claim several sequential slots (all with the same CC). The spec
+        // says "each DISTINCT CC claims the next slot": a CC already mapped
+        // to any slot is a no-op (doesn't advance), and the armed slot is
+        // advanced on the REF synchronously.
+        const already = macroCcBySlotRef.current.indexOf(cc)
+        if (macro.mode === 'sequential' && already >= 0) return
+        const claimed = [...macroCcBySlotRef.current]
+        // Single-mode re-learn MOVES a CC (clears its old slot) rather than
+        // refusing it — re-arranging hardware must stay possible.
+        if (already >= 0) claimed[already] = null
+        claimed[macro.slot - 1] = cc
+        macroCcBySlotRef.current = claimed
+        setMacroCcBySlot(claimed)
+        if (macro.mode === 'single' || macro.slot >= MACRO_SLOT_COUNT) {
+          macroLearnRef.current = null
+          setMacroLearn(null)
+        } else {
+          macroLearnRef.current = { mode: 'sequential', slot: macro.slot + 1 }
+          setMacroLearn(macroLearnRef.current)
         }
-        // Learn mode: the next CC/note to arrive from an active device while
-        // a param is armed binds it — `midi.cc.<n>`/`midi.note.<n>` are just
-        // signal names, so this is exactly the same `setBinding` path the
-        // expression text field uses (ARCHITECTURE.md §3.8's DSL grammar
-        // already resolves bare identifiers as signals). Clear the ref
-        // synchronously (not just the state) so a burst of messages from the
-        // same encoder tick can't double-bind before React re-renders.
-        const target = armedParamRef.current
-        if (!target) return
-        armedParamRef.current = null
-        try {
-          // Range-map the 0..1 MIDI signal onto the param's [min, max] (user
-          // report: a full hardware sweep barely moved freqX — binding the
-          // bare signal drove a 1..6 param with 0..1 values, clamped at the
-          // bottom). Expressions output raw param VALUES, so learn writes the
-          // mapping explicitly; it reads as ordinary editable DSL in the knob.
-          const schema = e.scene.params.find((p) => p.name === target)
-          const expr =
-            schema && !(schema.min === 0 && schema.max === 1)
-              ? `${schema.min} + ${+(schema.max - schema.min).toFixed(4)} * ${signalName}`
-              : signalName
-          e.setBinding(target, expr)
-        } catch {
-          // `midi.cc.<n>`/`midi.note.<n>` always compile; guard anyway rather
-          // than crash on a future change to signal-name validity.
-        }
-        setArmedParam(null)
       },
     )
   }
@@ -725,8 +881,6 @@ export function App() {
     midiHandleRef.current?.detach()
     midiHandleRef.current = null
     setMidiDevices([])
-    setLearnMode(false)
-    setArmedParam(null)
     setArmed(false)
     // Ends any in-progress Controls 1-8 mapping (the old engine/MIDI handle
     // it was targeting is gone) — but NOT `macroCcBySlot` itself: the learned
@@ -740,6 +894,7 @@ export function App() {
     if (!canvas || engineRef.current) return
     attachLiveEngine(createLiveEngine(canvas, sceneId))
     return () => {
+      cancelGlide()
       detachLiveEngine()
       engineRef.current?.dispose()
       engineRef.current = null
@@ -1167,137 +1322,19 @@ export function App() {
       <div className="stage" ref={stageRef}>
         <canvas ref={canvasRef} />
       </div>
-      {/* SIBLING of .stage, not a child: .app-perform is a column flex layout
-         where the stage takes flex:1 and this strip takes natural height BELOW
-         it. Nested inside the stage it sat in flow after a height-100% canvas —
-         pushed exactly off the bottom of the overflow-hidden app (found via
-         screenshot pass: strip.top === viewport height, invisible). */}
-      {viewMode === 'perform' && (
-          <div className="perform-strip">
-            {/* Thin params row above the main strip row (task: "ONE compact
-               bar (params row may be a second thin row above the main strip
-               row)") — one rotary per current-scene param, horizontally
-               scrollable so it never forces the strip itself to wrap. Keyed
-               on sceneVersion (docs/HANDOFF.md §6's remount convention, same
-               as the studio panel's Knob list below) since an in-place
-               handoff switch mutates engine.scene without changing the
-               Engine's own identity. */}
-            {engine && engine.scene.params.length > 0 && (
-              <div className="perform-strip-params" key={`perform-params-${sceneId}-${sceneVersion}`}>
-                {engine.scene.params.map((p, i) => (
-                  <RotaryKnob
-                    key={p.name}
-                    engine={engine}
-                    schema={p}
-                    slot={i + 1}
-                    liveValue={paramValues[p.name] ?? p.default}
-                    learnArm={learnMode ? () => setArmedParam(p.name) : undefined}
-                    armed={armedParam === p.name}
-                  />
-                ))}
-              </div>
-            )}
-            <div className="perform-strip-main">
-              <SceneSelect sceneId={sceneId} onChange={onSceneChange} disabled={replay !== null || exporting !== null} />
-              {engine && (
-                <SwitchControl
-                  targetId={switchTargetId}
-                  onTargetChange={setSwitchTargetId}
-                  onSwitch={() => onSwitchScene(switchTargetId)}
-                  disabled={replay !== null || exporting !== null}
-                />
-              )}
-              {engine && playback.hasFile && (
-                <TransportRow
-                  engine={engine}
-                  playback={playback}
-                  recording={recording}
-                  armed={armed}
-                  setArmed={setArmed}
-                  beginTake={beginTake}
-                  endTake={endTake}
-                />
-              )}
-              <PerformanceModeLine
-                mode={performanceModeOf(recording, armed)}
-                hasFile={playback.hasFile}
-                takeSeconds={takeElapsedSec}
-                compact
-              />
-              <RecordButton
-                recording={recording}
-                armed={armed}
-                disabled={!engine || replay !== null || exporting !== null}
-                onToggleRecording={onToggleRecording}
-              />
-              {/* Same global learn toggle as the PERFORM tab / MIDI disclosure
-                 (user request): in perform view the rotaries above arm exactly
-                 like the studio sliders, so learn belongs here too. The armed
-                 rotary's highlight is the status; no room for the text line. */}
-              {midiSupported && (
-                <button
-                  type="button"
-                  className={`session-button${learnMode ? ' midi-learning' : ''}`}
-                  title={
-                    learnMode
-                      ? armedParam
-                        ? `learning "${armedParam}" — move a hardware control (Esc to stop)`
-                        : 'learn on — tweak a dial, then move a hardware control (Esc to stop)'
-                      : 'MIDI learn: tweak a dial, then move a hardware control'
-                  }
-                  onClick={() => {
-                    setLearnMode((on) => {
-                      const next = !on
-                      if (!next) setArmedParam(null)
-                      // Mutually exclusive with Controls 1-8 mapping (docs/MACROS.md
-                      // §5): starting per-param learn cancels any in-progress macro learn.
-                      else setMacroLearn(null)
-                      return next
-                    })
-                  }}
-                >
-                  {learnMode ? 'Learning…' : 'MIDI learn'}
-                </button>
-              )}
-              {/* Pads/PERFORM batch (item 5, user request "bottom right"):
-                 compact trigger pads + XY pad, right end of the strip near
-                 the Stage/Studio buttons — same components as the PERFORM
-                 tab's full-size versions, just sized down via `compact`.
-                 Grouped with `.view-mode-buttons` under one `margin-left:
-                 auto` wrapper so the pair sits flush at the strip's right
-                 edge instead of drifting to wherever the flow left off. */}
-              <div className="perform-strip-right">
-                {engine && (
-                  <div className="perform-strip-pads">
-                    <TriggerPads engine={engine} compact />
-                    <XyPad engine={engine} compact />
-                  </div>
-                )}
-                <div className="view-mode-buttons">
-                  {fullscreenSupported && (
-                    <button type="button" className="session-button" onClick={() => setViewMode('full')}>
-                      Full screen
-                    </button>
-                  )}
-                  <button type="button" className="session-button" onClick={() => setViewMode('studio')}>
-                    Studio
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-      )}
       {viewMode === 'studio' && (
       <aside className="panel">
         <div className="panel-header">
           <h1>Visualz</h1>
-          {/* Pads/PERFORM batch: "Perform" now unambiguously names the tab
-             (PERFORM, above) — this button only ever meant the VIEW MODE, so
-             it's relabeled "Stage view" (the internal ViewMode string stays
-             'perform', per the task). */}
-          <button type="button" className="session-button" onClick={() => setViewMode('perform')}>
-            Stage view
-          </button>
+          {/* Full-screen entry point (the removed 'perform' strip mode's only
+             surviving affordance): jumps straight into true Fullscreen-API
+             fullscreen on the stage. Hidden where the API is unavailable
+             (iPhone Safari) — there's nowhere for it to go. */}
+          {fullscreenSupported && (
+            <button type="button" className="session-button" onClick={() => setViewMode('full')}>
+              Full screen
+            </button>
+          )}
         </div>
 
         <div className="panel-tabs" role="tablist">
@@ -1341,43 +1378,14 @@ export function App() {
                 />
                 <div className="scene-params-header">
                   <h2>{engine.scene.meta.name}</h2>
-                  {/* Same global learn toggle as the MIDI disclosure (INPUTS
-                     tab) — surfaced here too because binding hardware to THIS
-                     scene's params is a SCENE-tab activity (user request). */}
-                  {midiSupported && (
-                    <button
-                      type="button"
-                      className={`session-button tab-button${learnMode ? ' midi-learning' : ''}`}
-                      onClick={() => {
-                        setLearnMode((on) => {
-                          const next = !on
-                          if (!next) setArmedParam(null)
-                          else setMacroLearn(null)
-                          return next
-                        })
-                      }}
-                    >
-                      {learnMode ? 'Stop learning' : 'MIDI learn'}
-                    </button>
-                  )}
                 </div>
-                {learnMode && (
-                  <p className="session-status">
-                    {armedParam
-                      ? `learning "${armedParam}" — move a hardware control (Esc to stop)`
-                      : 'learn on — move a param slider, then a hardware control (Esc to stop)'}
-                  </p>
-                )}
+                {/* task #34: hardware mapping happens only via the INPUTS
+                   tab's Controls 1-8 ("Map controls…"/per-row Learn) — every
+                   row still ALWAYS shows its 1-8 slot number (below) so the
+                   positional model stays visible without a separate learn
+                   flow living here too. */}
                 {engine.scene.params.map((p, i) => (
-                  <Knob
-                    key={p.name}
-                    engine={engine}
-                    schema={p}
-                    slot={i + 1}
-                    liveValue={paramValues[p.name] ?? p.default}
-                    learnArm={learnMode ? () => setArmedParam(p.name) : undefined}
-                    armed={armedParam === p.name}
-                  />
+                  <Knob key={p.name} engine={engine} schema={p} slot={i + 1} liveValue={paramValues[p.name] ?? p.default} />
                 ))}
                 <p className="keyboard-hint">{KEYBOARD_HINT}</p>
                 {/* Pads/PERFORM batch (item 3): moved here from INPUTS —
@@ -1386,6 +1394,17 @@ export function App() {
                   <TriggerPads engine={engine} />
                   <XyPad engine={engine} />
                 </div>
+                {/* Frame buttons F1-F8 (task #35): eight positional snapshot
+                   slots below the pads — see FramesBlock's own doc comment. */}
+                <FramesBlock
+                  frames={frames}
+                  storeArmed={storeArmed}
+                  onToggleStore={() => setStoreArmed((a) => !a)}
+                  onFrameClick={onFrameClick}
+                  onFrameStore={storeFrame}
+                  transitionSpeed={transitionSpeed}
+                  onTransitionSpeedChange={setTransitionSpeed}
+                />
               </section>
             )}
           </div>
@@ -1528,7 +1547,7 @@ export function App() {
             <label className="file">
               <input
                 type="file"
-                accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.flac"
+                accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.flac,.aiff,.aif"
                 onChange={(ev) => onFile(ev.target.files?.[0])}
               />
               {trackName ?? 'Load audio file (demo signals until then)'}
@@ -1573,11 +1592,11 @@ export function App() {
 
             {engine && (
               // MIDI settings collapsed behind a compact disclosure (task: keep
-              // the panel free of a permanently-visible device list/Learn button
-              // most sessions never touch). Closed by default; learn mode keeps
-              // working while collapsed, since the armed highlight lives on the
-              // param controls themselves (Knob/RotaryKnob's `armed` prop), not
-              // inside this section.
+              // the panel free of a permanently-visible device list most
+              // sessions never touch). Closed by default. task #34: hardware
+              // mapping now lives ONLY here, via Controls 1-8's "Map
+              // controls…" (sequential) and each row's own "Learn" (single) —
+              // the old separate per-param "Learn" toggle is retired.
               <section className="midi-section">
                 <button
                   type="button"
@@ -1587,7 +1606,7 @@ export function App() {
                   aria-controls="midi-disclosure"
                 >
                   MIDI
-                  {(learnMode || midiDevices.length > 0) && <span className="tab-badge" aria-hidden="true" />}
+                  {(macroLearn !== null || midiDevices.length > 0) && <span className="tab-badge" aria-hidden="true" />}
                 </button>
                 {midiOpen && (
                   <div id="midi-disclosure" className="midi-disclosure">
@@ -1600,7 +1619,7 @@ export function App() {
                               <input
                                 type="checkbox"
                                 checked={d.active}
-                                onChange={(ev) => midiHandleRef.current?.setDeviceActive(d.id, ev.target.checked)}
+                                onChange={(ev) => onToggleDeviceActive(d.id, ev.target.checked)}
                               />
                               {d.name}
                             </label>
@@ -1608,52 +1627,42 @@ export function App() {
                         ))}
                       </ul>
                     )}
-                    {midiSupported && (
-                      <button
-                        type="button"
-                        className={`session-button${learnMode ? ' midi-learning' : ''}`}
-                        onClick={() => {
-                          setLearnMode((on) => {
-                            const next = !on
-                            if (!next) setArmedParam(null)
-                            else setMacroLearn(null)
-                            return next
-                          })
-                        }}
-                      >
-                        {learnMode ? 'Stop learning' : 'Learn'}
-                      </button>
-                    )}
-                    {learnMode && (
-                      <p className="session-status">
-                        {armedParam
-                          ? `learning "${armedParam}" — move a hardware control (Esc to stop)`
-                          : 'learn mode on — move a param slider to arm it (Esc to stop)'}
-                      </p>
-                    )}
-                    {/* Controls 1-8 (docs/MACROS.md §5): eight generic macro
-                       slots — map hardware ONCE here, and it drives whatever
-                       scene's params are live afterward, surviving every
-                       switch. Gated on midiSupported like the rest of the
-                       panel; there's no hardware to map without it. */}
+                    {/* Controls 1-8 (docs/MACROS.md §5, task #34): eight
+                       generic macro slots — map hardware ONCE here, and it
+                       drives whatever scene's params are live afterward,
+                       surviving every switch. Gated on midiSupported like the
+                       rest of the panel; there's no hardware to map without
+                       it. This is now the ONLY hardware-mapping flow in the
+                       app. */}
                     {midiSupported && (
                       <div className="macro-controls">
                         <div className="macro-controls-header">
                           <h3>Controls 1-8</h3>
-                          <button
-                            type="button"
-                            className={`session-button${macroLearn?.mode === 'sequential' ? ' midi-learning' : ''}`}
-                            onClick={() => {
-                              if (macroLearn?.mode === 'sequential') {
-                                setMacroLearn(null)
-                              } else {
-                                cancelParamLearn()
-                                setMacroLearn({ mode: 'sequential', slot: 1 })
-                              }
-                            }}
-                          >
-                            {macroLearn?.mode === 'sequential' ? 'Stop mapping' : 'Map controls…'}
-                          </button>
+                          <div className="macro-controls-header-buttons">
+                            <button
+                              type="button"
+                              className={`session-button${macroLearn?.mode === 'sequential' ? ' midi-learning' : ''}`}
+                              onClick={() => {
+                                if (macroLearn?.mode === 'sequential') {
+                                  setMacroLearn(null)
+                                } else {
+                                  setMacroLearn({ mode: 'sequential', slot: 1 })
+                                }
+                              }}
+                            >
+                              {macroLearn?.mode === 'sequential' ? 'Stop mapping' : 'Map controls…'}
+                            </button>
+                            {/* Persistence task: clears the whole CC->slot
+                               table (and, via the sync effect, its
+                               localStorage backing) in one action. */}
+                            <button
+                              type="button"
+                              className="session-button"
+                              onClick={() => setMacroCcBySlot(blankMacroCcBySlot())}
+                            >
+                              Clear mapping
+                            </button>
+                          </div>
                         </div>
                         {macroLearn?.mode === 'sequential' && (
                           <p className="session-status">
@@ -1674,10 +1683,7 @@ export function App() {
                                 <button
                                   type="button"
                                   className="macro-slot-learn"
-                                  onClick={() => {
-                                    cancelParamLearn()
-                                    setMacroLearn({ mode: 'single', slot })
-                                  }}
+                                  onClick={() => setMacroLearn({ mode: 'single', slot })}
                                 >
                                   Learn
                                 </button>
@@ -1947,30 +1953,26 @@ function TransportRow({
 }
 
 /** Task 1: the always-visible, one-line state indicator for the
- * rehearsal/armed/performing model — shared between the panel-footer (own
- * line, block layout) and the perform strip (`compact`: inline flex item,
- * no wrap). Rehearsal's line only makes sense once there's something whose
- * tweaks AREN'T being recorded — hidden in demo mode. */
+ * rehearsal/armed/performing model, pinned in the panel footer. Rehearsal's
+ * line only makes sense once there's something whose tweaks AREN'T being
+ * recorded — hidden in demo mode. */
 function PerformanceModeLine({
   mode,
   hasFile,
   takeSeconds,
-  compact = false,
 }: {
   mode: PerformanceMode
   hasFile: boolean
   takeSeconds: number
-  compact?: boolean
 }) {
-  const className = `perf-mode-line${compact ? ' perf-mode-line-compact' : ''}`
   if (mode === 'rehearsal') {
     if (!hasFile) return null
-    return <p className={className}>rehearsal — tweaks are not recorded</p>
+    return <p className="perf-mode-line">rehearsal — tweaks are not recorded</p>
   }
   if (mode === 'armed') {
-    return <p className={className}>armed — ▶ starts the take</p>
+    return <p className="perf-mode-line">armed — ▶ starts the take</p>
   }
-  return <p className={`${className} perf-mode-line-performing`}>● TAKE {formatTime(takeSeconds)}</p>
+  return <p className="perf-mode-line perf-mode-line-performing">● TAKE {formatTime(takeSeconds)}</p>
 }
 
 /**
@@ -1984,6 +1986,12 @@ function ShaderPanel({ engine }: { engine: Engine }) {
   const [stageKey, setStageKey] = useState(stages[0]?.key ?? '')
   const [source, setSource] = useState(stages[0]?.source ?? '')
   const [error, setError] = useState<string | null>(null)
+  // CODE tab task: the "What does this code do?" disclosure's own open/closed
+  // state — collapsed by default (same convention as the MIDI disclosure),
+  // and reset whenever the scene remounts (this whole component is keyed on
+  // `shader-${sceneId}-${sceneVersion}` by its caller, so a fresh mount here
+  // already means "new scene" without any extra effect needed).
+  const [docsOpen, setDocsOpen] = useState(false)
 
   useEffect(() => {
     const fresh = engine.getShaderSources()
@@ -2012,6 +2020,12 @@ function ShaderPanel({ engine }: { engine: Engine }) {
     }
   }
 
+  // CODE tab task: keyed by the live scene's registry id (not the stage's own
+  // `label`, which is a display string) so composite `blend-*` scenes — which
+  // have no SHADER_DOCS entry at all — correctly show no disclosure, same as
+  // any stage this file simply hasn't documented.
+  const stageDoc = SHADER_DOCS[engine.scene.meta.id]?.[stageKey]
+
   return (
     <section>
       <h2>Code</h2>
@@ -2025,6 +2039,39 @@ function ShaderPanel({ engine }: { engine: Engine }) {
           ))}
         </select>
       </label>
+      {stageDoc && (
+        <div className="shader-docs">
+          <button
+            type="button"
+            className={`tab-button${docsOpen ? ' tab-button-active' : ''}`}
+            aria-expanded={docsOpen}
+            aria-controls="shader-docs-disclosure"
+            onClick={() => setDocsOpen((open) => !open)}
+          >
+            What does this code do?
+          </button>
+          {docsOpen && (
+            <div id="shader-docs-disclosure" className="shader-docs-content">
+              <p>{stageDoc.summary}</p>
+              {stageDoc.tryThis.length > 0 && (
+                <>
+                  <p className="shader-docs-heading">Things to try</p>
+                  <ul className="shader-docs-try-list">
+                    {stageDoc.tryThis.map((t, i) => (
+                      <li key={i}>
+                        <code>{t.target}</code> — {t.effect}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              <p className="shader-docs-safety">
+                You can&apos;t break anything: a bad edit keeps the last working version running and shows the error here.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
       <textarea
         className="shader-editor"
         rows={14}
@@ -2041,16 +2088,13 @@ function ShaderPanel({ engine }: { engine: Engine }) {
 }
 
 /**
- * The trigger-pad grid (T1-T4), shared between the PERFORM tab's full-size
- * block and the perform strip's compact one (Pads/PERFORM batch item 5) —
- * `compact` just switches a CSS size modifier, the pads themselves and their
- * `engine.queueInput` wiring are identical either way. Rendered with its own
- * "?" guidance popover beside it, per the task ("everywhere they render").
+ * The trigger-pad grid (T1-T4), rendered in the PERFORM tab below the param
+ * list. Rendered with its own "?" guidance popover beside it.
  */
-function TriggerPads({ engine, compact = false }: { engine: Engine; compact?: boolean }) {
+function TriggerPads({ engine }: { engine: Engine }) {
   return (
     <div className="pads-block">
-      <div className={`trigger-grid${compact ? ' trigger-grid-compact' : ''}`}>
+      <div className="trigger-grid">
         {[0, 1, 2, 3].map((index) => (
           <button
             key={index}
@@ -2071,10 +2115,9 @@ function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v))
 }
 
-/** The XY performance pad — `compact` shrinks it for the perform strip
- * (Pads/PERFORM batch item 5), same component/signal-wiring as the PERFORM
- * tab's full-size version. Rendered with its own "?" guidance popover. */
-function XyPad({ engine, compact = false }: { engine: Engine; compact?: boolean }) {
+/** The XY performance pad, rendered in the PERFORM tab below the param list.
+ * Rendered with its own "?" guidance popover. */
+function XyPad({ engine }: { engine: Engine }) {
   const padRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ x: 0.5, y: 0.5 })
   const [active, setActive] = useState(false)
@@ -2110,7 +2153,7 @@ function XyPad({ engine, compact = false }: { engine: Engine; compact?: boolean 
     <div className="xy-pad-block">
       <div
         ref={padRef}
-        className={`xy-pad${compact ? ' xy-pad-compact' : ''}`}
+        className="xy-pad"
         onPointerDown={onDown}
         onPointerMove={onMove}
         onPointerUp={onUp}
@@ -2123,19 +2166,80 @@ function XyPad({ engine, compact = false }: { engine: Engine; compact?: boolean 
   )
 }
 
+/**
+ * Frame buttons F1-F8 (task #35): eight positional snapshot slots below the
+ * PERFORM tab's pads, a Store toggle, and the transition-speed dial — all the
+ * actual state/logic (frames array, store-armed, glide animator) lives in
+ * App itself (session-scoped, must survive scene switches for free); this is
+ * purely the render + click wiring. Right-click on a frame is a desktop
+ * shortcut that stores directly, bypassing the Store toggle entirely.
+ */
+function FramesBlock({
+  frames,
+  storeArmed,
+  onToggleStore,
+  onFrameClick,
+  onFrameStore,
+  transitionSpeed,
+  onTransitionSpeedChange,
+}: {
+  frames: (number[] | null)[]
+  storeArmed: boolean
+  onToggleStore: () => void
+  onFrameClick: (index: number, shiftKey: boolean) => void
+  onFrameStore: (index: number) => void
+  transitionSpeed: number
+  onTransitionSpeedChange: (seconds: number) => void
+}) {
+  return (
+    <div className="frames-block">
+      <div className="frames-header">
+        <h3>Frames</h3>
+        <InfoPopover label="Frames info" text={FRAMES_HELP_TEXT} />
+      </div>
+      <div className="frames-row">
+        {frames.map((frame, i) => (
+          <button
+            key={i}
+            type="button"
+            className={`frame-button${frame ? ' frame-button-occupied' : ''}`}
+            onClick={(ev) => onFrameClick(i, ev.shiftKey)}
+            onContextMenu={(ev) => {
+              ev.preventDefault()
+              onFrameStore(i)
+            }}
+          >
+            F{i + 1}
+          </button>
+        ))}
+        <button
+          type="button"
+          className={`session-button${storeArmed ? ' store-armed' : ''}`}
+          onClick={onToggleStore}
+        >
+          Store
+        </button>
+        <TransitionSpeedKnob seconds={transitionSpeed} onChange={onTransitionSpeedChange} />
+      </div>
+    </div>
+  )
+}
+
 function Knob({
   engine,
   schema,
   slot,
   liveValue,
-  learnArm,
-  armed = false,
 }: {
   engine: Engine
   schema: { name: string; label: string; min: number; max: number; default: number; step?: number }
   /** This param's 1-based position in `engine.scene.params` — docs/MACROS.md
-   * §1/§4's positional slot number, used ONLY for the "ctl N" source hint
-   * when this param is macro-driven (see `macroDriven` below). */
+   * §1/§4's positional slot number. Task #34: ALWAYS shown (dim mono, next to
+   * the label) for a param within the first 8 positions, so the positional
+   * Controls 1-8 model stays visible even when nothing is currently mapped —
+   * hidden entirely for a param at position 9+, which no macro slot can ever
+   * reach. Also still used for the "ctl N" source hint when this param is
+   * macro-driven (see `macroDriven` below). */
   slot: number
   /** This param's most recently polled live value (App's 100ms poll,
    * `engine.scene.getParam` under the hood) — rendered on the slider instead
@@ -2144,13 +2248,6 @@ function Knob({
    * than freezing the slider wherever it happened to be when the binding
    * landed. */
   liveValue: number
-  /** Present (and callable) only while the panel's global Learn mode is on;
-   * calling it arms this param as the next MIDI-learn bind target. Slider
-   * drags call it on every change while learn mode is on — the "tweak a
-   * param to arm it" flow (see App's MIDI section). */
-  learnArm?: () => void
-  /** True when this is the currently-armed learn target — highlights the row. */
-  armed?: boolean
 }) {
   const [value, setValue] = useState(engine.scene.getParam(schema.name))
   const { bound, macroDriven, exprText, setExprText, applyExpr, error } = useParamBinding(engine, schema.name)
@@ -2164,9 +2261,13 @@ function Knob({
   const macroClass = macroDriven && !bound ? ' knob-macro' : ''
 
   return (
-    <label className={`knob${armed ? ' knob-armed' : ''}${macroClass}`}>
+    <label className={`knob${macroClass}`}>
       <span>
-        {schema.label} <em>{bound ? 'ƒ(t)' : macroDriven ? `ctl ${slot}` : displayValue.toFixed(2)}</em>
+        <span className="knob-label">
+          {slot <= MACRO_SLOT_COUNT && <span className="knob-slot-num">{slot}</span>}
+          {schema.label}
+        </span>
+        <em>{bound ? 'ƒ(t)' : macroDriven ? `ctl ${slot}` : displayValue.toFixed(2)}</em>
       </span>
       <input
         type="range"
@@ -2179,11 +2280,6 @@ function Knob({
           const v = Number(ev.target.value)
           setValue(v)
           engine.setParam(schema.name, v)
-          // The "tweak a param to arm it" half of the learn flow: any slider
-          // move while learn mode is on (re-)arms this param as the bind
-          // target, moving the armed highlight here even if another knob was
-          // armed a moment ago.
-          learnArm?.()
         }}
       />
       <input
