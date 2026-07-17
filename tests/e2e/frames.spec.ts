@@ -72,11 +72,13 @@ test('shift+press glides a param over the transition duration rather than snappi
   // Shift+press F2: glide back toward the stored (default) value.
   await page.getByRole('button', { name: 'F2', exact: true }).click({ modifiers: ['Shift'] })
 
-  const mid = await getParam(page, param0.name)
-  // Not still at max (the glide has started) — proves the press did
-  // something — while the final assertion below (a later poll) proves it
-  // takes multiple ticks rather than an instant jump.
-  expect(mid).toBeLessThan(param0.max)
+  // Poll rather than one immediate read (review finding: the glide's first
+  // rAF tick sits at easedValue(from, ·, 0) === from, so an instant read
+  // races it ~33% of the time). Departure from max proves the glide started;
+  // the arrival poll below proves it takes multiple ticks, not a jump.
+  await expect
+    .poll(() => getParam(page, param0.name), { timeout: 3000 })
+    .toBeLessThan(param0.max)
   await expect.poll(() => getParam(page, param0.name), { timeout: 5000 }).toBeCloseTo(param0.default, 1)
 })
 

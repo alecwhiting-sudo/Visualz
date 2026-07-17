@@ -16,8 +16,8 @@ import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../ty
  * energies with one deterministic PRNG draw — and crossfades the rendered
  * pattern from whatever it's currently settled on toward that new pair over
  * `morph` seconds. The PRNG (mulberry32(seed)) is advanced ONLY by onset
- * events (one draw per onset) plus a fixed two draws at init to pick the
- * starting pair — never per-frame — so replay reproduces the identical mode
+ * events (one draw per onset) plus a fixed three draws at init (starting
+ * pair + grain seed) — never per-frame — so replay reproduces the identical mode
  * sequence regardless of anything but the onset signal's frame-indexed
  * on/off sequence, which fixed-timestep replay reproduces exactly.
  */

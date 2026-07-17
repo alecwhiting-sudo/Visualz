@@ -702,7 +702,7 @@ export function App() {
   }, [viewMode])
 
   // The browser can exit fullscreen for reasons outside our control (Esc, OS
-  // gesture, tab switch) — resync viewMode down to 'perform' whenever that
+  // gesture, tab switch) — resync viewMode down to 'studio' whenever that
   // happens so the UI never claims 'full' while the browser is windowed.
   useEffect(() => {
     const onFullscreenChange = () => {
@@ -953,6 +953,11 @@ export function App() {
   const onSwitchScene = (targetId: string) => {
     const e = engineRef.current
     if (!e) return
+    // A glide in flight targets the OLD scene's param names; an in-place
+    // switch keeps the same Engine, so without this the rAF stepper keeps
+    // writing stale targets at whatever same-named params the new scene has
+    // for up to 10s (review finding: cross-scene bleed).
+    cancelGlide()
     try {
       e.switchScene(targetId)
       setSceneId(targetId)
