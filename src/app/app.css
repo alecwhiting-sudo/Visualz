@@ -396,8 +396,31 @@ body {
 
 .session-controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: stretch;
+}
+
+/* User report: at the panel's real 320px width, four .session-buttons in one
+   unwrapped flex row overflowed it — SAVE JSON's label wrapped mid-word and
+   DISCARD got clipped off the right edge entirely. A 2x2 grid (task's
+   explicitly-allowed alternative to flex-wrap) fits the four take-card
+   buttons — Export video, Replay, Save JSON, Discard, in that DOM order —
+   in exactly two rows of two, each cell wide enough for its label on one
+   line. Takes priority over the plain `.session-controls` flex rule above
+   via the extra `.take-card` ancestor selector. */
+.take-card .session-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.take-card .session-button {
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-button {
@@ -596,9 +619,28 @@ body {
 }
 
 .session-file {
-  flex: 1;
+  /* min-width (not the shrink-to-0-then-ellipsis default `.file`'s own
+     overflow:hidden gives flex children) so the row actually WRAPS to two
+     lines at the panel's 320px width instead of squeezing both labels down
+     to an ellipsis — task: "no clipped or wrapped-mid-word labels". */
+  flex: 1 1 150px;
+  min-width: 150px;
   margin-bottom: 0;
   font-size: 13px;
+}
+
+/* Task 1: the "Stop replay" button sits inline with the progress line
+   rather than stacked under it — wraps to its own line first if the panel
+   is too narrow for both (same flex-wrap convention as .session-controls). */
+.replay-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.replay-status .session-status {
+  margin-top: 0;
 }
 
 .session-status {

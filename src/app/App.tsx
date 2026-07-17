@@ -11,6 +11,7 @@ import { sliceExportAudioFromSeconds, type ExportProgress } from '../export/rend
 import type { ExportCodec } from '../export/encode'
 import { RotaryKnob } from './RotaryKnob'
 import { useParamBinding } from './paramBinding'
+import { framesToRenderForAudioSync } from './replayPacing'
 import './app.css'
 
 const SIGNAL_NAMES = ['rms', 'bass', 'mid', 'high', 'beat', 'onset']
@@ -387,6 +388,31 @@ export function App() {
   // touches it.
   const [takeReady, setTakeReady] = useState(false)
   const [replay, setReplay] = useState<{ frame: number; total: number } | null>(null)
+  // Task 3 (audio-synced replay): a one-line hint shown under the replay
+  // progress line — "load the track to hear this in sync" (no track loaded
+  // for a file-kind doc) or "audio: X (take was recorded with Y)" (a
+  // different track is loaded than the one the take was recorded against,
+  // synced anyway). `null` when nothing needs saying (already synced to the
+  // right track, or a demo-kind doc with nothing to sync at all).
+  const [replayAudioHint, setReplayAudioHint] = useState<string | null>(null)
+  // Task 1 (stop replay): set to the in-progress replay's own `restoreLive`
+  // closure the moment it starts, cleared (to null) the moment it fires —
+  // the SESSION tab's "Stop replay" button and the Esc-while-replaying
+  // listener below both just call this, so there is exactly one path back to
+  // a live engine regardless of who triggered it (natural end, a mid-replay
+  // error, the button, or Esc).
+  const replayCancelRef = useRef<(() => void) | null>(null)
+  // Task 1: Esc cancels an in-progress replay, same convention as the
+  // learn-mode/macro-learn Escape listeners above — scoped to only attach
+  // while a replay is actually running.
+  useEffect(() => {
+    if (!replay) return
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') replayCancelRef.current?.()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [replay])
   const [exporting, setExporting] = useState<{ frame: number; total: number } | null>(null)
   const [sessionError, setSessionError] = useState<string | null>(null)
   // Non-fatal note from the most recent export — currently only set when an
@@ -917,13 +943,44 @@ export function App() {
     const canvas = canvasRef.current
     if (!canvas) return
 
+    // Task 3 (audio-synced replay): capture the live AudioEngine (if a track
+    // is loaded) BEFORE detaching/disposing the live engine, and dispose with
+    // `keepAudio` so the track (and its position) survives the swap to a
+    // render-mode replay engine regardless of whether this particular replay
+    // ends up syncing to it. Sync only applies to file-kind docs — a
+    // demo-kind doc's signals aren't tied to any track's timeline, so
+    // "syncing" to whatever happens to be loaded would just be a coincidence.
+    const liveAudio = engineRef.current?.audio
+    const audioLoaded = liveAudio?.hasFile ?? false
+    const docAudioName = doc.audio.kind === 'file' ? doc.audio.name : null
+    const startSeconds = doc.audio.kind === 'file' ? (doc.audio.startSeconds ?? 0) : 0
+    const syncAudio = docAudioName !== null && audioLoaded
+    const liveFileName = liveAudio?.fileName ?? null
+    const mismatchedAudioName =
+      syncAudio && liveFileName !== null && liveFileName !== docAudioName ? liveFileName : null
+
     // Stop and dispose the live engine before handing the canvas to a
     // render-mode replay engine.
     detachLiveEngine()
-    engineRef.current?.dispose()
+    engineRef.current?.dispose({ keepAudio: audioLoaded })
     engineRef.current = null
     setEngine(null)
     setRecording(false)
+
+    // Not syncing this replay to a loaded track (wrong doc kind) — pause it
+    // rather than let it keep playing on, unsynced, underneath the replay.
+    // Its position survives regardless (the dispose above didn't stop it).
+    if (audioLoaded && !syncAudio) liveAudio?.pause()
+
+    setReplayAudioHint(
+      syncAudio
+        ? mismatchedAudioName
+          ? `audio: ${mismatchedAudioName} (take was recorded with ${docAudioName})`
+          : null
+        : docAudioName !== null
+          ? 'load the track (INPUTS tab) to hear the replay in sync'
+          : null,
+    )
 
     // Any failure from here on (an uncompilable binding in a hand-edited session
     // throws DslError from loadSession or mid-replay from a binding event) must
@@ -932,22 +989,39 @@ export function App() {
     // to it if the session's scene id turns out to be invalid.
     const previousSceneId = sceneId
 
+    // Task 1 (stop replay): the ONE path back to a live engine, whichever of
+    // its callers fires it — natural end, a mid-replay error, the SESSION
+    // tab's "Stop replay" button, or Esc (both wired through
+    // `replayCancelRef`). Clears the ref synchronously so a stray second
+    // trigger (e.g. Esc held down) can't run it twice.
     const restoreLive = () => {
+      replayCancelRef.current = null
+      // Task 3: end the synced track's playback the instant the replay
+      // itself ends (natural end, error, or cancel) — mirrors how ending a
+      // live take stops audio at that same instant, rather than leaving it
+      // playing on past a replay that no longer exists.
+      if (syncAudio) liveAudio?.stop()
       engineRef.current?.dispose()
       engineRef.current = null
       setReplay(null)
+      setReplayAudioHint(null)
       const liveCanvas = canvasRef.current
       // Read directly rather than from the `sceneId` state closure: restoreLive
       // can fire synchronously (bad scene id) before a queued setSceneId below
       // has re-rendered this closure with the new value.
       const restoreSceneId = SCENES[doc.scene.id] ? doc.scene.id : previousSceneId
       if (!liveCanvas) return
-      const newEngine = createLiveEngine(liveCanvas, restoreSceneId)
+      // Re-adopt the SAME AudioEngine instance (task 3) so the loaded track
+      // survives the whole replay round trip — createLiveEngine/Engine.start
+      // already resets the transport to an adopted engine's audio position,
+      // the same path a scene switch's audio handoff uses.
+      const newEngine = createLiveEngine(liveCanvas, restoreSceneId, liveAudio)
       if (imageRef.current && newEngine.sceneAcceptsImage()) {
         newEngine.setSceneImage(imageRef.current)
       }
       attachLiveEngine(newEngine)
     }
+    replayCancelRef.current = restoreLive
 
     let replayEngine: Engine
     try {
@@ -958,7 +1032,7 @@ export function App() {
         seed: doc.seed,
         width: 960,
         height: 540,
-        fps: 60,
+        fps: doc.fps,
       })
       engineRef.current = replayEngine
       replayEngine.loadSession(doc)
@@ -972,10 +1046,35 @@ export function App() {
     }
     setReplay({ frame: 0, total: doc.durationFrames })
 
+    if (syncAudio && liveAudio) {
+      liveAudio.seek(startSeconds)
+      liveAudio.resume()
+    }
+
     const step = () => {
-      if (engineRef.current !== replayEngine) return // superseded (e.g. unmount)
+      if (engineRef.current !== replayEngine) return // superseded (cancelled, unmount, ...)
       try {
-        replayEngine.renderFrames(1)
+        if (syncAudio && liveAudio) {
+          // Task 3: pace off the real audio clock instead of one frame per
+          // rAF tick — render however many frames are due to catch the
+          // render-mode engine up to where the track actually is. Self-
+          // correcting after a slow/dropped rAF tick (never drifts); a tick
+          // where nothing is due yet renders nothing. Determinism is
+          // untouched: this only decides WHEN renderFrames runs and with
+          // what `n`, never what a frame contains.
+          const elapsed = liveAudio.time - startSeconds
+          const framesToRender = framesToRenderForAudioSync(
+            replayEngine.replayFrame,
+            elapsed,
+            doc.fps,
+            doc.durationFrames,
+          )
+          if (framesToRender > 0) replayEngine.renderFrames(framesToRender)
+        } else {
+          // No track to sync to: paced by wall-clock rAF, same as before
+          // this task (silent, one frame per displayed tick).
+          replayEngine.renderFrames(1)
+        }
       } catch (err) {
         setSessionError(err instanceof Error ? err.message : String(err))
         restoreLive()
@@ -1356,10 +1455,20 @@ export function App() {
               </div>
 
               {replay && (
-                <p className="session-status">
-                  replaying… frame {replay.frame}/{replay.total}
-                </p>
+                <div className="replay-status">
+                  <p className="session-status">
+                    replaying… frame {replay.frame}/{replay.total}
+                  </p>
+                  <button
+                    type="button"
+                    className="session-button"
+                    onClick={() => replayCancelRef.current?.()}
+                  >
+                    Stop replay
+                  </button>
+                </div>
               )}
+              {replay && replayAudioHint && <p className="session-status">{replayAudioHint}</p>}
               {exporting && (
                 <p className="session-status">
                   exporting… {Math.round((exporting.frame / Math.max(1, exporting.total)) * 100)}%
