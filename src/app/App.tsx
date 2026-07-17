@@ -834,6 +834,13 @@ export function App() {
    * them can forget to arm the badge. */
   const stashTake = (doc: SessionDoc | null) => {
     if (!doc) return
+    // A zero-frame take has nothing to replay or export (exporting one used
+    // to crash the muxer with a null-colorSpace TypeError — no video chunks
+    // ever reached it). Surface what happened instead of stashing a dud.
+    if (doc.durationFrames <= 0) {
+      setSessionError('Take was empty (0 frames) — nothing to export')
+      return
+    }
     setLastSession(doc)
     setTakeReady(true)
   }

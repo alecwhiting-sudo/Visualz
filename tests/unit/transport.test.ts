@@ -30,17 +30,20 @@ describe('Transport', () => {
     expect(t.advanceTo(0.5).frame).toBe(30)
   })
 
-  it('advanceTo frame counter is monotonic under a backward-moving clock (seek)', () => {
+  it('advanceTo frame counter FOLLOWS a backward-moving clock (stop/seek rewind)', () => {
     const t = new Transport('live', 60)
     expect(t.advanceTo(1.0).frame).toBe(60)
-    // Seek backward: dt clamps to 0 same as before, but the frame counter must
-    // NOT rewind — downstream consumers (recorder, player cursor) key state off
-    // frame monotonically increasing.
+    // Seek/stop backward: dt clamps to 0 and the counter follows time DOWN.
+    // (An earlier monotonic clamp here froze the counter after any rewind —
+    // user bug "Last take 0:00": rehearse to 133s, stop, arm, play meant the
+    // whole take counted zero frames until the track re-passed 133s. Backward
+    // time can only come from stop/seek, which are locked during recording,
+    // so within a take the counter is monotonic anyway.)
     const back = t.advanceTo(0.2)
     expect(back.dt).toBe(0)
-    expect(back.frame).toBe(60)
-    // Resuming forward past the pre-seek high-water mark advances normally again.
-    expect(t.advanceTo(1.1).frame).toBe(66)
+    expect(back.frame).toBe(12)
+    // A take armed right after the rewind measures from the rewound position.
+    expect(t.advanceTo(1.2).frame).toBe(72)
   })
 
   it('advanceTo can jump the frame counter by more than one on a slow tick', () => {

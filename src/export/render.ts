@@ -38,6 +38,13 @@ export async function renderSessionToVideo(
     fps: opts.fps,
   })
   try {
+    // A zero-frame doc would hand the muxer no video chunks at all, and
+    // webm-muxer dies finalizing on a null internal config ("Cannot read
+    // properties of null (reading 'colorSpace')" — user-reported). Fail with
+    // a message that names the actual problem instead.
+    if (doc.durationFrames <= 0) {
+      throw new Error('Session has zero frames (empty take) — nothing to export')
+    }
     engine.loadSession(doc)
 
     const sink = await createVideoSink(opts, trimAudioToVideoDuration(opts.audio, doc.durationFrames, opts.fps))

@@ -65,7 +65,15 @@ export class Transport {
     if (this.mode !== 'live') throw new Error('advanceTo() is live-mode only')
     const dt = Math.max(0, time - this.t)
     this.t = time
-    this.n = Math.max(this.n, Math.floor(time * this.fps))
+    // Follows time in BOTH directions — no monotonic clamp. The clamp seemed
+    // protective but broke the flagship flow (user bug: "Last take 0:00"):
+    // rehearse to t=133s, stop (audio rewinds to 0), arm, play — the counter
+    // froze at floor(133*fps) until the track re-passed 133s, so the whole
+    // take measured zero frames and exporting the empty take crashed the
+    // muxer. Backward time only happens from stop/seek, which are locked out
+    // during recording — so within any take the counter is monotonic anyway,
+    // which is the only place order matters (recorder events, player cursor).
+    this.n = Math.floor(time * this.fps)
     return { time: this.t, dt, frame: this.n }
   }
 
