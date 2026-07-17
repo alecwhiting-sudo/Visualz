@@ -187,6 +187,11 @@ export class Engine {
     this.seed = opts.seed
     this.audio = opts.audio ?? new AudioEngine()
     this.mappings = new MappingRuntime(DEFAULT_MAPPINGS)
+    // Pads/PERFORM batch: positional pad targets are a pure function of the
+    // scene's own param schema (see `setPadTargets`'s doc comment) — derive
+    // them here so a freshly-constructed engine's T1-T4 pads are live from
+    // frame one, same as the retarget after `switchScene` below.
+    this.mappings.setPadTargets(scene.params)
     // Redundant with the field initializer above (a fresh `MacroRouter` already
     // starts fully disengaged) but explicit per docs/MACROS.md §2's reset-point
     // list, and cheap insurance against a future refactor that reorders fields.
@@ -424,6 +429,13 @@ export class Engine {
     // switchScene clears them identically, invariant I6). Mappings/ramps are
     // left untouched: a stray `params.set(unknownName, …)` write is harmless.
     this.bindings.clear()
+    // Pads/PERFORM batch: retarget T1-T4 positionally onto B's own param
+    // schema — a stale rule still naming one of A's params would otherwise
+    // silently write nothing (or, worse, a same-named param on B by
+    // coincidence) instead of B's actual (n-1)th param. Pure function of
+    // `next.params`, so live and replay (both funnel through this same
+    // `switchScene` method, invariant I6) retarget identically.
+    this.mappings.setPadTargets(next.params)
     // Macro pickup resets on every switch (docs/MACROS.md §2): B's params are
     // a different schema at the same positions, so A's stale ctl.N-driven
     // values must not yank B's params on its very first frame — B's slots

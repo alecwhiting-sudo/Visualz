@@ -3,6 +3,12 @@ import { SignalBus } from '../../src/core/signals'
 import { MappingRuntime } from '../../src/mapping/runtime'
 import { attachKeyboard } from '../../src/mapping/keyboard'
 import type { MappingRule, SourceEvent } from '../../src/mapping/types'
+import type { ParamSchema } from '../../src/scenes/types'
+
+/** Minimal ParamSchema fixture — only the fields `setPadTargets` reads. */
+function param(name: string, min: number, max: number, def = min): ParamSchema {
+  return { name, label: name, min, max, default: def }
+}
 
 // --- Test harness ------------------------------------------------------------
 
@@ -522,7 +528,96 @@ describe('pulse composition (review follow-ups)', () => {
   })
 })
 
-// --- 8. pulseOffset (session-snapshot support) -----------------------------------
+// --- 8. setPadTargets (Pads/PERFORM batch: positional pad targeting) -------------
+
+describe('setPadTargets', () => {
+  it('28) pad T_n (trigger index n-1) pulses the scene param at position n-1', () => {
+    const runtime = new MappingRuntime([])
+    const bus = new SignalBus()
+    const params = fakeParams({ a: 0, b: 0, c: 0, d: 0 })
+    runtime.setPadTargets([param('a', 0, 1), param('b', 0, 1), param('c', 0, 1), param('d', 0, 1)])
+
+    runtime.queue({ type: 'trigger', index: 2 }) // T3 -> 'c' (0-based index 2)
+    runtime.update(1 / 60, bus, params)
+
+    expect(params.get('c')).toBeGreaterThan(0)
+    expect(params.get('a')).toBe(0)
+    expect(params.get('b')).toBe(0)
+    expect(params.get('d')).toBe(0)
+  })
+
+  it('29) pulse amount is exactly 0.3 * (max - min), full amount on the fire frame', () => {
+    const runtime = new MappingRuntime([])
+    const bus = new SignalBus()
+    const params = fakeParams({ p: 5 })
+    runtime.setPadTargets([param('p', 2, 22)]) // range 20 -> amount 6
+    runtime.queue({ type: 'trigger', index: 0 })
+    runtime.update(1 / 60, bus, params)
+    expect(params.get('p')).toBeCloseTo(5 + 0.3 * 20, 9)
+  })
+
+  it('30) fewer than 4 params yields fewer rules — spare pads are inert', () => {
+    const runtime = new MappingRuntime([])
+    const bus = new SignalBus()
+    const params = fakeParams({ a: 1, b: 1 })
+    runtime.setPadTargets([param('a', 0, 10), param('b', 0, 10)])
+
+    // T3/T4 (indices 2, 3) have no backing param — pressing them changes nothing.
+    runtime.queue({ type: 'trigger', index: 2 })
+    runtime.queue({ type: 'trigger', index: 3 })
+    runtime.update(1 / 60, bus, params)
+    expect(params.get('a')).toBe(1)
+    expect(params.get('b')).toBe(1)
+    expect(params.calls).toHaveLength(0)
+
+    // T1/T2 still work.
+    runtime.queue({ type: 'trigger', index: 0 })
+    runtime.update(1 / 60, bus, params)
+    expect(params.get('a')).toBeGreaterThan(1)
+  })
+
+  it('31) keyboard rules are untouched by a pad retarget', () => {
+    const rules: MappingRule[] = [
+      { source: { type: 'key', key: '1' }, action: { type: 'set', param: 'freqX', value: 4 } },
+    ]
+    const runtime = new MappingRuntime(rules)
+    const bus = new SignalBus()
+    const params = fakeParams({ freqX: 0 })
+    runtime.setPadTargets([param('a', 0, 1)])
+
+    runtime.queue({ type: 'key', key: '1', edge: 'down' })
+    runtime.update(1 / 60, bus, params)
+    expect(params.get('freqX')).toBe(4)
+  })
+
+  it('32) idempotent: calling it twice with the same schema does not double-fire a pad', () => {
+    const runtime = new MappingRuntime([])
+    const bus = new SignalBus()
+    const params = fakeParams({ p: 0 })
+    const schema = [param('p', 0, 10)]
+    runtime.setPadTargets(schema)
+    runtime.setPadTargets(schema) // repeated call — must replace, not accumulate
+
+    runtime.queue({ type: 'trigger', index: 0 })
+    runtime.update(1 / 60, bus, params)
+    expect(params.get('p')).toBeCloseTo(0.3 * 10, 9) // exactly one pulse's worth, not two
+  })
+
+  it('33) retargeting to a new schema replaces the old rule outright (no leftover old-param rule)', () => {
+    const runtime = new MappingRuntime([])
+    const bus = new SignalBus()
+    const params = fakeParams({ old: 0, fresh: 0 })
+    runtime.setPadTargets([param('old', 0, 10)])
+    runtime.setPadTargets([param('fresh', 0, 10)]) // scene switch: index 0 now targets 'fresh'
+
+    runtime.queue({ type: 'trigger', index: 0 })
+    runtime.update(1 / 60, bus, params)
+    expect(params.get('old')).toBe(0)
+    expect(params.get('fresh')).toBeGreaterThan(0)
+  })
+})
+
+// --- 9. pulseOffset (session-snapshot support) -----------------------------------
 
 describe('pulseOffset', () => {
   it('27) reports the summed live pulse contribution, 0 when idle or expired', () => {

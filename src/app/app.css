@@ -294,11 +294,32 @@ body {
   align-items: flex-start;
 }
 
+/* Pads/PERFORM batch: wraps the trigger-pad grid (or the XY pad) together
+   with its own "?" guidance popover, so the two always render as one unit
+   regardless of which block (PERFORM tab, full-size; perform strip,
+   compact) is asking for it. */
+.pads-block,
+.xy-pad-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
 .trigger-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 6px;
   width: 88px;
+}
+
+/* Compact sizing for the perform strip (item 5): ~32px pad cells. */
+.trigger-grid-compact {
+  width: 70px;
+  gap: 4px;
+}
+
+.trigger-grid-compact .trigger-pad {
+  font-size: 9px;
 }
 
 .trigger-pad {
@@ -333,6 +354,12 @@ body {
   flex-shrink: 0;
 }
 
+/* Compact sizing for the perform strip (item 5): ~96px square. */
+.xy-pad-compact {
+  width: 96px;
+  height: 96px;
+}
+
 .xy-pad-dot {
   position: absolute;
   width: 12px;
@@ -342,6 +369,66 @@ body {
   background: var(--accent);
   box-shadow: 0 0 8px var(--accent);
   pointer-events: none;
+}
+
+.xy-pad-compact .xy-pad-dot {
+  width: 8px;
+  height: 8px;
+  margin: -4px;
+}
+
+/* --- "?" guidance popover (Pads/PERFORM batch) --------------------------- */
+
+.info-popover {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.info-popover-button {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-control);
+  color: var(--text-dim);
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.info-popover-button:hover,
+.info-popover-button[aria-expanded='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.info-popover-content {
+  position: absolute;
+  z-index: 20;
+  top: 24px;
+  left: 0;
+  width: 240px;
+  padding: 10px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+/* Inside the perform strip the popover would otherwise open downward off the
+   bottom of the viewport (the strip sits at the page's bottom edge) —
+   flip it to open upward instead. */
+.perform-strip-main .info-popover-content {
+  top: auto;
+  bottom: 24px;
 }
 
 .scene-select {
@@ -378,9 +465,12 @@ body {
   min-width: 0;
 }
 
+/* Alignment fix (see .perform-strip-main above): no longer overrides
+   align-items to `center` — falls back to the general `.switch-control`
+   rule's `flex-end`, so the "Switch (hand off)" button bottom-aligns with
+   its own "Hand off to" select, consistent with the rest of the strip. */
 .perform-strip .switch-control {
   margin-bottom: 0;
-  align-items: center;
 }
 
 .perform-strip .switch-control .scene-select {
@@ -832,9 +922,15 @@ body {
   border-top: 1px solid var(--border);
 }
 
+/* Alignment fix (user screenshot): the Scene/"Hand off to" selects render a
+   small label ABOVE the control (taller box) while SWITCH/ARM/MIDI LEARN are
+   bare buttons (shorter box) — `align-items: center` made their vertical
+   centers match instead of their controls' bottoms, reading as ragged.
+   `flex-end` bottom-aligns every direct child instead: buttons sit flush
+   with the selects' bottoms, and the selects' labels simply ride above. */
 .perform-strip-main {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 12px;
   flex-wrap: wrap;
 }
@@ -861,10 +957,26 @@ body {
   padding-bottom: 2px;
 }
 
+/* Pads/PERFORM batch (item 5): the compact pads/XY block and the view-mode
+   buttons are grouped under one `margin-left: auto` wrapper (`.perform-strip-
+   right`) so the pair sits together flush at the strip's right edge —
+   `.view-mode-buttons` itself no longer carries the auto margin. */
+.perform-strip-right {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  margin-left: auto;
+}
+
+.perform-strip-pads {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
 .view-mode-buttons {
   display: flex;
   gap: 8px;
-  margin-left: auto;
 }
 
 /* --- Rotary knob (SampleArk style) --------------------------------------- */

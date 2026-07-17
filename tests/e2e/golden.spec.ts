@@ -74,6 +74,14 @@ test('expression-bound params render deterministically (equations layer)', async
   await expect(page.locator('canvas')).toHaveScreenshot('lissajous-expr-f120.png')
 })
 
+// Pads/PERFORM batch: T1-T4 used to be hardcoded to Lissajous param names
+// (all four pads identical: pulse hueSpeed + drift, force freqX/freqY to 7) —
+// dead on every other scene. Trigger index 1 (T2) now positionally pulses
+// whatever scene param sits at index 1 (Lissajous: freqY, amount 0.3 *
+// (12-1) = 3.3, halflife 0.4s — see MappingRuntime.setPadTargets), a
+// genuinely different visual than the old hardcoded combo hit, so this
+// golden was intentionally regenerated for this task (`--update-snapshots`,
+// scoped to this file; verified deterministic by re-running twice).
 test('mapped triggers and pulses render deterministically (mapping layer)', async ({ page }) => {
   await boot(page, 42)
   await page.evaluate(() => {
@@ -107,7 +115,8 @@ test('recorded session replays to identical pixels (session layer)', async ({ pa
   // threshold alone tolerates a one-frame event offset (verified in review),
   // byte-identical pixels do not.
   expect(replayHash).toBe(liveHash)
-  // Same golden as the mapping-layer test above: the replay also reproduces the
+  // Same golden as the mapping-layer test above (regenerated for the same
+  // reason — see that test's comment): the replay also reproduces the
   // original scripted performance.
   await expect(page.locator('canvas')).toHaveScreenshot('lissajous-mapped-f120.png')
 })

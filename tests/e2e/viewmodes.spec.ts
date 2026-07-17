@@ -43,11 +43,11 @@ test('studio mode (default) shows the full panel', async ({ page }) => {
 
   await expect(page.locator('.panel')).toBeVisible()
   await expect(page.locator('.panel-header h1')).toHaveText('Visualz')
-  await expect(page.getByRole('button', { name: 'Perform view' })).toBeVisible()
-  // The panel is tabbed (SCENE | SESSION | INPUTS | CODE), SCENE active by
+  await expect(page.getByRole('button', { name: 'Stage view' })).toBeVisible()
+  // The panel is tabbed (PERFORM | SESSION | INPUTS | CODE), PERFORM active by
   // default — Signals (INPUTS) and Session (SESSION) are regrouped behind
   // tabs now, so each is only visible once its own tab is active.
-  await expect(page.getByRole('tab', { name: 'SCENE' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('tab', { name: 'PERFORM' })).toHaveAttribute('aria-selected', 'true')
   await page.getByRole('tab', { name: 'INPUTS' }).click()
   await expect(page.locator('section', { has: page.locator('h2', { hasText: 'Signals' }) })).toBeVisible()
   await page.getByRole('tab', { name: 'SESSION' }).click()
@@ -69,7 +69,7 @@ test('studio panel tabs show only the active tab\'s content; the footer stays pi
   await page.goto('/')
   await expect(page.locator('.panel')).toBeVisible()
 
-  const sceneTab = page.getByRole('tab', { name: 'SCENE' })
+  const sceneTab = page.getByRole('tab', { name: 'PERFORM' })
   const sessionTab = page.getByRole('tab', { name: 'SESSION' })
   const inputsTab = page.getByRole('tab', { name: 'INPUTS' })
   const codeTab = page.getByRole('tab', { name: 'CODE' })
@@ -78,7 +78,7 @@ test('studio panel tabs show only the active tab\'s content; the footer stays pi
   const sessionSection = page.locator('section', { has: page.locator('h2', { hasText: 'Session' }) })
   const footerRecordButton = page.locator('.panel-footer').getByRole('button', { name: /Record|Arm/ })
 
-  // SCENE (default): scene-only content visible, other tabs' content hidden
+  // PERFORM (default): scene-only content visible, other tabs' content hidden
   // (still present in the DOM — count 1 — just not visible).
   await expect(sceneTab).toHaveAttribute('aria-selected', 'true')
   await expect(keyboardHint).toBeVisible()
@@ -150,7 +150,7 @@ test('switching to perform mode hides the panel and shows the slim strip', async
   // non-blank check below isn't racing the very first paint.
   await page.waitForTimeout(200)
 
-  await page.getByRole('button', { name: 'Perform view' }).click()
+  await page.getByRole('button', { name: 'Stage view' }).click()
 
   await expect(page.locator('.panel')).toHaveCount(0)
   const strip = page.locator('.perform-strip')
@@ -186,7 +186,7 @@ test('perform strip shows one rotary knob per current-scene param', async ({ pag
   const studioKnobCount = await page.locator('.knob').count()
   expect(studioKnobCount).toBeGreaterThan(0)
 
-  await page.getByRole('button', { name: 'Perform view' }).click()
+  await page.getByRole('button', { name: 'Stage view' }).click()
   const strip = page.locator('.perform-strip')
   await expect(strip).toBeVisible()
 
@@ -237,7 +237,7 @@ test('Full screen button enters real Fullscreen and fullscreenchange re-syncs to
   page.on('pageerror', (err) => pageErrors.push(String(err)))
   await page.goto('/')
 
-  await page.getByRole('button', { name: 'Perform view' }).click()
+  await page.getByRole('button', { name: 'Stage view' }).click()
   const strip = page.locator('.perform-strip')
   const fullScreenButton = strip.getByRole('button', { name: 'Full screen' })
 
@@ -291,7 +291,7 @@ test('perform mode scales the canvas to fill the stage, with the strip in flow b
   await page.goto('/')
   await page.waitForTimeout(200)
 
-  await page.getByRole('button', { name: 'Perform view' }).click()
+  await page.getByRole('button', { name: 'Stage view' }).click()
   await expect(page.locator('.perform-strip')).toBeVisible()
 
   const canvasBox = await page.locator('canvas').boundingBox()

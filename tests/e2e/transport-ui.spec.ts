@@ -8,7 +8,7 @@ import { expect, test } from '@playwright/test'
  * user-gesture-gated AudioContext, so this spec sticks to what's verifiable
  * without one — the row's hidden/shown state and the picker's presence/options.
  *
- * The studio panel is now tabbed (SCENE | SESSION | INPUTS | CODE, SCENE
+ * The studio panel is now tabbed (PERFORM | SESSION | INPUTS | CODE, PERFORM
  * active by default): the audio file input lives in INPUTS and the export
  * format picker lives in SESSION, so this spec opens each tab before
  * asserting on its content. The transport row itself lives in the panel's

@@ -10,9 +10,19 @@ import { exportSession } from '../export/client'
 import { sliceExportAudioFromSeconds, type ExportProgress } from '../export/render'
 import type { ExportCodec } from '../export/encode'
 import { RotaryKnob } from './RotaryKnob'
+import { InfoPopover } from './InfoPopover'
 import { useParamBinding } from './paramBinding'
 import { framesToRenderForAudioSync } from './replayPacing'
 import './app.css'
+
+// Pads/PERFORM batch: shared guidance copy for the "?" popovers beside the
+// trigger-pad grid and the XY pad — identical wherever either control
+// renders (the PERFORM tab's full-size versions, the perform strip's compact
+// versions), so the two never drift.
+const PADS_HELP_TEXT =
+  "Momentary hits: T1-T4 each pulse one of the current scene's first four parameters — a kick of ~30% of its range decaying over half a second. Scenes with fewer than four parameters leave spare pads inert. MIDI notes and mapped keys fire them too. Hits are recorded into takes."
+const XY_HELP_TEXT =
+  'XY performance pad — writes the pad.x / pad.y signals; bind them to any parameter with an expression like pad.x * 2.'
 
 const SIGNAL_NAMES = ['rms', 'bass', 'mid', 'high', 'beat', 'onset']
 const KEYBOARD_HINT = '1-6 freqX · q/w/e freqY · space pulse drift · f/g flash/fade trail'
@@ -184,12 +194,17 @@ function performanceModeOf(recording: boolean, armed: boolean): PerformanceMode 
 type ViewMode = 'studio' | 'perform' | 'full'
 
 /** Studio panel's SampleArk-style tab row (task: regroup the panel into
- * tabs so the column stops growing to whatever-is-expanded height). SCENE
- * is the default so casual use (knobs) is one click away; SESSION/INPUTS/
- * CODE hold the deeper tools. */
+ * tabs so the column stops growing to whatever-is-expanded height). The
+ * 'scene' tab (internal id kept as-is to minimize churn) is labeled PERFORM
+ * — it holds the scene picker, param knobs, hand-off control, AND (Pads/
+ * PERFORM batch) the trigger-pad grid + XY pad, so "Perform" now
+ * unambiguously names this tab rather than also meaning the view mode (see
+ * the panel-header button below, renamed "Stage view" for the same reason).
+ * It's the default so casual use (knobs, pads) is one click away;
+ * SESSION/INPUTS/CODE hold the deeper tools. */
 type StudioTab = 'scene' | 'session' | 'inputs' | 'code'
 const STUDIO_TABS: Array<[StudioTab, string]> = [
-  ['scene', 'SCENE'],
+  ['scene', 'PERFORM'],
   ['session', 'SESSION'],
   ['inputs', 'INPUTS'],
   ['code', 'CODE'],
@@ -1215,9 +1230,9 @@ export function App() {
                 disabled={!engine || replay !== null || exporting !== null}
                 onToggleRecording={onToggleRecording}
               />
-              {/* Same global learn toggle as SCENE tab / MIDI disclosure (user
-                 request): in perform view the rotaries above arm exactly like
-                 the studio sliders, so learn belongs here too. The armed
+              {/* Same global learn toggle as the PERFORM tab / MIDI disclosure
+                 (user request): in perform view the rotaries above arm exactly
+                 like the studio sliders, so learn belongs here too. The armed
                  rotary's highlight is the status; no room for the text line. */}
               {midiSupported && (
                 <button
@@ -1244,15 +1259,30 @@ export function App() {
                   {learnMode ? 'Learning…' : 'MIDI learn'}
                 </button>
               )}
-              <div className="view-mode-buttons">
-                {fullscreenSupported && (
-                  <button type="button" className="session-button" onClick={() => setViewMode('full')}>
-                    Full screen
-                  </button>
+              {/* Pads/PERFORM batch (item 5, user request "bottom right"):
+                 compact trigger pads + XY pad, right end of the strip near
+                 the Stage/Studio buttons — same components as the PERFORM
+                 tab's full-size versions, just sized down via `compact`.
+                 Grouped with `.view-mode-buttons` under one `margin-left:
+                 auto` wrapper so the pair sits flush at the strip's right
+                 edge instead of drifting to wherever the flow left off. */}
+              <div className="perform-strip-right">
+                {engine && (
+                  <div className="perform-strip-pads">
+                    <TriggerPads engine={engine} compact />
+                    <XyPad engine={engine} compact />
+                  </div>
                 )}
-                <button type="button" className="session-button" onClick={() => setViewMode('studio')}>
-                  Studio
-                </button>
+                <div className="view-mode-buttons">
+                  {fullscreenSupported && (
+                    <button type="button" className="session-button" onClick={() => setViewMode('full')}>
+                      Full screen
+                    </button>
+                  )}
+                  <button type="button" className="session-button" onClick={() => setViewMode('studio')}>
+                    Studio
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1261,8 +1291,12 @@ export function App() {
       <aside className="panel">
         <div className="panel-header">
           <h1>Visualz</h1>
+          {/* Pads/PERFORM batch: "Perform" now unambiguously names the tab
+             (PERFORM, above) — this button only ever meant the VIEW MODE, so
+             it's relabeled "Stage view" (the internal ViewMode string stays
+             'perform', per the task). */}
           <button type="button" className="session-button" onClick={() => setViewMode('perform')}>
-            Perform view
+            Stage view
           </button>
         </div>
 
@@ -1287,7 +1321,9 @@ export function App() {
         </div>
 
         <div className="panel-content">
-          {/* SCENE: scene select, hand-off control, param knobs, keyboard hint. */}
+          {/* PERFORM (tab id stays 'scene'): scene select, hand-off control,
+             param knobs, keyboard hint, and (Pads/PERFORM batch) the
+             trigger-pad grid + XY pad below the param list. */}
           <div className="panel-tab-content" role="tabpanel" hidden={activeTab !== 'scene'}>
             {engine && (
               // `key` forces this section to remount after a handoff (§6): an
@@ -1344,6 +1380,12 @@ export function App() {
                   />
                 ))}
                 <p className="keyboard-hint">{KEYBOARD_HINT}</p>
+                {/* Pads/PERFORM batch (item 3): moved here from INPUTS —
+                   full-size trigger pads + XY pad, below the param list. */}
+                <div className="perform">
+                  <TriggerPads engine={engine} />
+                  <XyPad engine={engine} />
+                </div>
               </section>
             )}
           </div>
@@ -1480,7 +1522,8 @@ export function App() {
           </div>
 
           {/* INPUTS: audio file + diagnostic, image file, MIDI disclosure,
-             signal meters, trigger pads + XY pad. */}
+             signal meters. (Pads/PERFORM batch: the trigger pads + XY pad
+             moved to the PERFORM tab, below the param list — see below.) */}
           <div className="panel-tab-content" role="tabpanel" hidden={activeTab !== 'inputs'}>
             <label className="file">
               <input
@@ -1660,16 +1703,6 @@ export function App() {
                 </div>
               ))}
             </section>
-
-            {engine && (
-              <section>
-                <h2>Perform</h2>
-                <div className="perform">
-                  <TriggerPads engine={engine} />
-                  <XyPad engine={engine} />
-                </div>
-              </section>
-            )}
           </div>
 
           {/* CODE: the shader editor. */}
@@ -2007,19 +2040,29 @@ function ShaderPanel({ engine }: { engine: Engine }) {
   )
 }
 
-function TriggerPads({ engine }: { engine: Engine }) {
+/**
+ * The trigger-pad grid (T1-T4), shared between the PERFORM tab's full-size
+ * block and the perform strip's compact one (Pads/PERFORM batch item 5) —
+ * `compact` just switches a CSS size modifier, the pads themselves and their
+ * `engine.queueInput` wiring are identical either way. Rendered with its own
+ * "?" guidance popover beside it, per the task ("everywhere they render").
+ */
+function TriggerPads({ engine, compact = false }: { engine: Engine; compact?: boolean }) {
   return (
-    <div className="trigger-grid">
-      {[0, 1, 2, 3].map((index) => (
-        <button
-          key={index}
-          type="button"
-          className="trigger-pad"
-          onPointerDown={() => engine.queueInput({ type: 'trigger', index })}
-        >
-          T{index + 1}
-        </button>
-      ))}
+    <div className="pads-block">
+      <div className={`trigger-grid${compact ? ' trigger-grid-compact' : ''}`}>
+        {[0, 1, 2, 3].map((index) => (
+          <button
+            key={index}
+            type="button"
+            className="trigger-pad"
+            onPointerDown={() => engine.queueInput({ type: 'trigger', index })}
+          >
+            T{index + 1}
+          </button>
+        ))}
+      </div>
+      <InfoPopover label="Trigger pads info" text={PADS_HELP_TEXT} />
     </div>
   )
 }
@@ -2028,7 +2071,10 @@ function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v))
 }
 
-function XyPad({ engine }: { engine: Engine }) {
+/** The XY performance pad — `compact` shrinks it for the perform strip
+ * (Pads/PERFORM batch item 5), same component/signal-wiring as the PERFORM
+ * tab's full-size version. Rendered with its own "?" guidance popover. */
+function XyPad({ engine, compact = false }: { engine: Engine; compact?: boolean }) {
   const padRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ x: 0.5, y: 0.5 })
   const [active, setActive] = useState(false)
@@ -2061,15 +2107,18 @@ function XyPad({ engine }: { engine: Engine }) {
   }
 
   return (
-    <div
-      ref={padRef}
-      className="xy-pad"
-      onPointerDown={onDown}
-      onPointerMove={onMove}
-      onPointerUp={onUp}
-      onPointerCancel={onUp}
-    >
-      <div className="xy-pad-dot" style={{ left: `${pos.x * 100}%`, top: `${(1 - pos.y) * 100}%` }} />
+    <div className="xy-pad-block">
+      <div
+        ref={padRef}
+        className={`xy-pad${compact ? ' xy-pad-compact' : ''}`}
+        onPointerDown={onDown}
+        onPointerMove={onMove}
+        onPointerUp={onUp}
+        onPointerCancel={onUp}
+      >
+        <div className="xy-pad-dot" style={{ left: `${pos.x * 100}%`, top: `${(1 - pos.y) * 100}%` }} />
+      </div>
+      <InfoPopover label="XY pad info" text={XY_HELP_TEXT} />
     </div>
   )
 }

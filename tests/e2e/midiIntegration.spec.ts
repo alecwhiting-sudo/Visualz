@@ -68,8 +68,8 @@ test('macro-mapped hardware knobs keep driving params across a handoff', async (
   await cc(page, 21, 127)
   await expect.poll(() => getParam(page, lissParam1.name)).toBeCloseTo(lissParam1.max, 1)
 
-  // Hand off (SCENE tab -> Switch button targets Flow Field by default).
-  await page.locator('.panel-tabs button', { hasText: 'SCENE' }).click()
+  // Hand off (PERFORM tab -> Switch button targets Flow Field by default).
+  await page.locator('.panel-tabs button', { hasText: 'PERFORM' }).click()
   await page.getByRole('button', { name: /Switch \(hand off\)/i }).click()
 
   // Dormant after the switch: the new scene's first param holds its default.

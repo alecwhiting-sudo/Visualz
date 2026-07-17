@@ -31,8 +31,8 @@ import { expect, test } from '@playwright/test'
  * thing visible until clicked, so this spec opens it before asserting on the
  * status text / device list / Learn button that used to be visible outright.
  *
- * The studio panel is also now tabbed (SCENE | SESSION | INPUTS | CODE, SCENE
- * active by default) and the MIDI section lives inside INPUTS, so this spec
+ * The studio panel is also now tabbed (PERFORM | SESSION | INPUTS | CODE,
+ * PERFORM active by default) and the MIDI section lives inside INPUTS, so this spec
  * opens that tab first — same idea as the MIDI disclosure itself, just one
  * level up.
  */

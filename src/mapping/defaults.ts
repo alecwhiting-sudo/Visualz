@@ -1,10 +1,17 @@
 import type { MappingRule } from './types'
 
 /**
- * Default mapping table for the Lissajous scene — chosen to feel good live:
- * number row for X frequency, qwe for Y frequency, space for a drift kick,
- * f/g for a flash-and-fade trail, and the 2x2 trigger pad grid for a bigger
- * combined hit.
+ * Default KEYBOARD mapping table — chosen to feel good live on the Lissajous
+ * scene, its keys (number row for X frequency, qwe for Y frequency, space for
+ * a drift kick, f/g for a flash-and-fade trail) are the only defaults still
+ * hardcoded per-scene, same as before.
+ *
+ * The 2x2 trigger PAD grid used to be hardcoded here too (all four pads
+ * identical, pulsing `hueSpeed`/`drift`/`freqX`/`freqY` — dead on every scene
+ * but Lissajous). Pads/PERFORM batch: pad targets are now derived positionally
+ * from whichever scene is live, via `MappingRuntime.setPadTargets` (called by
+ * the engine at construction and after every scene switch) — there is
+ * deliberately no trigger rule left in this table.
  */
 export const DEFAULT_MAPPINGS: MappingRule[] = [
   { source: { type: 'key', key: '1' }, action: { type: 'set', param: 'freqX', value: 1 } },
@@ -31,17 +38,4 @@ export const DEFAULT_MAPPINGS: MappingRule[] = [
     source: { type: 'key', key: 'g' },
     action: { type: 'ramp', param: 'trail', target: 0.08, duration: 1.5 },
   },
-
-  ...[0, 1, 2, 3].flatMap((index): MappingRule[] => [
-    {
-      source: { type: 'trigger', index },
-      action: { type: 'pulse', param: 'hueSpeed', amount: 0.6, halflife: 0.5 },
-    },
-    {
-      source: { type: 'trigger', index },
-      action: { type: 'pulse', param: 'drift', amount: 0.8, halflife: 0.3 },
-    },
-    { source: { type: 'trigger', index }, action: { type: 'set', param: 'freqX', value: 7 } },
-    { source: { type: 'trigger', index }, action: { type: 'set', param: 'freqY', value: 7 } },
-  ]),
 ]

@@ -1,4 +1,5 @@
 import type { SignalBus } from '../core/signals'
+import type { ParamSchema } from '../scenes/types'
 import type { Action, MappingRule, SourceEvent } from './types'
 
 interface ParamAccess {
@@ -176,6 +177,40 @@ export class MappingRuntime {
           this.lastPulseWrite.delete(param)
         }
       }
+    }
+  }
+
+  /**
+   * Pads/PERFORM batch: (re)generates ONLY the trigger-sourced rules —
+   * keyboard rules are untouched — so pad T_n (trigger index n-1) pulses the
+   * CURRENT scene's (n-1)th param, positionally, instead of the old
+   * hardcoded-to-Lissajous defaults (`drift`/`hueSpeed`/`freqX`/`freqY`, dead
+   * on every other scene). Each rule pulses its param by 30% of the param's
+   * own range (`amount: 0.3 * (max - min)`) with a 0.4s halflife decay —
+   * consistent, positional "kick" semantics regardless of scene.
+   *
+   * Fewer than 4 params yields fewer trigger rules (`Math.min(4, params.length)`)
+   * — spare pads (T_(n+1)..T4) are left with no rule at all, i.e. inert: a
+   * press queues a `trigger` SourceEvent (still publishes `trig.N` on the bus
+   * for the DSL) but drives nothing.
+   *
+   * A pure function of `params` — same schema in, same rules out, so calling
+   * it from both `Engine`'s constructor and the end of `switchScene` keeps
+   * live and replay identical (replay's `switchScene` call is the same method,
+   * invariant I6) and repeated calls with the same schema are idempotent
+   * (this clears `triggerRules` before repopulating, never accumulates).
+   */
+  setPadTargets(params: ParamSchema[]): void {
+    this.triggerRules.clear()
+    const count = Math.min(4, params.length)
+    for (let i = 0; i < count; i++) {
+      const p = params[i]
+      this.triggerRules.set(i, [
+        {
+          source: { type: 'trigger', index: i },
+          action: { type: 'pulse', param: p.name, amount: 0.3 * (p.max - p.min), halflife: 0.4 },
+        },
+      ])
     }
   }
 

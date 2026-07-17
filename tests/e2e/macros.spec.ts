@@ -125,7 +125,7 @@ test('perform-strip rotary goes dormant -> engaged when a ctl.N value arrives', 
   await expect(page.locator('.panel')).toBeVisible()
   await page.waitForFunction(() => window.__vizLive !== undefined)
 
-  await page.getByRole('button', { name: 'Perform view' }).click()
+  await page.getByRole('button', { name: 'Stage view' }).click()
   const freqXKnob = page.locator('.rotary-knob').filter({ hasText: 'X frequency' })
   await expect(freqXKnob).toBeVisible()
   const valueEl = freqXKnob.locator('.rotary-knob-value')
