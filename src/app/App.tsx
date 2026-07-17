@@ -974,7 +974,10 @@ export function App() {
         restoreLive()
         return
       }
-      const frame = replayEngine.transport.frame
+      // Relative to the take's own start (not raw `transport.frame`, which
+      // `loadSession` now seeds from `doc.audio.startSeconds` rather than 0) —
+      // matches `doc.durationFrames`, which is likewise take-relative.
+      const frame = replayEngine.replayFrame
       setReplay({ frame, total: doc.durationFrames })
       if (replayEngine.replayDone && frame >= doc.durationFrames) {
         restoreLive()

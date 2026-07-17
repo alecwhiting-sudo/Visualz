@@ -29,11 +29,16 @@ export type SessionEvent =
  * `startSeconds` (both variants) is the take-baselining defect's other half:
  * arming a take mid-track (or mid-demo-dance, after any rehearsal) starts it at
  * a nonzero position in the take's own time source — `file`'s FeatureTimeline
- * origin, or `demo`'s free-running clock. Replay/export always steps `frame.time`
- * from 0, so without this offset every signal the take heard would land at the
- * wrong point in the timeline/demo curve on replay. Omitted (not even present)
- * when 0, for backward compatibility with docs recorded before this field
- * existed — `undefined` and `0` mean the same thing to every reader.
+ * origin, or `demo`'s free-running clock. `Engine.loadSession` resets the
+ * transport TO this position (`transport.reset(startSeconds ?? 0)`) rather than
+ * to 0, so `frame.time` lands at the right point in the timeline/demo curve from
+ * frame one for signals AND for scene render/DSL bindings alike (every
+ * time-driven visual replays at the phase it was performed at, not phase-shifted
+ * by `startSeconds`). Recorded events themselves stay 0-based (relative to the
+ * take's own start, not the underlying track) — `Engine.playerFrameOffset`
+ * reconciles the two frame countings. Omitted (not even present) when 0, for
+ * backward compatibility with docs recorded before this field existed —
+ * `undefined` and `0` mean the same thing to every reader.
  */
 export type SessionAudio =
   | { kind: 'demo'; startSeconds?: number }

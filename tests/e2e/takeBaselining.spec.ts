@@ -66,11 +66,16 @@ test('a take recorded after rehearsal reports the PERFORMED length, not lead-in 
 
   // THE regression: before the fix, durationFrames was the absolute end frame
   // (~2s rehearsal + ~1s take = ~3s worth of frames at 60fps ≈ 180). Fixed,
-  // it must be the ~1s PERFORMED length only — loose bounds absorb
-  // waitForTimeout/rAF jitter without letting a ~3s regression sneak through.
+  // it must be the ~1s PERFORMED length only. Tightened from the original
+  // 0.3-2s band (Finding 2's fix): `transport.frame` is now `floor(time * fps)`
+  // instead of a per-rAF-tick counter, so the take's frame count tracks real
+  // elapsed seconds regardless of the test runner's actual rAF rate — a ~1s
+  // `waitForTimeout` should now land within ~20%, not just "not obviously
+  // still carrying the rehearsal" (the old loose band only ruled out the
+  // ~3x-too-long regression, it didn't assert real-time accuracy).
   const performedSeconds = doc.durationFrames / doc.fps
-  expect(performedSeconds).toBeGreaterThan(0.3)
-  expect(performedSeconds).toBeLessThan(2)
+  expect(performedSeconds).toBeGreaterThan(0.8)
+  expect(performedSeconds).toBeLessThan(1.3)
 
   // The audio-start-offset half of the fix: this take started well into the
   // demo clock's run (~2s of rehearsal already elapsed), so startSeconds must
@@ -104,6 +109,72 @@ test('a take recorded after rehearsal reports the PERFORMED length, not lead-in 
   // Non-blank guard (CLAUDE.md's golden-test convention): the lissajous curve
   // is always moving, so a real replay must not hash to one constant frame.
   expect(new Set(hashesA).size).toBeGreaterThan(1)
+})
+
+/**
+ * Finding 1 regression (architect-diagnosed): `loadSession` used to reset the
+ * transport to time 0 and add `doc.audio.startSeconds` back in ONLY for signal
+ * sampling (the engine's now-deleted `sampleTime` split) — scene render and DSL
+ * bindings read raw, un-shifted `frame.time`. A take armed at demo-clock position
+ * T>0 (this rehearsal flow always produces `startSeconds` > 1, asserted above)
+ * would therefore replay every time-driven visual (lissajous's curve is a direct
+ * function of `ctx.frame.time`, no signal binding involved) starting from phase
+ * 0, not phase T — silently wrong despite passing every existing determinism
+ * check (those only ever compare a replay against ITSELF).
+ *
+ * The ideal proof would render a completely independent fresh engine forward (via
+ * ordinary `renderFrames`) to the exact same absolute `transport.time` the
+ * replay's first frame lands on, and assert pixel-identical output — but the
+ * `?test=1` harness's engine runs at a fixed 30fps while `startSeconds` is an
+ * arbitrary continuous value from a 60fps-ish live demo clock, so a fresh
+ * transport stepping in 1/30s increments from 0 can only ever land on a multiple
+ * of 1/30s, generally NOT exactly `startSeconds + 1/30` — the two would differ by
+ * a sub-frame fraction of a second, which a continuously-varying curve renders as
+ * a real (if tiny) pixel diff, making exact-hash comparison unreliable rather
+ * than a clean proof. So instead (the spec's documented fallback): replay the
+ * SAME event log twice with `startSeconds` present (must be byte-identical —
+ * determinism holds with the phase-shift applied) and once more with it stripped
+ * (must DIFFER from the first two) — the only way stripping a single doc field
+ * changes the rendered output is if that field is actually reaching scene
+ * render, not just signal sampling, which is exactly what Finding 1 fixes.
+ */
+test('a take armed mid-dance replays at the PERFORMED phase, not phase-shifted back to time zero (Finding 1 regression)', async ({
+  page,
+}) => {
+  const doc = await recordPostRehearsalTake(page)
+  expect(doc.audio.startSeconds ?? 0).toBeGreaterThan(1) // precondition: genuinely armed mid-dance
+
+  await page.goto(`/?test=1&seed=${doc.seed}`)
+  await page.waitForFunction(() => window.__viz !== undefined)
+
+  const replayAllHashes = (sessionDoc: unknown) =>
+    page.evaluate((d) => {
+      window.__viz!.loadSession(d)
+      const hashes: string[] = []
+      const n = (d as { durationFrames: number }).durationFrames
+      for (let i = 0; i < n; i++) {
+        window.__viz!.renderFrames(1)
+        hashes.push(window.__viz!.pixelHash())
+      }
+      return hashes
+    }, sessionDoc)
+
+  const withOffsetRun1 = await replayAllHashes(doc)
+
+  await page.goto(`/?test=1&seed=${doc.seed}`) // fresh engine: loadSession must be replayed from cold
+  await page.waitForFunction(() => window.__viz !== undefined)
+  const withOffsetRun2 = await replayAllHashes(doc)
+  expect(withOffsetRun2).toEqual(withOffsetRun1) // determinism holds WITH the phase-shift applied
+
+  const strippedDoc = JSON.parse(JSON.stringify(doc))
+  delete strippedDoc.audio.startSeconds
+  await page.goto(`/?test=1&seed=${doc.seed}`)
+  await page.waitForFunction(() => window.__viz !== undefined)
+  const strippedRun = await replayAllHashes(strippedDoc)
+
+  // The phase-shift is load-bearing: stripping `startSeconds` alone (same seed,
+  // same scene, same event log) must change the rendered frames.
+  expect(strippedRun).not.toEqual(withOffsetRun1)
 })
 
 test('export over a post-rehearsal take is deterministic and covers exactly durationFrames', async ({ page }) => {

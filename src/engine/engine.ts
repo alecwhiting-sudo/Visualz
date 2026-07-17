@@ -117,14 +117,24 @@ export class Engine {
   /** Set by `loadSession` when the loaded doc's audio is `kind: 'file'`; drives
    * signal publishing during replay instead of the (stopped) live AudioEngine. */
   private sessionTimeline: FeatureTimeline | null = null
-  /** `doc.audio.startSeconds ?? 0`, set by `loadSession` (session/types.ts's
-   * take-baselining doc comment): the take's own time-source position (file
-   * timeline seconds, or demo clock seconds) when recording started. Replay/
-   * export always steps `frame.time` from 0, so every timeline/demo-signal
-   * sample taken while a player is armed adds this back in — see
-   * `updateAndRender`. Stays 0 for a live (non-replaying) engine, since only
-   * `loadSession` ever sets it and live engines never call it. */
-  private audioStartSeconds = 0
+  /**
+   * `transport.frame` right after `loadSession`'s `transport.reset(doc.audio.
+   * startSeconds ?? 0)` — i.e. `round(startSeconds * fps)`, or 0 for a doc with
+   * no `startSeconds` (and always 0 for a live, non-replaying engine, since only
+   * `loadSession` sets this).
+   *
+   * Session events are recorded RELATIVE to the take's own start (`SessionRecorder`
+   * baselines every event to `startFrame`), so they're `0`-based regardless of
+   * `startSeconds`. But `reset(startSeconds)` now seeds the transport's frame
+   * counter to match (so `frame.time`/`frame.frame` agree, per the transport's own
+   * seeding rule) — meaning `transport.frame` itself is no longer 0-based during
+   * replay/export. `applyUpTo` needs the two to line up, so both call sites
+   * (`renderFrames`, `tick`) subtract this back off before comparing against the
+   * doc's 0-based event frames. Old docs (no `startSeconds`) get offset 0, so
+   * `transport.frame - playerFrameOffset === transport.frame` — byte-identical
+   * to pre-fix behavior.
+   */
+  private playerFrameOffset = 0
   /** Set while timeline lookup drives signals; the causal detector resets on the
    * next non-timeline frame so it never resumes from frozen adaptive state. */
   private detectorStale = false
@@ -227,7 +237,7 @@ export class Engine {
   renderFrames(n: number): void {
     if (this.transport.mode !== 'render') throw new Error('renderFrames() is render-mode only')
     for (let i = 0; i < n; i++) {
-      if (this.player) this.player.applyUpTo(this.transport.frame, this.playerTarget)
+      if (this.player) this.player.applyUpTo(this.transport.frame - this.playerFrameOffset, this.playerTarget)
       const frame = this.transport.step()
       this.updateAndRender(frame)
     }
@@ -531,7 +541,15 @@ export class Engine {
     }
     this.audio.stop() // demo-signal replay must never read a live analyser
     this.recorder = null // replay must not re-record itself (playerTarget relies on this)
-    this.transport.reset()
+    // Take-baselining phase fix: reset the transport TO the take's own start
+    // position (file-timeline seconds, or demo clock seconds), not to 0 — so
+    // `frame.time` (scene render + DSL bindings, not just signal sampling) is
+    // correct from frame one, and every time-driven visual replays at the same
+    // phase it was performed at. `playerFrameOffset` records where that leaves
+    // the frame counter, so `applyUpTo` can still compare against the doc's
+    // 0-based recorded event frames (see the field's own doc comment).
+    this.transport.reset(doc.audio.startSeconds ?? 0)
+    this.playerFrameOffset = this.transport.frame
     this.bus.clear()
     this.mappings.reset()
     this.events.reset()
@@ -543,9 +561,6 @@ export class Engine {
     this.macros.reset()
 
     this.sessionTimeline = null
-    // Take-baselining (session/types.ts): both SessionAudio variants may carry
-    // a recorded start offset — read it uniformly here regardless of kind.
-    this.audioStartSeconds = doc.audio.startSeconds ?? 0
     if (doc.audio.kind === 'file') {
       try {
         this.sessionTimeline = parseTimeline(doc.audio.timeline)
@@ -613,12 +628,25 @@ export class Engine {
   clearSession(): void {
     this.player = null
     this.sessionTimeline = null
-    this.audioStartSeconds = 0
+    this.playerFrameOffset = 0
   }
 
   /** True once an armed player has applied every recorded event (false if none is armed). */
   get replayDone(): boolean {
     return this.player !== null && this.player.done
+  }
+
+  /**
+   * Frame count relative to the currently-armed session's start: 0 right after
+   * `loadSession`, advancing by 1 per subsequent `renderFrames`/live tick — what
+   * `doc.durationFrames` and every recorded event's `frame` are counted against
+   * (see `playerFrameOffset`'s doc comment). Equals `transport.frame` when no
+   * session has been loaded, or for a doc with no `startSeconds`, since
+   * `playerFrameOffset` stays 0 in both cases. External replay-progress UI
+   * (App.tsx) reads this instead of `transport.frame` directly.
+   */
+  get replayFrame(): number {
+    return this.transport.frame - this.playerFrameOffset
   }
 
   /** Stops the loop, silences audio, and releases scene GPU resources — call
@@ -633,7 +661,7 @@ export class Engine {
   }
 
   private tick(time: number): void {
-    if (this.player) this.player.applyUpTo(this.transport.frame, this.playerTarget)
+    if (this.player) this.player.applyUpTo(this.transport.frame - this.playerFrameOffset, this.playerTarget)
     const frame = this.transport.advanceTo(time)
     this.updateAndRender(frame)
   }
@@ -662,16 +690,17 @@ export class Engine {
           ? this.audio.timeline
           : null
 
-    // Take-baselining (session/types.ts): while a player is armed (replay or
-    // export), `frame.time` always starts at 0, but the take may have been
-    // armed mid-track/mid-dance — `audioStartSeconds` (0 for a live engine,
-    // which never sets it) shifts every timeline/demo sample back to the
-    // point in the take's own time source where recording actually began.
-    const sampleTime = frame.time + this.audioStartSeconds
-
+    // Take-baselining (session/types.ts): `loadSession` now resets the transport
+    // TO the take's own start position (`doc.audio.startSeconds ?? 0`), so
+    // `frame.time` already lands at the right point in the take's time source
+    // for a replaying/exporting player — no separate offset needed here anymore
+    // (this used to add `audioStartSeconds` back in; deleted along with that
+    // field, since scene render + DSL bindings need the exact same shift and
+    // getting it from the transport itself, not a signal-sampling-only patch,
+    // is what fixes Finding 1's phase-shift regression).
     let ev: AudioEventResult
     if (timeline) {
-      const s = sampleTimeline(timeline, sampleTime, frame.dt)
+      const s = sampleTimeline(timeline, frame.time, frame.dt)
       this.bus.set('rms', s.rms)
       this.bus.set('bass', s.bass)
       this.bus.set('mid', s.mid)
@@ -705,11 +734,11 @@ export class Engine {
         this.events.reset()
         this.detectorStale = false
       }
-      publishDemoSignals(this.bus, sampleTime)
+      publishDemoSignals(this.bus, frame.time)
       // The demo detector path (events.ts's updateDemo) recomputes its analytic
       // beat straight from `time`, independent of the bus — it must see the
-      // same shifted time as publishDemoSignals or the two go out of phase.
-      ev = this.events.update(frame.dt, sampleTime, this.bus, true)
+      // same time passed to publishDemoSignals or the two go out of phase.
+      ev = this.events.update(frame.dt, frame.time, this.bus, true)
     }
     this.bus.set('onset', ev.onset ? 1 : 0)
     this.bus.set('beat', ev.beat ? 1 : 0)
