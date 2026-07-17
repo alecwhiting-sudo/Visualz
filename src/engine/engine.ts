@@ -139,6 +139,18 @@ export class Engine {
    * next non-timeline frame so it never resumes from frozen adaptive state. */
   private detectorStale = false
   /**
+   * Set by every control-surface mutation (params, input signals, queued
+   * trigger events, bindings, shader edits, scene switches, image loads,
+   * seeks) and consumed by the live loop's frozen branch: a loaded track that
+   * isn't playing normally skips ticks entirely (see `start()`), which used
+   * to make MIDI knobs and UI sliders dead until play was pressed — you
+   * couldn't "get in position" before a take. When this flag is up, the
+   * frozen branch runs ONE reduced tick — routing + bindings + render at the
+   * frozen clock, but no `scene.update()`, so frame-clocked simulations
+   * (Gray-Scott et al.) still don't simmer through a pause.
+   */
+  private controlsDirty = false
+  /**
    * Routes replayed events into the live pipeline while bypassing recording —
    * queueInput goes straight to `mappings.queue` (not `this.queueInput`) so a
    * replayed session never re-records itself; setBinding/clearBinding reuse the
@@ -220,6 +232,17 @@ export class Engine {
       // last frame (preserveDrawingBuffer); a seek made while paused takes
       // visual effect on resume.
       if (this.audio.hasFile && !this.audio.isPlaying) {
+        // …unless a control moved (see `controlsDirty`): run one reduced tick
+        // so knobs/pads/edits take effect and show on screen while frozen.
+        // advanceTo at the unchanged audio position yields dt=0 and the same
+        // frame number, and the session player is NOT applied here — replay
+        // events must not be consumed while the transport is frozen. A
+        // recording can never be live in this branch (`startRecording`
+        // throws unless audio is playing), so nothing is mis-recorded.
+        if (this.controlsDirty) {
+          this.controlsDirty = false
+          this.updateAndRender(this.transport.advanceTo(this.audio.time), { skipSceneUpdate: true })
+        }
         this.raf = requestAnimationFrame(loop)
         return
       }
@@ -279,11 +302,15 @@ export class Engine {
   seekAudio(seconds: number): void {
     if (this.isRecording) return
     this.audio.seek(seconds)
+    // Re-render at the new position while paused (signals are a pure timeline
+    // lookup, so bindings/meters jump correctly even with the clock frozen).
+    this.controlsDirty = true
   }
 
   stopAudio(): void {
     if (this.isRecording) return
     this.audio.stop()
+    this.controlsDirty = true
   }
 
   /**
@@ -296,11 +323,13 @@ export class Engine {
   queueInput(e: SourceEvent): void {
     if (this.recorder) this.recorder.recordInput(this.transport.frame, e)
     this.mappings.queue(e)
+    this.controlsDirty = true
   }
 
   setParam(name: string, value: number): void {
     if (this.recorder) this.recorder.recordParam(this.transport.frame, name, value)
     this.scene.setParam(name, value)
+    this.controlsDirty = true
   }
 
   /**
@@ -315,6 +344,7 @@ export class Engine {
     // slot, live or replayed (see `playerTarget.setInputSignal`'s matching
     // call) — a no-op for every other signal name.
     this.macros.noteSignal(name)
+    this.controlsDirty = true
   }
 
   /**
@@ -326,11 +356,13 @@ export class Engine {
     const compiled = compile(src, `${this.scene.meta.id}.${param}`)
     if (this.recorder) this.recorder.recordBinding(this.transport.frame, param, src)
     this.bindings.set(param, { src, compiled, state: new DslState() })
+    this.controlsDirty = true
   }
 
   clearBinding(param: string): void {
     if (this.recorder) this.recorder.recordBinding(this.transport.frame, param, null)
     this.bindings.delete(param)
+    this.controlsDirty = true
   }
 
   getBinding(param: string): string | undefined {
@@ -363,6 +395,7 @@ export class Engine {
     }
     this.scene.setShaderSource(key, source)
     if (this.recorder) this.recorder.recordShader(this.transport.frame, key, source)
+    this.controlsDirty = true
   }
 
   /** `[]` when the scene doesn't implement the code layer. */
@@ -380,6 +413,7 @@ export class Engine {
   setSceneImage(img: SceneImage | null): void {
     this.storedImage = img
     if (acceptsImage(this.scene)) this.scene.setImage(img)
+    this.controlsDirty = true
   }
 
   /** Duck-type check for the UI: does the current scene accept `setSceneImage`? */
@@ -448,6 +482,9 @@ export class Engine {
     // initial state; non-ingesting B clears it (a plain hard cut has no
     // material to restore).
     this.storedImage = hasIngest(next) ? snapshot : null
+    // A switch made while the track is paused/stopped should show B's first
+    // frame, not hold A's last one until play resumes.
+    this.controlsDirty = true
   }
 
   /** True while a session recording is in progress (`startRecording()` ran, `stopRecording()` hasn't). */
@@ -530,6 +567,16 @@ export class Engine {
       },
       this.transport.frame,
     )
+    // The take boundary is edge-based (see the method doc: in-flight state is
+    // not captured), and macro engagement/edge memory is exactly such state:
+    // `loadSession` replays from a RESET router, so a router still engaged
+    // from unrecorded pre-roll input (e.g. positioning knobs while the track
+    // was stopped — the frozen control tick) would make live and replay
+    // diverge if a recorded ctl.N event repeated a pre-roll value (live: no
+    // edge, skipped; replay: NaN -> routed). Reset here so the take starts
+    // from the same dormant router replay will. Params keep their snapshotted
+    // values; each knob re-engages on its first in-take movement (pickup).
+    this.macros.reset()
   }
 
   /** Stops recording and returns the finished session doc, or null if nothing was recording. */
@@ -690,7 +737,10 @@ export class Engine {
    * audio loaded at all, or a future mic path) keeps today's
    * publishDemoSignals/analyser + AudioEventDetector behavior.
    */
-  private updateAndRender(frame: { time: number; dt: number; frame: number }): void {
+  private updateAndRender(
+    frame: { time: number; dt: number; frame: number },
+    opts?: { skipSceneUpdate?: boolean },
+  ): void {
     const timeline =
       this.player !== null
         ? this.sessionTimeline
@@ -787,7 +837,12 @@ export class Engine {
       set: (n, v) => this.scene.setParam(n, v),
     })
     const ctx = { frame, signals: this.bus }
-    this.scene.update(ctx)
+    // Frozen control tick (see `controlsDirty`): render with the new control
+    // values but skip update() — per-CALL-clocked simulation state (Gray-Scott
+    // substeps, tunnel ring, flowfield's uFrame) must not advance while the
+    // transport is frozen, and scenes read params at render time so the
+    // control change is still visible.
+    if (!opts?.skipSceneUpdate) this.scene.update(ctx)
     this.scene.render(ctx, this.surface)
   }
 }

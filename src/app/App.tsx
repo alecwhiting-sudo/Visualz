@@ -782,6 +782,10 @@ export function App() {
       // `engine.isRecording` itself, so this can never double-fire against a
       // manual ⏹ click that landed the same tick.
       if (e.isRecording && e.audio.hasFile && !e.audio.isPlaying) {
+        // Say WHY the take ended (user report: a take ending earlier than the
+        // performance felt like a silent chop) — the message names the track
+        // position so a short-decoded file is immediately visible too.
+        setSessionError(`Take ended automatically — the track reached its end (${formatTime(e.audio.duration)})`)
         endTake()
       }
     }, 100)
@@ -909,12 +913,16 @@ export function App() {
   const onSceneChange = (id: string) => {
     const canvas = canvasRef.current
     if (!canvas || !SCENES[id]) return
-    // A dropdown scene switch tears down the recorder with the engine; the
-    // in-progress take used to vanish silently (review finding). Stop and
-    // stash it instead — the mid-performance way to change visuals without
-    // ending the take is the handoff switch (docs/HANDOFF.md), not this.
+    // Mid-take, a dropdown scene change must NOT tear down the engine — the
+    // recorder dies with it, which used to end the take silently at that
+    // moment (user report: a 6-minute performance "chopped at 2 minutes" —
+    // the dropdown was used mid-take instead of the handoff button; audio
+    // and visuals carried on, so nothing looked wrong). While recording,
+    // delegate to the in-place, RECORDED handoff switch instead: the take
+    // continues, and replay/export reproduce the switch (invariant I6).
     if (engineRef.current?.isRecording) {
-      stashTake(engineRef.current.stopRecording())
+      onSwitchScene(id)
+      return
     }
     // The AudioEngine outlives the Engine across a scene switch: the track
     // keeps playing and the transport row stays put (keepAudio skips the
@@ -2261,13 +2269,18 @@ function Knob({
 }) {
   const [value, setValue] = useState(engine.scene.getParam(schema.name))
   const { bound, macroDriven, exprText, setExprText, applyExpr, error } = useParamBinding(engine, schema.name)
-  const driven = bound || macroDriven
-  const displayValue = driven ? liveValue : value
   // docs/MACROS.md §5: macro-driven rows get the same accent visual language
   // as bound rows (the `em` readout, accent-colored via app.css's
-  // `.knob-macro`), but the slider stays enabled — unlike `bound`, editing a
-  // macro-driven param is allowed (§1's precedence note); it's just
-  // overwritten again on the next engaged-slot frame.
+  // `.knob-macro`), but the slider stays enabled — editing a macro-driven
+  // param is allowed and STICKS: the router routes edge-triggered (only when
+  // the hardware value actually changes), so hardware and UI knobs trade
+  // control, last writer wins. The macro-driven slider therefore reads the
+  // engine directly instead of the 100ms-polled `liveValue` prop — a local
+  // drag re-renders synchronously via `setValue`, and without the direct
+  // read the thumb would rubber-band to the stale polled value between
+  // polls. (The poll still drives re-renders when the hardware moves; the
+  // prop's CHANGE is what matters there, not its value.)
+  const displayValue = bound ? liveValue : macroDriven ? engine.scene.getParam(schema.name) : value
   const macroClass = macroDriven && !bound ? ' knob-macro' : ''
 
   return (

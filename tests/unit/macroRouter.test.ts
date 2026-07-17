@@ -130,6 +130,44 @@ describe('MacroRouter', () => {
     expect(router.isDriven(0, params(0), () => false)).toBe(false) // engaged slot, but no param at all
   })
 
+  it('13) edge-triggered: an unchanged ctl value routes once, not every frame (UI edits stick)', () => {
+    const router = new MacroRouter()
+    router.noteSignal('ctl.1')
+    const { setParam, calls } = fakeSetParam()
+    router.route(params(1), () => false, () => 0.5, setParam)
+    router.route(params(1), () => false, () => 0.5, setParam) // same value again — no re-assert
+    expect(calls).toEqual([{ name: 'p0', value: 5 }])
+    router.route(params(1), () => false, () => 0.7, setParam) // hardware actually moved
+    expect(calls).toEqual([
+      { name: 'p0', value: 5 },
+      { name: 'p0', value: 7 },
+    ])
+  })
+
+  it('14) reset() clears the edge memory: the same ctl value routes again after re-engagement', () => {
+    const router = new MacroRouter()
+    router.noteSignal('ctl.1')
+    const { setParam, calls } = fakeSetParam()
+    router.route(params(1), () => false, () => 0.5, setParam)
+    router.reset()
+    router.noteSignal('ctl.1')
+    router.route(params(1), () => false, () => 0.5, setParam)
+    expect(calls).toEqual([
+      { name: 'p0', value: 5 },
+      { name: 'p0', value: 5 },
+    ])
+  })
+
+  it('15) a bound param does not consume the edge: clearing the binding lets the value land', () => {
+    const router = new MacroRouter()
+    router.noteSignal('ctl.1')
+    const { setParam, calls } = fakeSetParam()
+    router.route(params(1), () => true, () => 0.5, setParam) // bound: skipped, edge NOT consumed
+    expect(calls).toEqual([])
+    router.route(params(1), () => false, () => 0.5, setParam) // binding cleared: pending value lands
+    expect(calls).toEqual([{ name: 'p0', value: 5 }])
+  })
+
   it('12) engagement only ever turns on across a stream of noteSignal calls, never off (short of reset)', () => {
     const router = new MacroRouter()
     router.noteSignal('ctl.3')

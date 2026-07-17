@@ -75,6 +75,21 @@ Router runs AFTER binding evaluation each frame (bindings win by simply being
 skipped; no double-write). Range-mapping lives in the router, NOT in learn —
 `ctl.N` stays a clean 0..1 signal.
 
+**Edge-triggered routing (amendment, 2026-07-17):** an engaged slot writes its
+param only when its raw ctl value CHANGED since that slot last routed (per-slot
+`lastRouted` memory, cleared at every reset point). Level-triggered routing
+re-asserted the stale hardware value every frame, which made UI knob edits on a
+macro-driven param impossible — the slider snapped back the instant you let
+go. With edges, hardware and software knobs trade control: last writer wins,
+and the hardware re-takes the param only when it genuinely moves. Determinism
+holds because `startRecording` is a reset point too (review finding, alongside
+construction / `switchScene` / `loadSession`): a take always begins from a
+dormant router with cleared edge memory — exactly the state `loadSession`
+replays from — so `engaged`/`lastRouted` are a pure function of the recorded
+ctl stream. Without that reset, engagement carried over from unrecorded
+pre-roll input (positioning knobs while the track was stopped) could make
+live skip a repeated ctl value that replay would treat as a fresh edge.
+
 ## 5. MIDI panel UI
 
 - The MIDI disclosure gains a **Controls 1–8** block: 8 rows, each showing the
