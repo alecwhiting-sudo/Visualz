@@ -1561,21 +1561,26 @@ export function App() {
               <input
                 type="file"
                 accept="image/*"
-                // Enabled only when the current scene has an image-driven concept
-                // (Photo Swarm task's `sceneAcceptsImage()` duck-type check), and
-                // disabled while recording: a mid-recording image swap isn't
-                // captured as a timestamped event (it's snapshot-only, taken at
-                // startRecording()), so replaying the recording could never
-                // reproduce it anyway — disabling avoids a swap that silently
-                // doesn't show up on replay.
-                disabled={!engine || !engine.sceneAcceptsImage() || recording}
+                // Loadable from ANY scene (user request): the picked photo is
+                // held in imageRef and applied automatically whenever an
+                // image-driven scene (Photo Swarm) becomes current — the
+                // reapply-on-scene-change plumbing already existed; only this
+                // gate blocked loading ahead of time. Still disabled while
+                // recording: a mid-recording image swap isn't a timestamped
+                // event (snapshot-only, taken at startRecording()), so replay
+                // could never reproduce it.
+                disabled={!engine || recording}
                 onChange={(ev) => {
                   const file = ev.target.files?.[0]
                   ev.target.value = ''
                   onImageFile(file)
                 }}
               />
-              {imageName ?? 'Load image (photo-swarm-style scenes only)'}
+              {imageName
+                ? engine?.sceneAcceptsImage()
+                  ? imageName
+                  : `${imageName} — ready for Photo Swarm`
+                : 'Load image (used by Photo Swarm)'}
             </label>
             {audioBlocked && (
               <button
