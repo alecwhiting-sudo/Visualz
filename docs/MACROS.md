@@ -75,6 +75,13 @@ Router runs AFTER binding evaluation each frame (bindings win by simply being
 skipped; no double-write). Range-mapping lives in the router, NOT in learn —
 `ctl.N` stays a clean 0..1 signal.
 
+**Macro views (amendment, 2026-07-18 — docs/DECKS.md §5):** `route` takes a
+LIST of param sets (the active view) instead of one list. Ordinary scenes
+pass `[scene.params]` — identical behavior. Deck (composite) scenes resolve
+the recorded `macro.view` signal to A's params / B's / the fader-favored
+deck's / both (dual write off a single per-slot edge). See DECKS.md for the
+full trial spec.
+
 **Edge-triggered routing (amendment, 2026-07-17):** an engaged slot writes its
 param only when its raw ctl value CHANGED since that slot last routed (per-slot
 `lastRouted` memory, cleared at every reset point). Level-triggered routing

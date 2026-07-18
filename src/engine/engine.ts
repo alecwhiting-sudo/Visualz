@@ -8,11 +8,11 @@ import { sampleTimeline, serializeTimeline, parseTimeline } from '../audio/timel
 import type { FeatureTimeline } from '../audio/analysis'
 import { compile, type CompiledExpr } from '../dsl/compile'
 import { DslState } from '../dsl/state'
-import type { IngestingScene, SceneRuntime, SceneSnapshot, ShaderStage } from '../scenes/types'
+import type { IngestingScene, ParamSchema, SceneRuntime, SceneSnapshot, ShaderStage } from '../scenes/types'
 import { SCENES } from '../scenes/registry'
 import { MappingRuntime } from '../mapping/runtime'
 import { DEFAULT_MAPPINGS } from '../mapping/defaults'
-import { MacroRouter } from './macroRouter'
+import { MACRO_SLOT_COUNT, MacroRouter } from './macroRouter'
 import type { SourceEvent } from '../mapping/types'
 import { SessionRecorder } from '../session/recorder'
 import { SessionPlayer, type PlayerTarget } from '../session/player'
@@ -370,17 +370,60 @@ export class Engine {
   }
 
   /**
+   * The active macro view (docs/DECKS.md knob-toggle trial): the param
+   * set(s) the 8 slots positionally address this frame. Ordinary scenes:
+   * `[scene.params]`, exactly the old behavior. Composite (deck) scenes —
+   * detected by their `a.` / `b.` param prefixes, no new scene API — read
+   * the recorded `macro.view` input signal: 0 = deck A's params (default),
+   * 1 = deck B's, 2 = fader-follows (mix < 0.5 → A, else B), 3 = both
+   * (slot i drives A's AND B's i-th param off one edge). The signal travels
+   * the ordinary setInputSignal record/replay path, so a view flip mid-take
+   * replays exactly; `mix`/`mode` stay reachable via their UI sliders and
+   * expressions, never the slots.
+   */
+  private macroParamSets(): ParamSchema[][] {
+    const params = this.scene.params
+    const a = params.filter((p) => p.name.startsWith('a.'))
+    const b = params.filter((p) => p.name.startsWith('b.'))
+    if (a.length === 0 || b.length === 0) return [params]
+    const view = this.bus.get('macro.view')
+    if (view === 3) return [a, b]
+    if (view === 2) return [this.scene.getParam('mix') < 0.5 ? a : b]
+    if (view === 1) return [b]
+    return [a]
+  }
+
+  /**
    * docs/MACROS.md §4/§5: true when param `name` currently has no explicit
    * user binding but IS driven by an engaged macro slot — the UI (studio
    * `Knob`, perform `RotaryKnob`, via `paramBinding.ts`'s hook) renders such
    * params live and shows "ctl N" instead of an expression, same visual
-   * language as an explicitly bound param. Positional: the slot is
-   * `scene.params`'s index of `name`, plus one.
+   * language as an explicitly bound param. Positional within the ACTIVE
+   * macro view (see `macroParamSets`), not raw `scene.params` order.
    */
   isMacroDriven(name: string): boolean {
-    const index = this.scene.params.findIndex((p) => p.name === name)
-    if (index < 0) return false
-    return this.macros.isDriven(index, this.scene.params, (n) => this.bindings.has(n))
+    const index = this.macroSlotIndexOf(name)
+    if (index === null) return false
+    return this.macros.isDriven(index, this.macroParamSets(), (n) => this.bindings.has(n))
+  }
+
+  /**
+   * 1-based slot number the ACTIVE macro view assigns to param `name`, or
+   * null when no slot addresses it (past position 8, or a deck param the
+   * current view doesn't target). The UI's per-row slot chips read this so
+   * they track the knob toggle instead of showing raw scene.params order.
+   */
+  macroSlotOf(name: string): number | null {
+    const index = this.macroSlotIndexOf(name)
+    return index === null ? null : index + 1
+  }
+
+  private macroSlotIndexOf(name: string): number | null {
+    for (const set of this.macroParamSets()) {
+      const index = set.findIndex((p) => p.name === name)
+      if (index >= 0 && index < MACRO_SLOT_COUNT) return index
+    }
+    return null
   }
 
   /**
@@ -577,6 +620,19 @@ export class Engine {
     // from the same dormant router replay will. Params keep their snapshotted
     // values; each knob re-engages on its first in-take movement (pickup).
     this.macros.reset()
+    // docs/DECKS.md §5 (review finding): the knob-view choice is HELD state,
+    // not an in-take event — a take armed while view B/Fader/Both is selected
+    // must open with it, or replay falls back to the bus default (view A) and
+    // re-routes every recorded ctl edge to the wrong deck. Baselined as an
+    // ordinary frame-0 inputSignal event through the existing replay path.
+    // Held ctl.N values are deliberately NOT seeded the same way: the params
+    // snapshot above already carries their effect, and re-seeding them would
+    // re-engage slots on replay and clobber pre-roll UI edits (the exact
+    // divergence the macros.reset() above exists to prevent).
+    const view = this.inputSignals.get('macro.view')
+    if (view !== undefined) {
+      this.recorder.recordInputSignal(this.transport.frame, 'macro.view', view)
+    }
   }
 
   /** Stops recording and returns the finished session doc, or null if nothing was recording. */
@@ -826,8 +882,11 @@ export class Engine {
     // router's own `hasBinding` skip is just for clarity/no-double-write —
     // ctl.N is already on the bus (raw 0..1) via the `inputSignals` loop
     // above; range-mapping + step-snapping happen only here, never on the bus.
+    // The param set(s) come from the active macro view (docs/DECKS.md
+    // knob-toggle trial) — `[scene.params]` for ordinary scenes, the A/B/
+    // fader/both selection for deck (composite) scenes.
     this.macros.route(
-      this.scene.params,
+      this.macroParamSets(),
       (name) => this.bindings.has(name),
       (slot) => this.bus.get(`ctl.${slot}`),
       (name, value) => this.scene.setParam(name, value),

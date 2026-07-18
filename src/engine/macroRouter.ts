@@ -59,46 +59,65 @@ export class MacroRouter {
     if (i !== null) this.engaged[i] = true
   }
 
-  /** True when the param at `index` (scene.params order) is CURRENTLY macro-
-   * driven: its positional slot is engaged and it has no explicit user
-   * binding. Used by the UI (`isMacroDriven`) to render live values/hints. */
-  isDriven(index: number, params: ParamSchema[], hasBinding: (name: string) => boolean): boolean {
+  /** True when the param at `index` of ANY of the active view's param sets
+   * (see `route`'s paramSets) is CURRENTLY macro-driven: its positional slot
+   * is engaged and it has no explicit user binding. Used by the UI
+   * (`isMacroDriven`) to render live values/hints. */
+  isDriven(index: number, paramSets: ParamSchema[][], hasBinding: (name: string) => boolean): boolean {
     if (index < 0 || index >= MACRO_SLOT_COUNT) return false
-    const param = params[index]
-    if (!param) return false
-    return this.engaged[index] && !hasBinding(param.name)
+    if (!this.engaged[index]) return false
+    return paramSets.some((set) => {
+      const param = set[index]
+      return param !== undefined && !hasBinding(param.name)
+    })
   }
 
   /**
    * Runs after DSL binding evaluation each frame (docs/MACROS.md §4):
    * expressions outrank macros, so a bound param is skipped entirely (no
-   * double-write). For every remaining engaged slot with a positional param
-   * whose raw ctl value CHANGED since that slot last routed (see
-   * `lastRouted`), range-maps `ctl(slot)` (raw 0..1, read straight off the
-   * bus by the caller) onto `[param.min, param.max]` and step-snaps it
-   * identically to a manual knob commit (`paramStep.ts`). A scene with fewer
-   * params than slots simply has no `params[i]` for the high slots — they're
-   * inert, not an error, and they don't consume the edge (so nothing is
-   * missed if params appear later; in practice a scene switch resets
-   * everything anyway). A bound param doesn't consume the edge either:
-   * clearing the binding lets the pending hardware value land on the next
-   * frame, which is the least surprising of the options.
+   * double-write). For every remaining engaged slot with at least one
+   * positional target whose raw ctl value CHANGED since that slot last
+   * routed (see `lastRouted`), range-maps `ctl(slot)` (raw 0..1, read
+   * straight off the bus by the caller) onto each target's `[min, max]` and
+   * step-snaps it identically to a manual knob commit (`paramStep.ts`).
+   *
+   * `paramSets` is the ACTIVE MACRO VIEW (docs/DECKS.md knob-toggle trial):
+   * slot i drives `set[i]` for EVERY set given — one set for an ordinary
+   * scene (`[scene.params]`) or a composite in A/B/fader view, two sets for
+   * "both" view (slot i drives A's i-th AND B's i-th param off one edge).
+   * The edge is consumed ONCE per slot regardless of set count, so "both"
+   * can't double-fire and a view flip mid-engagement doesn't yank the newly
+   * addressed deck — its params wait for the knob's next actual movement
+   * (pickup, same rule as everywhere else).
+   *
+   * A set with no `params[i]` for a slot is inert for that slot, not an
+   * error, and an all-inert slot doesn't consume the edge (nothing is missed
+   * if params appear later; in practice a scene switch resets everything
+   * anyway). A bound param doesn't consume the edge either: clearing the
+   * binding lets the pending hardware value land on the next frame, which is
+   * the least surprising of the options.
    */
   route(
-    params: ParamSchema[],
+    paramSets: ParamSchema[][],
     hasBinding: (name: string) => boolean,
     ctl: (slot1: number) => number,
     setParam: (name: string, value: number) => void,
   ): void {
     for (let i = 0; i < MACRO_SLOT_COUNT; i++) {
       if (!this.engaged[i]) continue
-      const param = params[i]
-      if (!param || hasBinding(param.name)) continue
+      const targets: ParamSchema[] = []
+      for (const set of paramSets) {
+        const param = set[i]
+        if (param && !hasBinding(param.name)) targets.push(param)
+      }
+      if (targets.length === 0) continue
       const value = ctl(i + 1)
       if (value === this.lastRouted[i]) continue
       this.lastRouted[i] = value
-      const raw = param.min + value * (param.max - param.min)
-      setParam(param.name, snapToStep(raw, param.min, param.max, param.step))
+      for (const param of targets) {
+        const raw = param.min + value * (param.max - param.min)
+        setParam(param.name, snapToStep(raw, param.min, param.max, param.step))
+      }
     }
   }
 }

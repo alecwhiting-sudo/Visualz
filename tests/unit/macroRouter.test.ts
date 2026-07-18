@@ -5,13 +5,17 @@ import type { ParamSchema } from '../../src/scenes/types'
 /**
  * docs/MACROS.md: unit tests for the MacroRouter as an extracted, engine-free
  * module (no Engine/scene mock needed — `route`/`isDriven` only ever take
- * plain `ParamSchema[]` + closures, per the module's own docstring on why).
+ * plain `ParamSchema[][]` param sets + closures, per the module's own
+ * docstring on why). `route` takes the ACTIVE MACRO VIEW as a list of param
+ * sets (docs/DECKS.md knob-toggle trial): one set for ordinary scenes,
+ * two for a deck scene's "both" view — tests 16-18 cover the multi-set
+ * semantics, everything before them routes a single set exactly as before.
  */
 
-function params(n: number): ParamSchema[] {
+function params(n: number, prefix = 'p'): ParamSchema[] {
   const out: ParamSchema[] = []
   for (let i = 0; i < n; i++) {
-    out.push({ name: `p${i}`, label: `P${i}`, min: 0, max: 10, default: 0 })
+    out.push({ name: `${prefix}${i}`, label: `${prefix.toUpperCase()}${i}`, min: 0, max: 10, default: 0 })
   }
   return out
 }
@@ -26,7 +30,7 @@ describe('MacroRouter', () => {
   it('1) a fresh router has every slot disengaged — route() is a no-op with no prior noteSignal', () => {
     const router = new MacroRouter()
     const { setParam, calls } = fakeSetParam()
-    router.route(params(3), () => false, () => 1, setParam)
+    router.route([params(3)], () => false, () => 1, setParam)
     expect(calls).toEqual([])
   })
 
@@ -34,7 +38,7 @@ describe('MacroRouter', () => {
     const router = new MacroRouter()
     router.noteSignal('ctl.1')
     const { setParam, calls } = fakeSetParam()
-    router.route(params(3), () => false, (slot) => (slot === 1 ? 0.5 : 0), setParam)
+    router.route([params(3)], () => false, (slot) => (slot === 1 ? 0.5 : 0), setParam)
     // param p0 (index 0, slot 1), min 0 max 10 -> 0 + 0.5*10 = 5
     expect(calls).toEqual([{ name: 'p0', value: 5 }])
   })
@@ -46,7 +50,7 @@ describe('MacroRouter', () => {
     router.noteSignal('ctl.0') // out of range (slots are 1-8, not 0)
     router.noteSignal('ctl.9') // out of range
     const { setParam, calls } = fakeSetParam()
-    router.route(params(8), () => false, () => 1, setParam)
+    router.route([params(8)], () => false, () => 1, setParam)
     expect(calls).toEqual([])
   })
 
@@ -55,10 +59,10 @@ describe('MacroRouter', () => {
     router.noteSignal('ctl.1')
     router.reset()
     const { setParam, calls } = fakeSetParam()
-    router.route(params(1), () => false, () => 0.9, setParam)
+    router.route([params(1)], () => false, () => 0.9, setParam)
     expect(calls).toEqual([]) // dormant post-reset — no setParam call at all
     router.noteSignal('ctl.1') // fresh event after reset re-engages it
-    router.route(params(1), () => false, () => 0.9, setParam)
+    router.route([params(1)], () => false, () => 0.9, setParam)
     expect(calls).toEqual([{ name: 'p0', value: 9 }])
   })
 
@@ -66,7 +70,7 @@ describe('MacroRouter', () => {
     const router = new MacroRouter()
     router.noteSignal('ctl.1')
     const { setParam, calls } = fakeSetParam()
-    router.route(params(1), (name) => name === 'p0', () => 1, setParam)
+    router.route([params(1)], (name) => name === 'p0', () => 1, setParam)
     expect(calls).toEqual([])
   })
 
@@ -74,7 +78,7 @@ describe('MacroRouter', () => {
     const router = new MacroRouter()
     for (let i = 1; i <= MACRO_SLOT_COUNT; i++) router.noteSignal(`ctl.${i}`)
     const { setParam, calls } = fakeSetParam()
-    router.route(params(5), () => false, () => 1, setParam)
+    router.route([params(5)], () => false, () => 1, setParam)
     expect(calls.map((c) => c.name).sort()).toEqual(['p0', 'p1', 'p2', 'p3', 'p4'])
   })
 
@@ -87,20 +91,20 @@ describe('MacroRouter', () => {
       { name: 'b', label: 'B', min: 100, max: 200, default: 100 },
     ]
     const { setParam, calls } = fakeSetParam()
-    router.route(schema, () => false, (slot) => (slot === 1 ? 0 : 1), setParam)
+    router.route([schema], () => false, (slot) => (slot === 1 ? 0 : 1), setParam)
     expect(calls).toEqual([
       { name: 'a', value: -5 }, // slot 1 ctl=0 -> min
       { name: 'b', value: 200 }, // slot 2 ctl=1 -> max
     ])
   })
 
-  it('8) step-snaps the range-mapped value identically to RotaryKnob\'s commit formula', () => {
+  it('8) step-snaps the range-mapped value identically to a manual knob commit', () => {
     const router = new MacroRouter()
     router.noteSignal('ctl.1')
     const schema: ParamSchema[] = [{ name: 'freqX', label: 'X', min: 1, max: 12, default: 3, step: 1 }]
     const { setParam, calls } = fakeSetParam()
     // ctl=0.5 -> raw = 1 + 0.5*11 = 6.5 -> snaps to step=1 -> round((6.5-1)/1)*1+1 = 7
-    router.route(schema, () => false, () => 0.5, setParam)
+    router.route([schema], () => false, () => 0.5, setParam)
     expect(calls).toEqual([{ name: 'freqX', value: 7 }])
   })
 
@@ -109,7 +113,7 @@ describe('MacroRouter', () => {
     router.noteSignal('ctl.1')
     const schema: ParamSchema[] = [{ name: 'drift', label: 'Drift', min: 0, max: 2, default: 0.35 }]
     const { setParam, calls } = fakeSetParam()
-    router.route(schema, () => false, () => 0.3, setParam)
+    router.route([schema], () => false, () => 0.3, setParam)
     expect(calls).toEqual([{ name: 'drift', value: 0.6 }])
   })
 
@@ -117,27 +121,36 @@ describe('MacroRouter', () => {
     const router = new MacroRouter()
     router.noteSignal('ctl.1')
     const schema = params(2)
-    expect(router.isDriven(0, schema, () => false)).toBe(true) // engaged, unbound
-    expect(router.isDriven(0, schema, (n) => n === 'p0')).toBe(false) // engaged but bound
-    expect(router.isDriven(1, schema, () => false)).toBe(false) // slot 2 never engaged
+    expect(router.isDriven(0, [schema], () => false)).toBe(true) // engaged, unbound
+    expect(router.isDriven(0, [schema], (n) => n === 'p0')).toBe(false) // engaged but bound
+    expect(router.isDriven(1, [schema], () => false)).toBe(false) // slot 2 never engaged
   })
 
   it('11) isDriven is false for an out-of-range index or a missing param at that index', () => {
     const router = new MacroRouter()
     router.noteSignal('ctl.1')
-    expect(router.isDriven(-1, params(2), () => false)).toBe(false)
-    expect(router.isDriven(MACRO_SLOT_COUNT, params(2), () => false)).toBe(false)
-    expect(router.isDriven(0, params(0), () => false)).toBe(false) // engaged slot, but no param at all
+    expect(router.isDriven(-1, [params(2)], () => false)).toBe(false)
+    expect(router.isDriven(MACRO_SLOT_COUNT, [params(2)], () => false)).toBe(false)
+    expect(router.isDriven(0, [params(0)], () => false)).toBe(false) // engaged slot, but no param at all
+  })
+
+  it('12) engagement only ever turns on across a stream of noteSignal calls, never off (short of reset)', () => {
+    const router = new MacroRouter()
+    router.noteSignal('ctl.3')
+    router.noteSignal('ctl.3') // repeated arrivals stay engaged, not toggled
+    const { setParam, calls } = fakeSetParam()
+    router.route([params(3)], () => false, (slot) => (slot === 3 ? 1 : 0), setParam)
+    expect(calls).toEqual([{ name: 'p2', value: 10 }])
   })
 
   it('13) edge-triggered: an unchanged ctl value routes once, not every frame (UI edits stick)', () => {
     const router = new MacroRouter()
     router.noteSignal('ctl.1')
     const { setParam, calls } = fakeSetParam()
-    router.route(params(1), () => false, () => 0.5, setParam)
-    router.route(params(1), () => false, () => 0.5, setParam) // same value again — no re-assert
+    router.route([params(1)], () => false, () => 0.5, setParam)
+    router.route([params(1)], () => false, () => 0.5, setParam) // same value again — no re-assert
     expect(calls).toEqual([{ name: 'p0', value: 5 }])
-    router.route(params(1), () => false, () => 0.7, setParam) // hardware actually moved
+    router.route([params(1)], () => false, () => 0.7, setParam) // hardware actually moved
     expect(calls).toEqual([
       { name: 'p0', value: 5 },
       { name: 'p0', value: 7 },
@@ -148,10 +161,10 @@ describe('MacroRouter', () => {
     const router = new MacroRouter()
     router.noteSignal('ctl.1')
     const { setParam, calls } = fakeSetParam()
-    router.route(params(1), () => false, () => 0.5, setParam)
+    router.route([params(1)], () => false, () => 0.5, setParam)
     router.reset()
     router.noteSignal('ctl.1')
-    router.route(params(1), () => false, () => 0.5, setParam)
+    router.route([params(1)], () => false, () => 0.5, setParam)
     expect(calls).toEqual([
       { name: 'p0', value: 5 },
       { name: 'p0', value: 5 },
@@ -162,18 +175,50 @@ describe('MacroRouter', () => {
     const router = new MacroRouter()
     router.noteSignal('ctl.1')
     const { setParam, calls } = fakeSetParam()
-    router.route(params(1), () => true, () => 0.5, setParam) // bound: skipped, edge NOT consumed
+    router.route([params(1)], () => true, () => 0.5, setParam) // bound: skipped, edge NOT consumed
     expect(calls).toEqual([])
-    router.route(params(1), () => false, () => 0.5, setParam) // binding cleared: pending value lands
+    router.route([params(1)], () => false, () => 0.5, setParam) // binding cleared: pending value lands
     expect(calls).toEqual([{ name: 'p0', value: 5 }])
   })
 
-  it('12) engagement only ever turns on across a stream of noteSignal calls, never off (short of reset)', () => {
+  it('16) "both" view: two param sets each get slot i\'s write off ONE edge (no double-fire)', () => {
     const router = new MacroRouter()
-    router.noteSignal('ctl.3')
-    router.noteSignal('ctl.3') // repeated arrivals stay engaged, not toggled
+    router.noteSignal('ctl.1')
     const { setParam, calls } = fakeSetParam()
-    router.route(params(3), () => false, (slot) => (slot === 3 ? 1 : 0), setParam)
-    expect(calls).toEqual([{ name: 'p2', value: 10 }])
+    const both = [params(2, 'a'), params(2, 'b')]
+    router.route(both, () => false, () => 0.5, setParam)
+    expect(calls).toEqual([
+      { name: 'a0', value: 5 },
+      { name: 'b0', value: 5 },
+    ])
+    // Same ctl value again: the edge was consumed once for the whole slot —
+    // neither set re-fires.
+    router.route(both, () => false, () => 0.5, setParam)
+    expect(calls).toHaveLength(2)
+  })
+
+  it('17) a view flip after a consumed edge does not yank the newly addressed set (pickup)', () => {
+    const router = new MacroRouter()
+    router.noteSignal('ctl.1')
+    const { setParam, calls } = fakeSetParam()
+    router.route([params(1, 'a')], () => false, () => 0.5, setParam) // view A routes
+    router.route([params(1, 'b')], () => false, () => 0.5, setParam) // flip to B, ctl unchanged: nothing
+    expect(calls).toEqual([{ name: 'a0', value: 5 }])
+    router.route([params(1, 'b')], () => false, () => 0.8, setParam) // knob actually moves: B picks up
+    expect(calls).toEqual([
+      { name: 'a0', value: 5 },
+      { name: 'b0', value: 8 },
+    ])
+  })
+
+  it('18) multi-set with one bound side: the unbound side still routes, and the edge is consumed', () => {
+    const router = new MacroRouter()
+    router.noteSignal('ctl.1')
+    const { setParam, calls } = fakeSetParam()
+    const both = [params(1, 'a'), params(1, 'b')]
+    router.route(both, (n) => n === 'a0', () => 0.5, setParam)
+    expect(calls).toEqual([{ name: 'b0', value: 5 }])
+    router.route(both, () => false, () => 0.5, setParam) // a0's binding cleared, but edge is spent
+    expect(calls).toHaveLength(1)
   })
 })

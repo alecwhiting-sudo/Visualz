@@ -925,6 +925,24 @@ body {
   margin-top: 14px;
 }
 
+/* Knob-view toggle (docs/DECKS.md trial): the A/B/Fader/Both segmented row
+   above a deck scene's knob list. Reuses .session-button + .store-armed for
+   the segments themselves. */
+.macro-view-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 10px;
+}
+
+.macro-view-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
 .frames-header {
   display: flex;
   align-items: center;

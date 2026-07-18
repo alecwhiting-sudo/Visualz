@@ -35,6 +35,16 @@ const XY_HELP_TEXT =
 const FRAMES_HELP_TEXT =
   "Frames store the 8 controller positions. Press = jump, Shift+press = glide at the transition speed — or latch the Glide toggle so every press glides (handy on touch, where there's no Shift). Grabbing any control mid-glide takes that parameter over; the rest keep gliding. Frames are positional, so they apply to whatever scene is live — through handoffs too."
 
+// Knob-view toggle (docs/DECKS.md trial): guidance for its "?" popover.
+const KNOB_VIEW_HELP_TEXT =
+  "On a combo scene the 8 hardware knobs address one deck at a time: A, B, FADER (whichever deck the Mix fader currently favors — below 50% is A, above is B), or BOTH (each knob drives the same-numbered parameter on both decks). Flipping the view never yanks values — knobs pick the new deck up on their next actual movement. Mix and Blend mode stay on their own sliders."
+const MACRO_VIEWS = [
+  { value: 0, label: 'A' },
+  { value: 1, label: 'B' },
+  { value: 2, label: 'Fader' },
+  { value: 3, label: 'Both' },
+]
+
 const SIGNAL_NAMES = ['rms', 'bass', 'mid', 'high', 'beat', 'onset']
 const KEYBOARD_HINT = '1-6 freqX · q/w/e freqY · space pulse drift · f/g flash/fade trail'
 
@@ -649,6 +659,22 @@ export function App() {
   // so a UI toggle makes PLAIN presses glide while latched. Shift still
   // glides regardless — the latch adds a mode, it doesn't replace the key.
   const [glideLatched, setGlideLatched] = useState(false)
+
+  // Knob-view toggle (docs/DECKS.md trial): which deck the 8 macro slots
+  // address on a composite (blend-*) scene — 0 A, 1 B, 2 fader-follows,
+  // 3 both. The engine's routing reads the RECORDED `macro.view` input
+  // signal (so a mid-take flip replays exactly); this state is only the
+  // UI's copy, re-pushed below whenever the engine is rebuilt or the scene
+  // switches (a cold rebuild starts from a fresh signal, default A).
+  const [macroView, setMacroView] = useState(0)
+  useEffect(() => {
+    engineRef.current?.setInputSignal('macro.view', macroView)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine, sceneId, sceneVersion, macroView])
+  const isDeckScene =
+    engine !== null &&
+    engine.scene.params.some((p) => p.name.startsWith('a.')) &&
+    engine.scene.params.some((p) => p.name.startsWith('b.'))
 
   /** A frame button's own click: store-mode intercepts it (captures instead
    * of applying); otherwise applies the frame, gliding if Shift was held or
@@ -1414,13 +1440,23 @@ export function App() {
                 <div className="scene-params-header">
                   <h2>{engine.scene.meta.name}</h2>
                 </div>
+                {/* Knob-view toggle (docs/DECKS.md trial): only deck
+                   (blend-*) scenes get it — it retargets what the 8
+                   hardware slots address. */}
+                {isDeckScene && <MacroViewToggle view={macroView} onChange={setMacroView} />}
                 {/* task #34: hardware mapping happens only via the INPUTS
                    tab's Controls 1-8 ("Map controls…"/per-row Learn) — every
-                   row still ALWAYS shows its 1-8 slot number (below) so the
-                   positional model stays visible without a separate learn
-                   flow living here too. */}
-                {engine.scene.params.map((p, i) => (
-                  <Knob key={p.name} engine={engine} schema={p} slot={i + 1} liveValue={paramValues[p.name] ?? p.default} />
+                   row shows the slot number the ACTIVE macro view assigns it
+                   (engine.macroSlotOf — tracks the deck toggle above; rows
+                   the current view doesn't address show no chip). */}
+                {engine.scene.params.map((p) => (
+                  <Knob
+                    key={p.name}
+                    engine={engine}
+                    schema={p}
+                    slot={engine.macroSlotOf(p.name)}
+                    liveValue={paramValues[p.name] ?? p.default}
+                  />
                 ))}
                 <p className="keyboard-hint">{KEYBOARD_HINT}</p>
                 {/* Pads/PERFORM batch (item 3): moved here from INPUTS —
@@ -2284,6 +2320,30 @@ function FramesBlock({
   )
 }
 
+/** Knob-view toggle (docs/DECKS.md trial): the segmented A/B/Fader/Both
+ * selector shown above a deck (blend-*) scene's knob rows. Pure render —
+ * the choice lives in App state and, authoritatively, on the recorded
+ * `macro.view` input signal the engine's routing reads. */
+function MacroViewToggle({ view, onChange }: { view: number; onChange: (v: number) => void }) {
+  return (
+    <div className="macro-view-toggle" role="group" aria-label="Knob target">
+      <span className="macro-view-label">Knobs</span>
+      {MACRO_VIEWS.map((m) => (
+        <button
+          key={m.value}
+          type="button"
+          aria-pressed={view === m.value}
+          className={`session-button${view === m.value ? ' store-armed' : ''}`}
+          onClick={() => onChange(m.value)}
+        >
+          {m.label}
+        </button>
+      ))}
+      <InfoPopover label="Knob target info" text={KNOB_VIEW_HELP_TEXT} />
+    </div>
+  )
+}
+
 function Knob({
   engine,
   schema,
@@ -2292,14 +2352,14 @@ function Knob({
 }: {
   engine: Engine
   schema: { name: string; label: string; min: number; max: number; default: number; step?: number }
-  /** This param's 1-based position in `engine.scene.params` — docs/MACROS.md
-   * §1/§4's positional slot number. Task #34: ALWAYS shown (dim mono, next to
-   * the label) for a param within the first 8 positions, so the positional
-   * Controls 1-8 model stays visible even when nothing is currently mapped —
-   * hidden entirely for a param at position 9+, which no macro slot can ever
-   * reach. Also still used for the "ctl N" source hint when this param is
-   * macro-driven (see `macroDriven` below). */
-  slot: number
+  /** The 1-based slot number the ACTIVE macro view assigns this param
+   * (`engine.macroSlotOf` — tracks the deck A/B/Fader/Both toggle on
+   * composite scenes; plain positional order everywhere else), or null when
+   * no slot addresses it (position 9+, or a deck param outside the current
+   * view). Task #34: shown as a dim mono chip next to the label so the
+   * positional Controls 1-8 model stays visible even when nothing is
+   * currently mapped. Also the "ctl N" source hint when macro-driven. */
+  slot: number | null
   /** This param's most recently polled live value (App's 100ms poll,
    * `engine.scene.getParam` under the hood) — rendered on the slider instead
    * of local interactive state whenever `bound` is true, so a MIDI-learned or
@@ -2328,10 +2388,10 @@ function Knob({
     <label className={`knob${macroClass}`}>
       <span>
         <span className="knob-label">
-          {slot <= MACRO_SLOT_COUNT && <span className="knob-slot-num">{slot}</span>}
+          {slot !== null && <span className="knob-slot-num">{slot}</span>}
           {schema.label}
         </span>
-        <em>{bound ? 'ƒ(t)' : macroDriven ? `ctl ${slot}` : displayValue.toFixed(2)}</em>
+        <em>{bound ? 'ƒ(t)' : macroDriven && slot !== null ? `ctl ${slot}` : displayValue.toFixed(2)}</em>
       </span>
       <input
         type="range"

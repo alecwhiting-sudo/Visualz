@@ -76,17 +76,38 @@ can subsume them without a format break.
 floor. Fan the quality scaler into both children; refuse two GPGPU children
 at full quality on mobile (auto-halve).
 
-## 5. OPEN UX FORK — what the 8 knobs mean with two live scenes
+## 5. Knob mapping — DECIDED 2026-07-18, trial SHIPPED
 
-Unresolved; the user explicitly wants more time on this. Options:
-- (a) Positional split: 1-3 → A, 4-6 → B, 7 → crossfader, 8 spare.
-  Predictable, ships fastest, 3 knobs per scene.
-- (b) Focus toggle: all 8 → the focused deck; crossfader on its own control.
-  Full reach, one extra concept mid-performance.
-- (c) Crossfader-follows: knobs drive the deck the fader favors; ambiguous
-  mid-fade.
-- (d) Today's composite behavior: slot 1=mix, 2=mode, 3+ = A's then B's
-  params — works now but burns the front slots.
+User decision: a **view toggle** — the 8 slots address one of
+**A | B | Fader-follows (mix < 0.5 → A, else B) | Both** (slot i drives A's
+AND B's i-th param off one hardware edge). Global toggle for now;
+**per-knob view assignment is explicitly deferred** to later.
+
+Trial implementation (on the existing blend-* composites):
+- View state = the recorded `macro.view` input signal (0/1/2/3) — rides the
+  ordinary setInputSignal record/replay path, so mid-take flips replay
+  byte-identically (e2e: tests/e2e/macroView.spec.ts).
+- `Engine.macroParamSets()` resolves the view by filtering the composite's
+  `a.` / `b.` param prefixes — no composite/scene API changes. Ordinary
+  scenes are untouched (`[scene.params]`).
+- `MacroRouter.route` takes param SETS; the per-slot edge is consumed once
+  across sets, so "both" can't double-fire and a view flip never yanks the
+  newly addressed deck — its params wait for the knob's next movement
+  (pickup). This also makes fader-follows unambiguous mid-fade for free.
+- `mix`/`mode` are NOT slot-addressable in any view (UI sliders +
+  expressions only). Revisit if the user wants mix pinned to a hardware
+  control.
+- UI: segmented "Knobs A|B|Fader|Both" row above the knob list, deck scenes
+  only; per-row slot chips follow the active view via `engine.macroSlotOf`.
+- `startRecording` baselines the held `macro.view` value into the take as a
+  frame-0 inputSignal event (review finding: a take armed with view B/Fader/
+  Both selected otherwise replayed with the bus default, view A, re-routing
+  every ctl edge to the wrong deck). Held `ctl.N` values are deliberately
+  NOT baselined — see the code comment in `startRecording`.
+- KNOWN GAP (deferred, review finding 2): Frames F1-F8 remain raw-positional
+  on deck scenes ([mix, mode, a.*…]) and do NOT follow the knob-view toggle,
+  so on views B/Fader/Both the frames and the slot chips address different
+  params. Align frames to the active view if the trial sticks.
 
 ## 6. If/when approved, the incremental path
 
