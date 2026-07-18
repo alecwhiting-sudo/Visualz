@@ -37,6 +37,14 @@ test('PERFORM tab shows the trigger pads + XY pad, each with a working "?" popov
   await expect(padsContent).toBeVisible()
   await expect(padsContent).toContainText(PADS_HELP_SNIPPET)
 
+  // Fully ON the page (user report: this "?" sits near the panel's right
+  // edge and its left-anchored popover ran 31px off-screen — InfoPopover
+  // now flips to right-anchored when left-anchoring would overflow).
+  const viewport = page.viewportSize()!
+  const box = (await padsContent.boundingBox())!
+  expect(box.x).toBeGreaterThanOrEqual(0)
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width)
+
   // Click again toggles it closed.
   await padsInfoButton.click()
   await expect(page.locator('.info-popover-content')).toHaveCount(0)

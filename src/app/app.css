@@ -396,12 +396,14 @@ body {
   color: var(--accent);
 }
 
+/* Position (fixed; below the button, clamped to the viewport) comes from
+   InfoPopover.tsx inline style — fixed positioning escapes the panel's
+   overflow clipping, which used to cut popovers near the panel edge. */
 .info-popover-content {
-  position: absolute;
   z-index: 20;
-  top: 24px;
-  left: 0;
   width: 240px;
+  /* Never wider than the viewport minus a margin — tiny phones. */
+  max-width: calc(100vw - 24px);
   padding: 10px 12px;
   background: var(--bg-panel);
   border: 1px solid var(--accent);

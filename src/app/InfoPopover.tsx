@@ -14,11 +14,33 @@ import { useEffect, useRef, useState } from 'react'
  * preview one popover while another is click-pinned open elsewhere without
  * the hover accidentally closing the pinned one.
  */
+/** Must match app.css's `.info-popover-content` width (+ its border). */
+const POPOVER_WIDTH = 242
+/** Minimum gap kept between the popover and the viewport edges. */
+const EDGE_MARGIN = 8
+
 export function InfoPopover({ label, text }: { label: string; text: string }) {
   const [open, setOpen] = useState(false)
   const [hovering, setHovering] = useState(false)
+  // The popover was absolutely positioned inside the panel, which clips its
+  // own overflow — a "?" near the panel's right edge (the T1-T4 pads', user
+  // report) had its popover run off the page AND get its left portion cut by
+  // the panel boundary. It now renders position:fixed at a spot measured
+  // from the button each time it opens: below the button, left-aligned with
+  // it, clamped to the viewport — fixed positioning escapes every ancestor's
+  // overflow clipping, so it can never be cut off. (It doesn't track
+  // scrolling while open; click-away/Esc close it long before that matters.)
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const visible = open || hovering
+
+  useEffect(() => {
+    if (!visible) return
+    const rect = rootRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const maxLeft = window.innerWidth - POPOVER_WIDTH - EDGE_MARGIN
+    setPos({ left: Math.max(EDGE_MARGIN, Math.min(rect.left, maxLeft)), top: rect.bottom + 4 })
+  }, [visible])
 
   useEffect(() => {
     if (!visible) return
@@ -75,8 +97,12 @@ export function InfoPopover({ label, text }: { label: string; text: string }) {
       >
         ?
       </button>
-      {visible && (
-        <div className="info-popover-content" role="tooltip">
+      {visible && pos && (
+        <div
+          className="info-popover-content"
+          role="tooltip"
+          style={{ position: 'fixed', left: pos.left, top: pos.top }}
+        >
           {text}
         </div>
       )}
