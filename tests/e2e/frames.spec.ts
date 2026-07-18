@@ -110,6 +110,33 @@ test('the Glide latch makes a PLAIN press glide (touch has no Shift key)', async
   await expect.poll(() => getParam(page, param0.name)).toBeCloseTo(param0.default, 2)
 })
 
+test('grabbing a control mid-glide takes that param over while the rest keep gliding', async ({ page }) => {
+  await boot(page)
+  const [param0, param1] = await page.evaluate(() => window.__vizLive!.sceneParams().slice(0, 2))
+
+  // Store defaults into F6, push the first two params to max, start a glide
+  // back toward the stored frame.
+  await page.getByRole('button', { name: 'Store' }).click()
+  await page.getByRole('button', { name: 'F6', exact: true }).click()
+  await setParam(page, param0.name, param0.max)
+  await setParam(page, param1.name, param1.max)
+  await page.getByRole('button', { name: 'F6', exact: true }).click({ modifiers: ['Shift'] })
+
+  // Wait until the glide is demonstrably running (param0 departed max) …
+  await expect
+    .poll(() => getParam(page, param0.name), { timeout: 3000 })
+    .toBeLessThan(param0.max)
+
+  // … then grab param0 (what a hardware ctl or UI slider write looks like).
+  // "Whichever is being used takes over at the moment of use": the glide
+  // must release param0 to the grab and keep gliding param1 to the frame.
+  const grabbed = param0.min + (param0.max - param0.min) * 0.9
+  await setParam(page, param0.name, grabbed)
+
+  await expect.poll(() => getParam(page, param1.name), { timeout: 5000 }).toBeCloseTo(param1.default, 1)
+  expect(await getParam(page, param0.name)).toBeCloseTo(grabbed, 5)
+})
+
 test("frames survive a handoff: store on lissajous, switch to julia, press moves julia's own params", async ({
   page,
 }) => {

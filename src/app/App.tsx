@@ -33,7 +33,7 @@ const XY_HELP_TEXT =
   'XY performance pad — writes the pad.x / pad.y signals; bind them to any parameter with an expression like pad.x * 2.'
 // Frame buttons F1-F8 (task #35): guidance copy for the "?" popover beside them.
 const FRAMES_HELP_TEXT =
-  "Frames store the 8 controller positions. Press = jump, Shift+press = glide at the transition speed — or latch the Glide toggle so every press glides (handy on touch, where there's no Shift). Frames are positional, so they apply to whatever scene is live — through handoffs too."
+  "Frames store the 8 controller positions. Press = jump, Shift+press = glide at the transition speed — or latch the Glide toggle so every press glides (handy on touch, where there's no Shift). Grabbing any control mid-glide takes that parameter over; the rest keep gliding. Frames are positional, so they apply to whatever scene is live — through handoffs too."
 
 const SIGNAL_NAMES = ['rms', 'bass', 'mid', 'high', 'beat', 'onset']
 const KEYBOARD_HINT = '1-6 freqX · q/w/e freqY · space pulse drift · f/g flash/fade trail'
@@ -562,14 +562,30 @@ export function App() {
       targets,
       startedAt: performance.now(),
       durationMs: Math.max(0.1, Math.min(10, transitionSpeed)) * 1000,
+      // Per-param takeover (user request: "whichever is being used takes
+      // over at the moment of use"): the value each param was last written
+      // by THIS glide. If a tick finds the param no longer holding that
+      // value, some other control wrote it in between (hardware ctl, UI
+      // slider, trigger-pad pulse) — that param leaves the glide and the
+      // newer writer owns it; the rest keep gliding. Same external-write
+      // detection trick MappingRuntime's pulses use. Scene setParam stores
+      // raw floats (no snapping), so read-back is exact for our own writes.
+      lastWritten: new Map<string, number>(),
     }
     glideRef.current = state
     const step = () => {
       const e = engineRef.current
       if (!e || glideRef.current !== state) return // superseded/cancelled
       const progress = (performance.now() - state.startedAt) / state.durationMs
-      for (const t of state.targets) e.setParam(t.name, easedValue(t.from, t.to, progress))
-      if (progress >= 1) {
+      state.targets = state.targets.filter((t) => {
+        const prev = state.lastWritten.get(t.name)
+        if (prev !== undefined && e.scene.getParam(t.name) !== prev) return false // taken over
+        const v = easedValue(t.from, t.to, progress)
+        e.setParam(t.name, v)
+        state.lastWritten.set(t.name, v)
+        return true
+      })
+      if (progress >= 1 || state.targets.length === 0) {
         glideRef.current = null
         glideRafRef.current = null
         return
