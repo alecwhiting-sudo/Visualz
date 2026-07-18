@@ -435,17 +435,26 @@ body {
 
 /* Scene handoff controls (docs/HANDOFF.md §6): target selector + "Switch
    (hand off)" button. */
+/* Two rows (user report: the Handoff dial squeezed the target dropdown to
+   an unreadable sliver in one row): the "Hand off to" select gets the full
+   panel width on its own line; the Switch button + Handoff dial share the
+   row below. */
 .switch-control {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 8px;
   margin-bottom: 12px;
 }
 
 .switch-control .scene-select {
-  flex: 1;
+  flex: 1 1 100%;
   margin-bottom: 0;
   min-width: 0;
+}
+
+.switch-control .session-button {
+  flex: 1 1 auto;
 }
 
 .keyboard-hint {
