@@ -329,6 +329,104 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
     },
   },
 
+  glyphgeometry: {
+    'glyph-fs': {
+      summary:
+        "Everything on screen is text — there are no line primitives in this scene at all. Nested rings of glyphs trace closed curves that morph between a superformula, a spirograph, and a star-rose as the Figure knob turns, each character rotated to the curve's local direction. This shader stamps each glyph: it reads the baked 5×7 bitmap font atlas as an on/off ink mask and multiplies it by the ring's color and trail alpha.",
+      tryThis: [
+        {
+          target: 'float mask = texture(uAtlas, vUV).r;',
+          effect:
+            'invert with float mask = 1.0 - texture(uAtlas, vUV).r; to punch every character out as a hole in a solid block — negative-space calligraphy.',
+        },
+        {
+          target: 'vColor.a * mask',
+          effect:
+            "try pow(mask, 2.0) * vColor.a to thin the strokes toward each glyph's center, so dense inner rings read as fine linework instead of blooming together.",
+        },
+        {
+          target: 'outColor = vec4(vColor.rgb, vColor.a * mask);',
+          effect:
+            'try vec4(vColor.rgb * (1.0 + mask), vColor.a * mask) to give every character a hot core a step brighter than its ring color.',
+        },
+      ],
+    },
+    'fade-fs': {
+      summary:
+        "This pass never draws the geometry — it lays one nearly-transparent dark rectangle over the whole canvas each frame, which is what leaves the rotating text rings' motion echoes behind them instead of a hard wipe. The Trail knob feeds its opacity.",
+      tryThis: [
+        {
+          target: 'vec4(0.0, 0.0, 0.0, uFade)',
+          effect:
+            'tint the fade color, e.g. vec4(0.05, 0.0, 0.08, uFade), so trails decay into a violet afterglow instead of pure black.',
+        },
+        {
+          target: 'uFade',
+          effect:
+            "multiply it, e.g. uFade * 0.5, to halve the fade rate independently of the Trail knob's own range — extremely long ghosting.",
+        },
+        {
+          target: 'void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }',
+          effect:
+            'swap the body for outColor = vec4(0.0, 0.0, 0.0, 1.0); to kill trails entirely — every frame a clean slate, pure crisp text geometry.',
+        },
+      ],
+    },
+  },
+  waves: {
+    'update-fs': {
+      summary:
+        "A real physics simulation: each texel stores the water height now and one step ago, and every substep applies the discrete wave equation — the new height is twice the current minus the previous plus the neighborhood curvature (the Laplacian) times the wave speed, all scaled by damping. Emitters force smooth sinusoidal ripples in, onsets drop one-shot impulses, and texels inside the rotating polygon obstacles are pinned to zero — that pinning is what makes wavefronts visibly reflect off the geometry.",
+      tryThis: [
+        {
+          target: 'float uNext = (2.0 * u - uPrev + uC2 * lap) * uDamping;',
+          effect:
+            'the whole wave equation in one line; nudge the 2.0 to 2.02 for a subtly unstable, ever-livelier field, or remove the uDamping factor for lossless reflections that ring forever.',
+        },
+        {
+          target: 'float apothem = r * cos(PI / sides);',
+          effect:
+            "the polygon obstacle's inscribed-radius formula; replace cos(PI / sides) with 1.0 to turn every obstacle into a perfect circle regardless of its side count.",
+        },
+        {
+          target: 'float falloff = exp(-d * d * 600.0);',
+          effect:
+            'how tightly each emitter forces the water; lower 600.0 toward 100.0 for broad, diffuse swells, or raise it toward 2000.0 for pinpoint ripple origins.',
+        },
+        {
+          target: 'float osc = sin(TWO_PI * uEmitterFreq[i] * uSimTime + uEmitterPhase[i]);',
+          effect:
+            'swap sin for sign(sin(...)) to drive the emitters with a square wave — a percussive pulse train of wavefronts instead of a smooth ripple.',
+        },
+      ],
+    },
+    'render-fs': {
+      summary:
+        'Turns the raw height field into light: the water surface is slope-shaded (the height gradient becomes a surface normal, so crests catch light like real water), the crest color comes from the Hue knob, and the polygon obstacles are drawn as quiet silhouettes so you can see the geometry the waves are bouncing between.',
+      tryThis: [
+        {
+          target: 'float energy = pow(clamp(abs(h) * 2.2, 0.0, 1.0), 1.5);',
+          effect:
+            'the crest-brightness contrast curve; lower the 1.5 exponent toward 0.6 for a soft filled-in glow, or raise it toward 3.0 for thin, sharp, high-contrast rings.',
+        },
+        {
+          target: 'vec3 n = normalize(vec3(-gx * 5.0, -gy * 5.0, 1.0));',
+          effect:
+            'the slope-lighting strength; raise the 5.0s for punchier, more three-dimensional crests, lower them for a flatter, painterly surface.',
+        },
+        {
+          target: 'col = mix(col, vec3(0.1, 0.11, 0.14), wm * 0.85);',
+          effect:
+            'the obstacle silhouette color; swap the dark gray for a bright color to make the reflecting geometry glow instead of reading as shadow.',
+        },
+        {
+          target: 'vec3 crest = hsv2rgb(vec3(fract(uHue), 0.55, 1.0));',
+          effect:
+            'the 0.55 is crest saturation; push it to 1.0 for neon ripples or drop it toward 0.1 for a near-monochrome moonlit-water look.',
+        },
+      ],
+    },
+  },
   grayscott: {
     'update-fs': {
       summary:
