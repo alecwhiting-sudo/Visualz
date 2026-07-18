@@ -481,3 +481,15 @@ Order (each step compiles/tests before the next):
    no time/count-derived seed.
 10. **Order-preserving chains.** Switches apply strictly in recorded frame order (player's
     monotonic cursor); A→B→C reproduces the same intermediate captures every run.
+
+## Amendment (2026-07-18): handoff glide
+
+A switch may now DISSOLVE instead of hard-cutting: when the recorded
+`handoff.fade` input signal exceeds the engine's cut threshold at switch
+time, A's final frame is captured full-res and composited over B with
+alpha decaying across the duration (UI: the "Handoff" dial beside the
+Switch button; bottom stop = cut). The signal is baselined into takes at
+startRecording (BASELINED_SIGNALS), the dissolve clock is frame-derived
+transport time, and the overlay renders identically in live, frozen
+control ticks, replay, and export. Composes with ingest: B still receives
+A's snapshot as material while the dissolve plays.

@@ -128,18 +128,33 @@ test('mix and mode controls change the rendered output', async ({ page }) => {
     return window.__viz!.pixelHash()
   }, doc)
 
+  // Crossfader contract (user request; crossfader.spec.ts is the full
+  // proof): mix is a TRUE fader in every mode — at mix=1 every mode shows
+  // only child B, so mode divergence must be asserted MID-TRAVEL (0.5),
+  // where the blend character lives. The old assertion here compared mode 0
+  // vs mode 1 at mix=1, which encoded the retired dry/wet semantics (mode 1
+  // at full mix used to show a+b; now it correctly shows pure b, identical
+  // to mode 0 at full mix).
   await boot(page)
-  const hashMode1 = await page.evaluate((d) => {
+  const hashMode1Mid = await page.evaluate((d) => {
     window.__viz!.loadSession(d)
-    window.__viz!.setParam('mix', 1)
+    window.__viz!.setParam('mix', 0.5)
     window.__viz!.setParam('mode', 1)
     window.__viz!.renderFrames(30)
     return window.__viz!.pixelHash()
   }, doc)
 
+  await boot(page)
+  const hashMode0Mid = await page.evaluate((d) => {
+    window.__viz!.loadSession(d)
+    window.__viz!.setParam('mix', 0.5)
+    window.__viz!.renderFrames(30)
+    return window.__viz!.pixelHash()
+  }, doc)
+
   expect(hashMix0).not.toBe(hashMix1)
-  expect(hashMix1).not.toBe(hashMode1)
-  expect(hashMix0).not.toBe(hashMode1)
+  expect(hashMode1Mid).not.toBe(hashMode0Mid)
+  expect(hashMix0).not.toBe(hashMode1Mid)
 })
 
 // --- Param routing (a./b. prefix) -------------------------------------------

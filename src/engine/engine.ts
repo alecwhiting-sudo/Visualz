@@ -542,9 +542,10 @@ export class Engine {
     // Handoff glide (see `handoffFade`): with the surface still bound and A's
     // frame intact, grab a FULL-RES copy for the dissolve overlay — the ≤256px
     // ingest snapshot above is far too coarse to show on screen. Captured
-    // before B is built for the same reason the snapshot is; a failure past
-    // this point (I8's throw-leaves-A-intact guarantee) just orphans one
-    // texture, freed on the next switch/dispose.
+    // before B is built for the same reason the snapshot is; the catch below
+    // frees it if building B throws (review finding: a local never assigned
+    // to `handoffFade` is unreachable by `clearHandoffFade`, so without the
+    // catch each failed glided switch leaked one full-res texture).
     const fadeSeconds = this.inputSignals.get('handoff.fade') ?? 0
     let fadeTex: WebGLTexture | null = null
     if (fadeSeconds > HANDOFF_CUT_THRESHOLD) {
@@ -562,9 +563,15 @@ export class Engine {
     // 2. Build + init + ingest B while A is still alive, so any failure
     //    leaves A intact (I8) — both calls may throw (e.g. a float-renderable
     //    check, or a malformed snapshot).
-    const next = entry.create()
-    next.init(this.gpu, this.seed) // seed continuity (I9): always the session seed, never time/switch-derived
-    if (hasIngest(next)) next.ingest(snapshot)
+    let next: SceneRuntime
+    try {
+      next = entry.create()
+      next.init(this.gpu, this.seed) // seed continuity (I9): always the session seed, never time/switch-derived
+      if (hasIngest(next)) next.ingest(snapshot)
+    } catch (err) {
+      if (fadeTex) this.gpu.gl.deleteTexture(fadeTex)
+      throw err
+    }
 
     // 3. Commit: record, dispose A, swap, clear A-scoped state.
     if (this.recorder) this.recorder.recordSwitch(this.transport.frame, toId)
