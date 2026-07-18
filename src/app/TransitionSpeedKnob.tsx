@@ -35,7 +35,23 @@ function fromLog(log: number): number {
  * live) impossibly twitchy relative to the high end — the "log feel" the
  * task asks for.
  */
-export function TransitionSpeedKnob({ seconds, onChange }: { seconds: number; onChange: (seconds: number) => void }) {
+export function TransitionSpeedKnob({
+  seconds,
+  onChange,
+  label = 'Transition',
+  ariaLabel = 'Transition speed',
+  minLabel,
+}: {
+  seconds: number
+  onChange: (seconds: number) => void
+  /** Dial caption — the handoff-glide reuse (task: "a glide for handoffs")
+   * relabels the same dial "Handoff". */
+  label?: string
+  ariaLabel?: string
+  /** Shown instead of "0.1s" when the dial sits at its bottom stop — the
+   * handoff dial's bottom stop means "hard cut", not a 0.1s dissolve. */
+  minLabel?: string
+}) {
   const dragRef = useRef<{ pointerId: number; startY: number; startLog: number } | null>(null)
   const logValue = toLog(seconds)
 
@@ -72,14 +88,14 @@ export function TransitionSpeedKnob({ seconds, onChange }: { seconds: number; on
 
   return (
     <div className="rotary-knob">
-      <span className="rotary-knob-label">Transition</span>
+      <span className="rotary-knob-label">{label}</span>
       <svg
         className="rotary-knob-dial"
         width={48}
         height={48}
         viewBox="0 0 100 100"
         role="slider"
-        aria-label="Transition speed"
+        aria-label={ariaLabel}
         aria-valuemin={MIN_SECONDS}
         aria-valuemax={MAX_SECONDS}
         aria-valuenow={seconds}
@@ -96,7 +112,9 @@ export function TransitionSpeedKnob({ seconds, onChange }: { seconds: number; on
         <line x1={needleStart.x} y1={needleStart.y} x2={needleEnd.x} y2={needleEnd.y} className="rotary-knob-needle" />
         <circle cx="50" cy="50" r="6" className="rotary-knob-hub" />
       </svg>
-      <span className="rotary-knob-value">{seconds.toFixed(1)}s</span>
+      <span className="rotary-knob-value">
+        {minLabel !== undefined && seconds <= MIN_SECONDS + 1e-9 ? minLabel : `${seconds.toFixed(1)}s`}
+      </span>
     </div>
   )
 }

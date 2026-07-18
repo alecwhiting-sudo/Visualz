@@ -54,19 +54,28 @@ void main(){
   vec3 a = texture(uTexA, uv).rgb;
   vec3 b = texture(uTexB, uv).rgb;
   vec3 col;
+  // Crossfader contract (user request): uMix is a true A/B fader in EVERY
+  // mode — 0.0 shows ONLY A, 1.0 shows ONLY B, and the mode's character
+  // (add / multiply / screen) lives in the middle of the travel. Modes 1-3
+  // ride a two-segment curve through the full blend at center: A -> blend
+  // over the first half, blend -> B over the second. (They used to be
+  // dry/wet dials — "A -> combined" — so B was never reachable alone.)
   if (uMode == 0) {
     // 0: crossfade — linear interpolation from A to B.
     col = mix(a, b, uMix);
-  } else if (uMode == 1) {
-    // 1: add — A plus B scaled by uMix (can overexpose to white; that's the look).
-    col = a + b * uMix;
-  } else if (uMode == 2) {
-    // 2: multiply — A darkened by B (product), dialed in over uMix.
-    col = mix(a, a * b, uMix);
   } else {
-    // 3: screen — the photographic "light" blend (inverse of multiplying
-    // inverses), dialed in over uMix.
-    col = mix(a, 1.0 - (1.0 - a) * (1.0 - b), uMix);
+    vec3 blended;
+    if (uMode == 1) {
+      // 1: add — both at full strength (can overexpose to white; that's the look).
+      blended = a + b;
+    } else if (uMode == 2) {
+      // 2: multiply — A darkened by B (product).
+      blended = a * b;
+    } else {
+      // 3: screen — the photographic "light" blend (inverse of multiplying inverses).
+      blended = 1.0 - (1.0 - a) * (1.0 - b);
+    }
+    col = uMix < 0.5 ? mix(a, blended, uMix * 2.0) : mix(blended, b, uMix * 2.0 - 1.0);
   }
   outColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }`

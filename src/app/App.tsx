@@ -671,6 +671,17 @@ export function App() {
     engineRef.current?.setInputSignal('macro.view', macroView)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine, sceneId, sceneVersion, macroView])
+
+  // Handoff glide dial (user request): dissolve duration for scene switches,
+  // mirrored onto the RECORDED `handoff.fade` signal exactly like macroView
+  // above — the engine reads the signal at switch time (and baselines it
+  // into a take), so glided handoffs replay/export identically. Default =
+  // the dial's bottom stop, which the engine treats as a hard cut.
+  const [handoffFadeSeconds, setHandoffFadeSeconds] = useState(0.1)
+  useEffect(() => {
+    engineRef.current?.setInputSignal('handoff.fade', handoffFadeSeconds)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine, sceneId, sceneVersion, handoffFadeSeconds])
   const isDeckScene =
     engine !== null &&
     engine.scene.params.some((p) => p.name.startsWith('a.')) &&
@@ -1436,6 +1447,8 @@ export function App() {
                   onTargetChange={setSwitchTargetId}
                   onSwitch={() => onSwitchScene(switchTargetId)}
                   disabled={replay !== null || exporting !== null}
+                  fadeSeconds={handoffFadeSeconds}
+                  onFadeSecondsChange={setHandoffFadeSeconds}
                 />
                 <div className="scene-params-header">
                   <h2>{engine.scene.meta.name}</h2>
@@ -1876,11 +1889,19 @@ function SwitchControl({
   onTargetChange,
   onSwitch,
   disabled,
+  fadeSeconds,
+  onFadeSecondsChange,
 }: {
   targetId: string
   onTargetChange: (id: string) => void
   onSwitch: () => void
   disabled: boolean
+  /** Handoff glide (user request — "a glide for handoffs like the frame
+   * glide"): dissolve duration for the next switch. At the dial's bottom
+   * stop the switch is today's hard cut (the engine's threshold treats the
+   * 0.1s minimum as "cut"; the dial shows "cut" there). */
+  fadeSeconds: number
+  onFadeSecondsChange: (seconds: number) => void
 }) {
   return (
     <div className="switch-control">
@@ -1897,6 +1918,13 @@ function SwitchControl({
       <button type="button" className="session-button" onClick={onSwitch} disabled={disabled}>
         Switch (hand off)
       </button>
+      <TransitionSpeedKnob
+        seconds={fadeSeconds}
+        onChange={onFadeSecondsChange}
+        label="Handoff"
+        ariaLabel="Handoff glide duration"
+        minLabel="cut"
+      />
     </div>
   )
 }

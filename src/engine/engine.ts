@@ -1,7 +1,7 @@
 import { Transport, type TransportMode } from '../core/transport'
 import { SignalBus } from '../core/signals'
 import { Gpu } from '../gpu/context'
-import { DefaultSurface } from '../gpu/targets'
+import { DefaultSurface, FullscreenPass } from '../gpu/targets'
 import { AudioEngine, publishDemoSignals } from '../audio/engine'
 import { AudioEventDetector, type AudioEventResult } from '../audio/events'
 import { sampleTimeline, serializeTimeline, parseTimeline } from '../audio/timeline'
@@ -55,6 +55,39 @@ function round4(seconds: number): number {
   return Math.round(seconds * 1e4) / 1e4
 }
 
+/** Handoff glide: `handoff.fade` values at/below this are a hard cut — the
+ * UI dial's bottom stop means "cut", and the full-res frame copy is skipped
+ * entirely so an unset signal costs nothing. */
+const HANDOFF_CUT_THRESHOLD = 0.15
+
+/** Held "UI mode" input signals baselined into a take at `startRecording`
+ * (each is a review-finding class: set before arming, it silently shaped the
+ * live performance — knob routing, handoff dissolve length — but replayed at
+ * its default, diverging export from performance). Held `ctl.N` values are
+ * deliberately NOT in this list; see the comment at the baseline site. */
+const BASELINED_SIGNALS = ['macro.view', 'handoff.fade']
+
+/** Fullscreen dissolve overlay for the handoff glide: samples A's captured
+ * final frame at decaying alpha. Positions from gl_VertexID (FullscreenPass
+ * draws 3 vertices, no VBO), uv = clip*0.5+0.5 — matches copyTexImage2D's
+ * bottom-left origin, so no flip. */
+const FADE_OVERLAY_VS = `#version 300 es
+out vec2 vUV;
+void main() {
+  vec2 pos = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0);
+  vUV = pos * 0.5 + 0.5;
+  gl_Position = vec4(pos, 0.0, 1.0);
+}`
+const FADE_OVERLAY_FS = `#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform float uAlpha;
+in vec2 vUV;
+out vec4 outColor;
+void main() {
+  outColor = vec4(texture(uTex, vUV).rgb, uAlpha);
+}`
+
 export interface EngineOptions {
   mode: TransportMode
   seed: number
@@ -107,6 +140,22 @@ export class Engine {
 
   private recorder: SessionRecorder | null = null
   private player: SessionPlayer | null = null
+  /**
+   * Handoff glide (user request — "a glide for handoffs like the frame
+   * glide"): when the recorded `handoff.fade` input signal is above
+   * HANDOFF_CUT_THRESHOLD at the moment `switchScene` runs, A's final frame
+   * is copied into a full-res texture and composited over B with alpha
+   * decaying from 1 to 0 across `duration` seconds of transport time — a
+   * dissolve from the old scene into the new one. Below the threshold (the
+   * default — the signal is absent until the UI knob writes it) no copy is
+   * even made and the switch stays today's hard cut. Deterministic: the
+   * duration is a recorded signal, the clock is transport time, and the
+   * overlay runs identically in live, replay, and export engines.
+   */
+  private handoffFade: { tex: WebGLTexture; startTime: number; duration: number } | null = null
+  private fadeProgram: WebGLProgram | null = null
+  private fadePass: FullscreenPass | null = null
+  private fadeAlphaLoc: WebGLUniformLocation | null = null
   /** Last image handed to `setSceneImage`, kept so `startRecording` can
    * snapshot it and callers can reapply it after swapping to a new scene
    * instance (App.tsx's scene-switch flow constructs a fresh Engine/scene per
@@ -490,6 +539,26 @@ export class Engine {
     this.surface.bind()
     const snapshot: SceneSnapshot = readSurfaceSnapshot(this.gpu.gl, this.gpu.width, this.gpu.height)
 
+    // Handoff glide (see `handoffFade`): with the surface still bound and A's
+    // frame intact, grab a FULL-RES copy for the dissolve overlay — the ≤256px
+    // ingest snapshot above is far too coarse to show on screen. Captured
+    // before B is built for the same reason the snapshot is; a failure past
+    // this point (I8's throw-leaves-A-intact guarantee) just orphans one
+    // texture, freed on the next switch/dispose.
+    const fadeSeconds = this.inputSignals.get('handoff.fade') ?? 0
+    let fadeTex: WebGLTexture | null = null
+    if (fadeSeconds > HANDOFF_CUT_THRESHOLD) {
+      const gl = this.gpu.gl
+      fadeTex = gl.createTexture()
+      gl.bindTexture(gl.TEXTURE_2D, fadeTex)
+      gl.copyTexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 0, 0, this.gpu.width, this.gpu.height, 0)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      gl.bindTexture(gl.TEXTURE_2D, null)
+    }
+
     // 2. Build + init + ingest B while A is still alive, so any failure
     //    leaves A intact (I8) — both calls may throw (e.g. a float-renderable
     //    check, or a malformed snapshot).
@@ -525,9 +594,62 @@ export class Engine {
     // initial state; non-ingesting B clears it (a plain hard cut has no
     // material to restore).
     this.storedImage = hasIngest(next) ? snapshot : null
+    // Arm (or replace) the dissolve — a switch mid-fade drops the previous
+    // overlay texture and starts fresh from the outgoing frame captured above.
+    this.clearHandoffFade()
+    if (fadeTex) {
+      // Frame-derived start time, not `transport.time`: the switch event is
+      // frame-quantized in the session log, and live continuous audio time
+      // sits up to 1/fps ahead of the stepped replay clock — deriving from
+      // the frame counter gives live and replay the same dissolve phase.
+      this.handoffFade = {
+        tex: fadeTex,
+        startTime: this.transport.frame / this.transport.fps,
+        duration: fadeSeconds,
+      }
+    }
     // A switch made while the track is paused/stopped should show B's first
     // frame, not hold A's last one until play resumes.
     this.controlsDirty = true
+  }
+
+  private clearHandoffFade(): void {
+    if (this.handoffFade) {
+      this.gpu.gl.deleteTexture(this.handoffFade.tex)
+      this.handoffFade = null
+    }
+  }
+
+  /** Draws the handoff dissolve overlay (A's captured frame at decaying
+   * alpha) over whatever the scene just rendered; drops the fade once it has
+   * fully played out. Runs in live ticks, frozen control ticks (alpha simply
+   * holds while time is frozen), replay, and export alike. */
+  private renderHandoffFade(time: number): void {
+    const fade = this.handoffFade
+    if (!fade) return
+    const alpha = 1 - (time - fade.startTime) / fade.duration
+    if (alpha <= 0) {
+      this.clearHandoffFade()
+      return
+    }
+    const gl = this.gpu.gl
+    if (!this.fadeProgram) {
+      this.fadeProgram = this.gpu.compileProgram(FADE_OVERLAY_VS, FADE_OVERLAY_FS)
+      this.fadePass = new FullscreenPass(this.gpu)
+      this.fadeAlphaLoc = gl.getUniformLocation(this.fadeProgram, 'uAlpha')
+    }
+    this.surface.bind()
+    gl.disable(gl.DEPTH_TEST)
+    gl.enable(gl.BLEND)
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+    gl.useProgram(this.fadeProgram)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, fade.tex)
+    gl.uniform1i(gl.getUniformLocation(this.fadeProgram, 'uTex'), 0)
+    gl.uniform1f(this.fadeAlphaLoc, Math.min(1, alpha))
+    this.fadePass!.draw()
+    gl.disable(gl.BLEND)
+    gl.bindTexture(gl.TEXTURE_2D, null)
   }
 
   /** True while a session recording is in progress (`startRecording()` ran, `stopRecording()` hasn't). */
@@ -620,18 +742,20 @@ export class Engine {
     // from the same dormant router replay will. Params keep their snapshotted
     // values; each knob re-engages on its first in-take movement (pickup).
     this.macros.reset()
-    // docs/DECKS.md §5 (review finding): the knob-view choice is HELD state,
-    // not an in-take event — a take armed while view B/Fader/Both is selected
-    // must open with it, or replay falls back to the bus default (view A) and
-    // re-routes every recorded ctl edge to the wrong deck. Baselined as an
-    // ordinary frame-0 inputSignal event through the existing replay path.
-    // Held ctl.N values are deliberately NOT seeded the same way: the params
-    // snapshot above already carries their effect, and re-seeding them would
-    // re-engage slots on replay and clobber pre-roll UI edits (the exact
-    // divergence the macros.reset() above exists to prevent).
-    const view = this.inputSignals.get('macro.view')
-    if (view !== undefined) {
-      this.recorder.recordInputSignal(this.transport.frame, 'macro.view', view)
+    // Held "UI mode" signals (BASELINED_SIGNALS — knob-view choice, handoff
+    // dissolve length) are baselined as ordinary frame-0 inputSignal events:
+    // each is state set BEFORE arming that silently shapes the performance,
+    // and without the baseline replay falls back to its default (review
+    // finding for macro.view: every recorded ctl edge re-routed to the wrong
+    // deck). Held ctl.N values are deliberately NOT seeded the same way: the
+    // params snapshot above already carries their effect, and re-seeding
+    // them would re-engage slots on replay and clobber pre-roll UI edits
+    // (the exact divergence the macros.reset() above exists to prevent).
+    for (const name of BASELINED_SIGNALS) {
+      const value = this.inputSignals.get(name)
+      if (value !== undefined) {
+        this.recorder.recordInputSignal(this.transport.frame, name, value)
+      }
     }
   }
 
@@ -674,6 +798,9 @@ export class Engine {
     // (docs/MACROS.md §2/§4): a fresh replay/export run must not have any
     // slot pre-engaged from a previous run's stale state.
     this.macros.reset()
+    // A dissolve overlay in flight belongs to the pre-load live state, not
+    // the session being replayed — replayed switch events arm their own.
+    this.clearHandoffFade()
 
     this.sessionTimeline = null
     if (doc.audio.kind === 'file') {
@@ -772,6 +899,9 @@ export class Engine {
   dispose(opts?: { keepAudio?: boolean }): void {
     this.stop()
     if (!opts?.keepAudio) this.audio.stop()
+    this.clearHandoffFade()
+    if (this.fadeProgram) this.gpu.gl.deleteProgram(this.fadeProgram)
+    this.fadePass?.dispose()
     this.scene.dispose()
   }
 
@@ -903,5 +1033,6 @@ export class Engine {
     // control change is still visible.
     if (!opts?.skipSceneUpdate) this.scene.update(ctx)
     this.scene.render(ctx, this.surface)
+    this.renderHandoffFade(frame.time)
   }
 }
