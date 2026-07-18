@@ -82,6 +82,34 @@ test('shift+press glides a param over the transition duration rather than snappi
   await expect.poll(() => getParam(page, param0.name), { timeout: 5000 }).toBeCloseTo(param0.default, 1)
 })
 
+test('the Glide latch makes a PLAIN press glide (touch has no Shift key)', async ({ page }) => {
+  await boot(page)
+  const param0 = await page.evaluate(() => window.__vizLive!.sceneParams()[0])
+
+  await page.getByRole('button', { name: 'Store' }).click()
+  await page.getByRole('button', { name: 'F5', exact: true }).click()
+  await setParam(page, param0.name, param0.max)
+
+  // Latch Glide, then a plain (no-Shift) press — must glide, not jump.
+  const glideToggle = page.getByRole('button', { name: 'Glide' })
+  await glideToggle.click()
+  await expect(glideToggle).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: 'F5', exact: true }).click()
+
+  // Same departure-then-arrival proof as the Shift+press test above.
+  await expect
+    .poll(() => getParam(page, param0.name), { timeout: 3000 })
+    .toBeLessThan(param0.max)
+  await expect.poll(() => getParam(page, param0.name), { timeout: 5000 }).toBeCloseTo(param0.default, 1)
+
+  // Unlatch: a plain press is an instant jump again.
+  await glideToggle.click()
+  await expect(glideToggle).toHaveAttribute('aria-pressed', 'false')
+  await setParam(page, param0.name, param0.max)
+  await page.getByRole('button', { name: 'F5', exact: true }).click()
+  await expect.poll(() => getParam(page, param0.name)).toBeCloseTo(param0.default, 2)
+})
+
 test("frames survive a handoff: store on lissajous, switch to julia, press moves julia's own params", async ({
   page,
 }) => {

@@ -33,7 +33,7 @@ const XY_HELP_TEXT =
   'XY performance pad — writes the pad.x / pad.y signals; bind them to any parameter with an expression like pad.x * 2.'
 // Frame buttons F1-F8 (task #35): guidance copy for the "?" popover beside them.
 const FRAMES_HELP_TEXT =
-  "Frames store the 8 controller positions. Press = jump, Shift+press = glide at the transition speed. Frames are positional, so they apply to whatever scene is live — through handoffs too."
+  "Frames store the 8 controller positions. Press = jump, Shift+press = glide at the transition speed — or latch the Glide toggle so every press glides (handy on touch, where there's no Shift). Frames are positional, so they apply to whatever scene is live — through handoffs too."
 
 const SIGNAL_NAMES = ['rms', 'bass', 'mid', 'high', 'beat', 'onset']
 const KEYBOARD_HINT = '1-6 freqX · q/w/e freqY · space pulse drift · f/g flash/fade trail'
@@ -629,14 +629,20 @@ export function App() {
     if (glide) startGlide(glideTargets)
   }
 
+  // Glide latch (user request): Shift+press is unreachable on touch devices,
+  // so a UI toggle makes PLAIN presses glide while latched. Shift still
+  // glides regardless — the latch adds a mode, it doesn't replace the key.
+  const [glideLatched, setGlideLatched] = useState(false)
+
   /** A frame button's own click: store-mode intercepts it (captures instead
-   * of applying); otherwise applies the frame, gliding if Shift was held. */
+   * of applying); otherwise applies the frame, gliding if Shift was held or
+   * the Glide latch is on. */
   const onFrameClick = (index: number, shiftKey: boolean) => {
     if (storeArmed) {
       storeFrame(index)
       return
     }
-    applyFrame(index, shiftKey)
+    applyFrame(index, shiftKey || glideLatched)
   }
 
   // --- View modes (studio / perform / full) --------------------------------
@@ -1413,6 +1419,8 @@ export function App() {
                   frames={frames}
                   storeArmed={storeArmed}
                   onToggleStore={() => setStoreArmed((a) => !a)}
+                  glideLatched={glideLatched}
+                  onToggleGlide={() => setGlideLatched((g) => !g)}
                   onFrameClick={onFrameClick}
                   onFrameStore={storeFrame}
                   transitionSpeed={transitionSpeed}
@@ -2186,16 +2194,20 @@ function XyPad({ engine }: { engine: Engine }) {
 
 /**
  * Frame buttons F1-F8 (task #35): eight positional snapshot slots below the
- * PERFORM tab's pads, a Store toggle, and the transition-speed dial — all the
- * actual state/logic (frames array, store-armed, glide animator) lives in
- * App itself (session-scoped, must survive scene switches for free); this is
- * purely the render + click wiring. Right-click on a frame is a desktop
- * shortcut that stores directly, bypassing the Store toggle entirely.
+ * PERFORM tab's pads, a Store toggle, a Glide latch (touch devices have no
+ * Shift key — latched, every plain press glides), and the transition-speed
+ * dial — all the actual state/logic (frames array, store-armed, glide-latch,
+ * glide animator) lives in App itself (session-scoped, must survive scene
+ * switches for free); this is purely the render + click wiring. Right-click
+ * on a frame is a desktop shortcut that stores directly, bypassing the Store
+ * toggle entirely.
  */
 function FramesBlock({
   frames,
   storeArmed,
   onToggleStore,
+  glideLatched,
+  onToggleGlide,
   onFrameClick,
   onFrameStore,
   transitionSpeed,
@@ -2204,6 +2216,8 @@ function FramesBlock({
   frames: (number[] | null)[]
   storeArmed: boolean
   onToggleStore: () => void
+  glideLatched: boolean
+  onToggleGlide: () => void
   onFrameClick: (index: number, shiftKey: boolean) => void
   onFrameStore: (index: number) => void
   transitionSpeed: number
@@ -2236,6 +2250,17 @@ function FramesBlock({
           onClick={onToggleStore}
         >
           Store
+        </button>
+        <button
+          type="button"
+          // Same armed styling as Store: an on/off latch, not a momentary
+          // action. aria-pressed makes the latched state accessible (and is
+          // the e2e seam — frames.spec.ts asserts against it).
+          className={`session-button${glideLatched ? ' store-armed' : ''}`}
+          aria-pressed={glideLatched}
+          onClick={onToggleGlide}
+        >
+          Glide
         </button>
         <TransitionSpeedKnob seconds={transitionSpeed} onChange={onTransitionSpeedChange} />
       </div>
