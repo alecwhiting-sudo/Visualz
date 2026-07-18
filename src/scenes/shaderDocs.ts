@@ -471,6 +471,50 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
       ],
     },
   },
+  glyphlattice: {
+    'line-fs': {
+      summary:
+        "The lattice is a family of curves whose maths morphs continuously between three classic line-drawing families — Lissajous figures, rose curves, and harmonograph traces — with all positions and colors computed on the CPU each frame. This fragment shader just paints each line pixel with the per-vertex color handed in: hue-cycled per curve, dimmer for the cross-links between curves, with alpha carrying the trail falloff.",
+      tryThis: [
+        {
+          target: 'outColor = vColor;',
+          effect:
+            'the whole lattice-line color comes straight from the CPU-computed per-vertex color; try outColor = vec4(vColor.rgb * 1.6, vColor.a); to push brightness past 1.0 for a hotter, blown-out glow once the trail fade stacks up.',
+        },
+        {
+          target: 'in vec4 vColor;',
+          effect:
+            'this carries both color and per-vertex alpha; add if (vColor.a < 0.4) discard; at the top of main to hide the dim cross-link rungs and show only the bright main curves.',
+        },
+        {
+          target: 'vec4 outColor;',
+          effect:
+            'replace the body below with outColor = vec4(vColor.rgb, 1.0); to force every line and cross-link fully opaque, ignoring the trail-falloff alpha entirely — a harder, technical-drawing look.',
+        },
+      ],
+    },
+    'glyph-fs': {
+      summary:
+        "Every character in the text rain is a tiny textured quad sampling one cell of a 5×7 bitmap font atlas baked in code at startup (no system fonts — that's what keeps exports pixel-identical everywhere). The atlas value is a pure on/off mask; the glyph's color and its position in the string's fading tail arrive as per-vertex color and alpha.",
+      tryThis: [
+        {
+          target: 'float mask = texture(uAtlas, vUV).r;',
+          effect:
+            'this reads the baked bitmap font as an alpha mask; try float mask = 1.0 - texture(uAtlas, vUV).r; to invert every glyph into its own negative silhouette — solid blocks with letter-shaped holes.',
+        },
+        {
+          target: 'vColor.a * mask',
+          effect:
+            "the final alpha multiplies the CPU's per-glyph trail falloff by the bitmap mask; try pow(vColor.a, 0.5) * mask to make trailing glyphs linger far longer behind the bright head.",
+        },
+        {
+          target: 'outColor = vec4(vColor.rgb, vColor.a * mask);',
+          effect:
+            'try outColor = vec4(vColor.rgb * (1.0 + mask), vColor.a * mask); to punch each character a step brighter than its base color — a hot-white core inside every glyph.',
+        },
+      ],
+    },
+  },
   resonance: {
     'render-fs': {
       summary:
