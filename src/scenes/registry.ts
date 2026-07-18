@@ -10,7 +10,8 @@ import { FractalLabScene } from './builtin/fractallab'
 import { ResonanceScene } from './builtin/resonance'
 import { PhotoSwarmScene } from './builtin/photoswarm'
 import { GlyphLatticeScene } from './builtin/glyphlattice'
-import { HyperbolicScene } from './builtin/hyperbolic'
+import { WaveChamberScene } from './builtin/waves'
+import { GlyphGeometryScene } from './builtin/glyphgeometry'
 import { CompositeScene, type CompositeChild } from './composite'
 import type { SceneRuntime } from './types'
 
@@ -52,7 +53,8 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
   resonance: { name: 'Resonance', create: () => new ResonanceScene() },
   photoswarm: { name: 'Photo Swarm', create: () => new PhotoSwarmScene() },
   glyphlattice: { name: 'Glyph Lattice', create: () => new GlyphLatticeScene() },
-  hyperbolic: { name: 'Hyperbolic', create: () => new HyperbolicScene() },
+  waves: { name: 'Wave Chamber', create: () => new WaveChamberScene() },
+  glyphgeometry: { name: 'Glyph Geometry', create: () => new GlyphGeometryScene() },
   'blend-julia-flow': {
     name: 'Julia × Flow field',
     create: () =>

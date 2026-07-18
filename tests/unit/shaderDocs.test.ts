@@ -16,14 +16,13 @@ import { SHADER_DOCS } from '../../src/scenes/shaderDocs'
 describe('SHADER_DOCS', () => {
   const sceneIds = Object.keys(SHADER_DOCS)
 
-  it('covers all 13 builtin scenes (not the blend-* composites)', () => {
+  it('covers all 12 builtin scenes (not the blend-* composites)', () => {
     expect(sceneIds.sort()).toEqual(
       [
         'flowfield',
         'fractallab',
         'glyphlattice',
         'grayscott',
-        'hyperbolic',
         'julia',
         'kaleido',
         'lissajous',
