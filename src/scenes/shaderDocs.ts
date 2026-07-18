@@ -515,6 +515,34 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
       ],
     },
   },
+  hyperbolic: {
+    'render-fs': {
+      summary:
+        "A Poincaré-disk hyperbolic tiling: every pixel inside the unit disk is folded into one fundamental triangle of the {p,q} tiling by repeatedly mirroring across p lines through the center and inverting across a circle orthogonal to the disk's rim — the circle's size comes from hyperbolic trigonometry (cosh of the triangle's apothem = cos(π/q)/sin(π/p)). Counting how many flips it took gives the checkerboard; the distance to the nearest mirror draws the luminous edges. Tiles genuinely repeat forever, shrinking toward the rim.",
+      tryThis: [
+        {
+          target: 'const int FOLD_ITER = 28;',
+          effect:
+            'how many times a point is folded into the fundamental triangle; lower to 10 for a soft, only-partially-resolved tiling near the rim, or raise to 60 for an even finer infinite regression at real GPU cost.',
+        },
+        {
+          target: 'if (distC < uMirrorR) {',
+          effect:
+            "this circle inversion is what makes the tiling hyperbolic rather than a flat kaleidoscope; empty this if-block's body to see only the p-fold angular mirror — a plain pie-slice kaleidoscope for comparison.",
+        },
+        {
+          target: 'float tone = mod(float(parity), 2.0);',
+          effect:
+            'the two-tone checkerboard driven by the total flip count; try mod(float(parity), 3.0) / 2.0 for a three-tone tiling instead of the classic two-color one.',
+        },
+        {
+          target: 'float halo = exp(-rimDist * 5.0) * (0.05 + 0.12 * uGlowAmt);',
+          effect:
+            'the soft glow just outside the disk; raise 5.0 to 20.0 for a thin halo hugging the rim, or lower it to 1.5 for a wide diffuse bleed into the darkness.',
+        },
+      ],
+    },
+  },
   resonance: {
     'render-fs': {
       summary:
