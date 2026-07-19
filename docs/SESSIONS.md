@@ -160,16 +160,23 @@ two lifecycles exactly as §2 warns.
   (capture is passive); a session IMPORT mid-take must be blocked (one
   guard in the import handler), like image loads already are. LOW.
 
-## 7. Open questions for the user
+## 7. Decisions (user, 2026-07-19)
 
-1. **Reload behavior**: strict spec (always defaults on app load, session
-   only via explicit export/import) or the restore-banner compromise?
-2. **Frames scope**: F1-F8 are currently global/positional (work across
-   every scene). Keep global in the session file (planned), or should
-   frames become per-algorithm too ("and or frame" in the request could
-   read either way)?
-3. Should "Save" on the take card ALSO offer "export current session"
-   next to it, so the pair is always saved together after a good take?
+1. **Reload behavior — restore banner via localStorage.** The user asked
+   how a banner works for a static web app: the browser's per-site
+   localStorage (already used for MIDI mappings) persists on the user's
+   device with no server. The working session auto-saves there
+   (debounced); next load in the same browser shows "Restore previous
+   session?" — dismiss = pure defaults. Other devices/browsers start
+   clean; the export file is the portability mechanism.
+2. **Frames are PER-ALGORITHM.** F1-F8 banks are keyed by scene id and
+   live inside each scene's rig entry (`frames?` on the session-side
+   entry, not the shared SceneOverride — take docs don't carry frames).
+   Switching algorithms swaps the visible bank; an untouched algorithm
+   has an empty bank. This supersedes the global-positional behavior
+   frames shipped with.
+3. **Take card offers all three saves**: session only, performance only,
+   or both (two file downloads).
 
 ## 8. Build order (when approved)
 

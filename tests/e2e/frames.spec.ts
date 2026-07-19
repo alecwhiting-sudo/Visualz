@@ -137,29 +137,34 @@ test('grabbing a control mid-glide takes that param over while the rest keep gli
   expect(await getParam(page, param0.name)).toBeCloseTo(grabbed, 5)
 })
 
-test("frames survive a handoff: store on lissajous, switch to julia, press moves julia's own params", async ({
+test('frames are PER ALGORITHM: julia gets an empty bank; lissajous keeps its own across a round trip', async ({
   page,
 }) => {
+  // docs/SESSIONS.md §7.2 (user decision) — supersedes the original global-
+  // positional behavior: each scene owns its F1-F8 bank.
   await boot(page)
-  // Default scene is lissajous; capture its first param's normalized default
-  // position before switching, so the expected post-handoff value can be
-  // computed without assuming defaults coincide across scenes (they don't).
   const lissParam0 = await page.evaluate(() => window.__vizLive!.sceneParams()[0])
-  const normalized = (lissParam0.default - lissParam0.min) / (lissParam0.max - lissParam0.min)
 
   await page.getByRole('button', { name: 'Store' }).click()
   await page.getByRole('button', { name: 'F3', exact: true }).click()
 
-  // Hand off to Julia specifically (the default hand-off target is Flow Field).
+  // Hand off to Julia: its bank is EMPTY, so pressing F3 must not move
+  // julia's params.
   await page.locator('.switch-control select').selectOption('julia')
   await page.getByRole('button', { name: /Switch \(hand off\)/i }).click()
-
   const juliaParam0 = await page.evaluate(() => window.__vizLive!.sceneParams()[0])
   await setParam(page, juliaParam0.name, juliaParam0.max)
-
   await page.getByRole('button', { name: 'F3', exact: true }).click()
-  const expected = juliaParam0.min + normalized * (juliaParam0.max - juliaParam0.min)
-  await expect.poll(() => getParam(page, juliaParam0.name)).toBeCloseTo(expected, 2)
+  await page.waitForTimeout(200)
+  expect(await getParam(page, juliaParam0.name)).toBeCloseTo(juliaParam0.max, 2)
+
+  // Back to lissajous: its own bank survived the round trip — F3 restores
+  // the stored (default) position after moving the param away.
+  await page.locator('.switch-control select').selectOption('lissajous')
+  await page.getByRole('button', { name: /Switch \(hand off\)/i }).click()
+  await setParam(page, lissParam0.name, lissParam0.max)
+  await page.getByRole('button', { name: 'F3', exact: true }).click()
+  await expect.poll(() => getParam(page, lissParam0.name)).toBeCloseTo(lissParam0.default, 2)
 })
 
 test('the Frames block has its own "?" guidance popover with the spec\'d copy', async ({ page }) => {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Engine } from '../engine/engine'
 import { SCENES } from '../scenes/registry'
 import { attachKeyboard } from '../mapping/keyboard'
@@ -12,6 +12,8 @@ import type { ExportCodec } from '../export/encode'
 import { InfoPopover } from './InfoPopover'
 import { useParamBinding } from './paramBinding'
 import { placeholderFor, suggestionsFor } from './exprSuggest'
+import { applySceneEntry, captureSceneEntry } from './sceneMemory'
+import { classifyFile, parseRig, serializeRig, type SceneRigEntry, type SessionRig } from '../session/rig'
 import type { ParamSchema } from '../scenes/types'
 import { framesToRenderForAudioSync } from './replayPacing'
 import { snapToStep } from '../scenes/paramStep'
@@ -35,7 +37,7 @@ const XY_HELP_TEXT =
   'XY performance pad — writes the pad.x / pad.y signals; bind them to any parameter with an expression like pad.x * 2.'
 // Frame buttons F1-F8 (task #35): guidance copy for the "?" popover beside them.
 const FRAMES_HELP_TEXT =
-  "Frames store the 8 controller positions. Press = jump, Shift+press = glide at the transition speed — or latch the Glide toggle so every press glides (handy on touch, where there's no Shift). Grabbing any control mid-glide takes that parameter over; the rest keep gliding. Frames are positional, so they apply to whatever scene is live — through handoffs too."
+  "Frames store the 8 controller positions PER ALGORITHM — each scene keeps its own F1-F8 bank, saved with your session. Press = jump, Shift+press = glide at the transition speed — or latch the Glide toggle so every press glides (handy on touch, where there's no Shift). Grabbing any control mid-glide takes that parameter over; the rest keep gliding."
 
 // Knob-view toggle (docs/DECKS.md trial): guidance for its "?" popover.
 const KNOB_VIEW_HELP_TEXT =
@@ -166,9 +168,11 @@ function downloadBlob(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url)
 }
 
+const SESSION_STORAGE_KEY = 'visualz.session.v1'
+
 /** Triggers a browser download of a session doc as a JSON file. */
 function downloadSession(doc: SessionDoc): void {
-  downloadBlob(new Blob([serializeSession(doc)], { type: 'application/json' }), 'visualz-session.json')
+  downloadBlob(new Blob([serializeSession(doc)], { type: 'application/json' }), 'visualz-take.json')
 }
 
 /** Export format picker's options: 'auto' leaves `codec` unset so `detectExportCodec`
@@ -529,15 +533,17 @@ export function App() {
   // tap (a guaranteed-valid gesture) resumes the context.
   const [audioBlocked, setAudioBlocked] = useState(false)
 
-  // --- Frame buttons F1-F8 (task #35) --------------------------------------
-  // Eight positional snapshot slots, session-scoped App state (no
-  // persistence; survives scene switches for free, since nothing here reads
-  // sceneId/engine identity) — each slot holds the current scene's first-8
-  // param values NORMALIZED ((value-min)/(max-min)) at store time, so
-  // pressing it later re-applies those same POSITIONS to whatever scene is
-  // live, exactly like Controls 1-8's macro slots (docs/MACROS.md), just
-  // captured as a one-shot snapshot instead of driven live by hardware.
-  const [frames, setFrames] = useState<(number[] | null)[]>(() => new Array(MACRO_SLOT_COUNT).fill(null))
+  // --- Frame buttons F1-F8 (task #35; per-algorithm per docs/SESSIONS.md §7.2)
+  // Eight snapshot slots PER SCENE ID (user decision: "frames are per
+  // algorithm") — each slot holds that scene's first-8 param values
+  // NORMALIZED ((value-min)/(max-min)) at store time. Switching algorithms
+  // swaps the visible bank; an untouched algorithm has an empty bank; banks
+  // are part of the session rig (saved/exported with it).
+  const [framesByScene, setFramesByScene] = useState<Record<string, (number[] | null)[]>>({})
+  const frames = useMemo(
+    () => framesByScene[sceneId] ?? new Array<number[] | null>(MACRO_SLOT_COUNT).fill(null),
+    [framesByScene, sceneId],
+  )
   // Store mode: click Store, then a frame button captures into that slot;
   // store mode exits after exactly one capture (single-shot, not a toggle
   // you have to remember to turn back off).
@@ -618,10 +624,12 @@ export function App() {
       const v = e.scene.getParam(p.name)
       return range === 0 ? 0 : Math.min(1, Math.max(0, (v - p.min) / range))
     })
-    setFrames((prev) => {
-      const next = [...prev]
-      next[index] = snapshot
-      return next
+    // Per-algorithm banks (docs/SESSIONS.md §7.2): write into the CURRENT
+    // scene's bank; other algorithms' banks are untouched.
+    setFramesByScene((prev) => {
+      const bank = [...(prev[sceneId] ?? new Array<number[] | null>(MACRO_SLOT_COUNT).fill(null))]
+      bank[index] = snapshot
+      return { ...prev, [sceneId]: bank }
     })
     setStoreArmed(false)
   }
@@ -684,6 +692,148 @@ export function App() {
     engineRef.current?.setInputSignal('handoff.fade', handoffFadeSeconds)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine, sceneId, sceneVersion, handoffFadeSeconds])
+
+  // --- Session rig (docs/SESSIONS.md; user decisions §7) --------------------
+  // Per-algorithm memory: how the user left each scene's knobs/expressions/
+  // shader edits. A ref, not state — it's read/written at switch boundaries
+  // and serialization time, never rendered directly.
+  const sceneMemoryRef = useRef<Record<string, SceneRigEntry>>({})
+  const framesBySceneRef = useRef(framesByScene)
+  useEffect(() => {
+    framesBySceneRef.current = framesByScene
+  })
+  const [sessionNote, setSessionNote] = useState<string | null>(null)
+  // The restore banner's pending offer (plan §7.1): parsed from localStorage
+  // at boot; null once restored or dismissed.
+  const [restoreOffer, setRestoreOffer] = useState<SessionRig | null>(null)
+
+  /** Snapshots the LIVE scene into the memory map (sparse — an untouched
+   * scene stores nothing and clears any stale entry). */
+  const captureCurrentScene = () => {
+    const e = engineRef.current
+    if (!e) return
+    const id = e.scene.meta.id
+    const entry = captureSceneEntry(e)
+    if (entry) sceneMemoryRef.current[id] = entry
+    else delete sceneMemoryRef.current[id]
+  }
+
+  /** Re-applies a scene's remembered state through the RECORDED seams —
+   * mid-take restores land in the event log and replay identically. */
+  const applyMemoryFor = (id: string) => {
+    const e = engineRef.current
+    if (!e) return
+    const entry = sceneMemoryRef.current[id]
+    if (!entry) return
+    const notes = applySceneEntry(e, entry)
+    if (notes.length) setSessionNote(notes.join(' · '))
+  }
+
+  const buildRig = (): SessionRig => {
+    captureCurrentScene()
+    const scenes: Record<string, SceneRigEntry> = {}
+    for (const [id, entry] of Object.entries(sceneMemoryRef.current)) scenes[id] = { ...entry }
+    for (const [id, bank] of Object.entries(framesBySceneRef.current)) {
+      if (bank.some((f) => f !== null)) scenes[id] = { ...(scenes[id] ?? {}), frames: bank }
+    }
+    return {
+      kind: 'session',
+      version: 1,
+      scenes,
+      global: { transitionSpeed, handoffFadeSeconds, macroView, switchTargetId },
+    }
+  }
+  const buildRigRef = useRef(buildRig)
+  buildRigRef.current = buildRig
+
+  /** Resets the LIVE scene's user-editable state to defaults (params,
+   * expressions) — the clean slate `applyRig`/`newSession` build on. Shader
+   * edits are left alone (a stock-reset would recompile mid-performance for
+   * marginal benefit; a scene switch already resets them). */
+  const resetCurrentScene = () => {
+    const e = engineRef.current
+    if (!e) return
+    for (const param of e.scene.params) {
+      e.clearBinding(param.name)
+      e.setParam(param.name, param.default)
+    }
+  }
+
+  const applyRig = (rig: SessionRig, warnings: string[]) => {
+    const e = engineRef.current
+    if (!e) return
+    if (e.isRecording) {
+      setSessionError('Cannot load a session mid-take')
+      return
+    }
+    sceneMemoryRef.current = {}
+    const banks: Record<string, (number[] | null)[]> = {}
+    for (const [id, entry] of Object.entries(rig.scenes)) {
+      const { frames: bank, ...rest } = entry
+      if (Object.keys(rest).length) sceneMemoryRef.current[id] = rest
+      if (bank) banks[id] = bank
+    }
+    setFramesByScene(banks)
+    if (rig.global.transitionSpeed !== undefined) setTransitionSpeed(rig.global.transitionSpeed)
+    if (rig.global.handoffFadeSeconds !== undefined) setHandoffFadeSeconds(rig.global.handoffFadeSeconds)
+    if (rig.global.macroView !== undefined) setMacroView(rig.global.macroView)
+    if (rig.global.switchTargetId) setSwitchTargetId(rig.global.switchTargetId)
+    resetCurrentScene()
+    applyMemoryFor(e.scene.meta.id)
+    setSessionNote(warnings.length ? `Session loaded — ${warnings.join(' · ')}` : 'Session loaded')
+  }
+
+  const newSession = () => {
+    const e = engineRef.current
+    if (e?.isRecording) {
+      setSessionError('Cannot start a new session mid-take')
+      return
+    }
+    sceneMemoryRef.current = {}
+    setFramesByScene({})
+    setTransitionSpeed(1)
+    setHandoffFadeSeconds(0.1)
+    setMacroView(0)
+    resetCurrentScene()
+    try {
+      localStorage.removeItem(SESSION_STORAGE_KEY)
+    } catch {
+      // Storage unavailable (private mode) — the in-memory reset stands.
+    }
+    setRestoreOffer(null)
+    setSessionNote('New session — all algorithms back to defaults')
+  }
+
+  // Autosave (plan §7.1): capture + persist the working rig to the
+  // browser's localStorage every few seconds. Same-device continuity only;
+  // the export file is the portability mechanism.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      try {
+        localStorage.setItem(SESSION_STORAGE_KEY, serializeRig(buildRigRef.current()))
+      } catch {
+        // Quota/private mode: autosave silently off, exports still work.
+      }
+    }, 3000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  // Boot: offer (never silently apply) the previous device-local session.
+  useEffect(() => {
+    try {
+      const text = localStorage.getItem(SESSION_STORAGE_KEY)
+      if (!text) return
+      const { rig } = parseRig(text, Object.keys(SCENES))
+      if (Object.keys(rig.scenes).length) setRestoreOffer(rig)
+    } catch {
+      // Corrupt/stale store: start clean.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const exportRig = () => {
+    downloadBlob(new Blob([serializeRig(buildRig())], { type: 'application/json' }), 'visualz-session.json')
+  }
   const isDeckScene =
     engine !== null &&
     engine.scene.params.some((p) => p.name.startsWith('a.')) &&
@@ -989,6 +1139,8 @@ export function App() {
     // keeps playing and the transport row stays put (keepAudio skips the
     // dispose-time stop; the new engine adopts it and fast-forwards its
     // transport to the audio position on start).
+    // Session rig: remember the outgoing scene before the teardown.
+    captureCurrentScene()
     const audio = engineRef.current?.audio
     detachLiveEngine()
     engineRef.current?.dispose({ keepAudio: true })
@@ -1006,6 +1158,9 @@ export function App() {
       newEngine.setSceneImage(imageRef.current)
     }
     attachLiveEngine(newEngine)
+    // Session rig: restore how the user left this algorithm (no-op if
+    // untouched this session).
+    applyMemoryFor(id)
   }
 
   /**
@@ -1027,8 +1182,13 @@ export function App() {
     // writing stale targets at whatever same-named params the new scene has
     // for up to 10s (review finding: cross-scene bleed).
     cancelGlide()
+    // Session rig (docs/SESSIONS.md §4): remember how the user left A...
+    captureCurrentScene()
     try {
       e.switchScene(targetId)
+      // ...and restore how they left B, through the RECORDED seams — a
+      // mid-take restore lands in the event log and replays identically.
+      applyMemoryFor(targetId)
       setSceneId(targetId)
       setSceneVersion((v) => v + 1)
       setSessionError(null)
@@ -1172,9 +1332,21 @@ export function App() {
   const onLoadSession = async (file: File | undefined) => {
     if (!file) return
     setSessionError(null)
+    const text = await file.text()
+    // One Load affordance, routed on the file's kind (docs/SESSIONS.md §2
+    // R5): session rigs apply to the live setup; performances replay.
+    if (classifyFile(text) === 'session') {
+      try {
+        const { rig, warnings } = parseRig(text, Object.keys(SCENES))
+        applyRig(rig, warnings)
+      } catch (err) {
+        setSessionError(err instanceof Error ? err.message : String(err))
+      }
+      return
+    }
     let doc: SessionDoc
     try {
-      doc = parseSession(await file.text())
+      doc = parseSession(text)
     } catch (err) {
       setSessionError(err instanceof Error ? err.message : String(err))
       return
@@ -1506,6 +1678,38 @@ export function App() {
           <div className="panel-tab-content" role="tabpanel" hidden={activeTab !== 'session'}>
             <section>
               <h2>Session</h2>
+              {restoreOffer && (
+                <div className="restore-banner">
+                  <span>Restore previous session? (from this browser)</span>
+                  <button
+                    type="button"
+                    className="session-button"
+                    onClick={() => {
+                      applyRig(restoreOffer, [])
+                      setRestoreOffer(null)
+                    }}
+                  >
+                    Restore
+                  </button>
+                  <button type="button" className="session-button" onClick={() => setRestoreOffer(null)}>
+                    Dismiss
+                  </button>
+                </div>
+              )}
+              <div className="session-controls">
+                <button type="button" className="session-button" onClick={exportRig}>
+                  Export session
+                </button>
+                <button
+                  type="button"
+                  className="session-button"
+                  disabled={recording}
+                  onClick={newSession}
+                >
+                  New session
+                </button>
+              </div>
+              {sessionNote && <p className="session-status">{sessionNote}</p>}
               <label className="scene-select">
                 Export format
                 <select
@@ -1554,7 +1758,26 @@ export function App() {
                       disabled={replay !== null || exporting !== null}
                       onClick={() => downloadSession(lastSession)}
                     >
-                      Save JSON
+                      Save take
+                    </button>
+                    <button
+                      type="button"
+                      className="session-button"
+                      disabled={replay !== null || exporting !== null}
+                      onClick={exportRig}
+                    >
+                      Save session
+                    </button>
+                    <button
+                      type="button"
+                      className="session-button"
+                      disabled={replay !== null || exporting !== null}
+                      onClick={() => {
+                        downloadSession(lastSession)
+                        exportRig()
+                      }}
+                    >
+                      Save both
                     </button>
                     <button
                       type="button"
@@ -1585,7 +1808,7 @@ export function App() {
                         onLoadSession(file)
                       }}
                     />
-                    Replay from file…
+                    Load session or take…
                   </label>
                   <label className="file session-file">
                     <input
