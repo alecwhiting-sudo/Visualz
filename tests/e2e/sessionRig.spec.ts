@@ -96,6 +96,36 @@ test('the restore banner offers a previous device-local session and applies it',
   await expect.poll(() => getParam(page, 'freqX')).toBeCloseTo(8, 5)
 })
 
+test('the rig survives a replay longer than the autosave tick (review finding: replay-engine poisoning)', async ({
+  page,
+}) => {
+  // The 3s autosave used to capture from the REPLAY engine (engineRef points
+  // at it during replay), overwriting or deleting the user's per-scene
+  // memory and persisting the damage. Guarded now by transport-mode checks.
+  await boot(page)
+  await page.evaluate(() => window.__vizLive!.setParam('freqX', 9))
+
+  // Record a >3.5s demo-mode take so the autosave interval fires mid-replay.
+  await page.getByRole('button', { name: 'Arm' }).click()
+  await expect(page.getByRole('button', { name: 'End take' })).toBeVisible()
+  await page.waitForTimeout(3800)
+  await page.getByRole('button', { name: 'End take' }).click()
+
+  await page.getByRole('tab', { name: 'SESSION' }).click()
+  await page.getByRole('button', { name: 'Replay', exact: true }).click()
+  // While replaying, the session controls must be inert.
+  await expect(page.getByRole('button', { name: 'Export session' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'New session' })).toBeDisabled()
+  // Let the replay outlive at least one autosave tick, then wait for it to end.
+  await expect(page.getByRole('button', { name: 'Replay', exact: true })).toBeEnabled({ timeout: 20000 })
+
+  // The customized value survives: leave and return to lissajous.
+  await page.getByRole('tab', { name: 'PERFORM' }).click()
+  await handOffTo(page, 'julia')
+  await handOffTo(page, 'lissajous')
+  await expect.poll(() => getParam(page, 'freqX')).toBeCloseTo(9, 5)
+})
+
 test('a mid-take return to a customized algorithm records the restore (replay-native)', async ({ page }) => {
   // Harness-level proof that App-layer restores ride the RECORDED seams:
   // not applicable in ?test=1 (no App), so assert on the real app's

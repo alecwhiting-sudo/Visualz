@@ -163,7 +163,7 @@ test('take card appears in SESSION tab with Export/Replay/Save/Discard once a ta
   await expect(takeCard.locator('.take-card-duration')).toHaveText(/^Last take: \d+:\d{2}$/)
   await expect(takeCard.getByRole('button', { name: 'Export video' })).toBeVisible()
   await expect(takeCard.getByRole('button', { name: 'Replay' })).toBeVisible()
-  await expect(takeCard.getByRole('button', { name: 'Save JSON' })).toBeVisible()
+  await expect(takeCard.getByRole('button', { name: 'Save take' })).toBeVisible()
   await expect(takeCard.getByRole('button', { name: 'Discard' })).toBeVisible()
 
   // Discard clears the take card and the badge together.
@@ -250,7 +250,7 @@ test('take-card and load-a-saved-take buttons fit within the 320px panel at its 
   const panelRight = panelBox!.x + panelBox!.width
 
   const takeCard = page.locator('.take-card')
-  const takeCardLabels = ['Export video', 'Replay', 'Save JSON', 'Discard']
+  const takeCardLabels = ['Export video', 'Replay', 'Save take', 'Save session', 'Save both', 'Discard']
   for (const label of takeCardLabels) {
     const button = takeCard.getByRole('button', { name: label })
     const box = await button.boundingBox()
@@ -268,7 +268,7 @@ test('take-card and load-a-saved-take buttons fit within the 320px panel at its 
   }
 
   const subsection = page.locator('.session-subsection')
-  for (const label of ['Replay from file…', 'Export from file…']) {
+  for (const label of ['Load session or take…', 'Export from file…']) {
     const fileLabel = subsection.locator('label.file', { hasText: label.slice(0, -1) })
     const box = await fileLabel.first().boundingBox()
     expect(box, `${label} label has a bounding box`).not.toBeNull()

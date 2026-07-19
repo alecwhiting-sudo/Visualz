@@ -499,6 +499,12 @@ export function App() {
   }, [replay])
   const [exporting, setExporting] = useState<{ frame: number; total: number } | null>(null)
   const [sessionError, setSessionError] = useState<string | null>(null)
+  // Take-clock stall alarm (user lost a 6-minute take to a stalled frame
+  // counter): while recording, if transport.frame stops advancing across
+  // ~2s of poll ticks, warn IMMEDIATELY instead of letting the performer
+  // find out at the end. Refs, not state — updated inside the 100ms poll.
+  const takeStallFrameRef = useRef(-1)
+  const takeStallTicksRef = useRef(0)
   // Non-fatal note from the most recent export — currently only set when an
   // H.264/MP4 export dropped its audio track because AAC isn't available in
   // this browser (see EncodedResult.audioSkipped in export/encode.ts).
@@ -711,7 +717,11 @@ export function App() {
    * scene stores nothing and clears any stale entry). */
   const captureCurrentScene = () => {
     const e = engineRef.current
-    if (!e) return
+    // Review finding (HIGH): during replay engineRef points at the RENDER-
+    // MODE replay engine — capturing from it would overwrite the user's rig
+    // with mid-playback state (and the 3s autosave would persist the damage
+    // to localStorage). The live engine is the only legitimate source.
+    if (!e || e.transport.mode !== 'live') return
     const id = e.scene.meta.id
     const entry = captureSceneEntry(e)
     if (entry) sceneMemoryRef.current[id] = entry
@@ -722,7 +732,7 @@ export function App() {
    * mid-take restores land in the event log and replay identically. */
   const applyMemoryFor = (id: string) => {
     const e = engineRef.current
-    if (!e) return
+    if (!e || e.transport.mode !== 'live') return
     const entry = sceneMemoryRef.current[id]
     if (!entry) return
     const notes = applySceneEntry(e, entry)
@@ -752,7 +762,7 @@ export function App() {
    * marginal benefit; a scene switch already resets them). */
   const resetCurrentScene = () => {
     const e = engineRef.current
-    if (!e) return
+    if (!e || e.transport.mode !== 'live') return
     for (const param of e.scene.params) {
       e.clearBinding(param.name)
       e.setParam(param.name, param.default)
@@ -762,8 +772,8 @@ export function App() {
   const applyRig = (rig: SessionRig, warnings: string[]) => {
     const e = engineRef.current
     if (!e) return
-    if (e.isRecording) {
-      setSessionError('Cannot load a session mid-take')
+    if (e.isRecording || e.transport.mode !== 'live') {
+      setSessionError('Cannot load a session during a take or replay')
       return
     }
     sceneMemoryRef.current = {}
@@ -785,8 +795,8 @@ export function App() {
 
   const newSession = () => {
     const e = engineRef.current
-    if (e?.isRecording) {
-      setSessionError('Cannot start a new session mid-take')
+    if (e?.isRecording || (e && e.transport.mode !== 'live')) {
+      setSessionError('Cannot start a new session during a take or replay')
       return
     }
     sceneMemoryRef.current = {}
@@ -983,6 +993,25 @@ export function App() {
       // recordingStartFrameRef's comment).
       if (e.isRecording && recordingStartFrameRef.current !== null) {
         setTakeElapsedSec(Math.max(0, (e.transport.frame - recordingStartFrameRef.current) / e.transport.fps))
+      }
+      // Stall alarm (see takeStallFrameRef): 20 consecutive 100ms ticks with
+      // a frozen frame counter while recording = the take is not capturing
+      // time. Fires once per stall (the === keeps it from re-spamming).
+      if (e.isRecording) {
+        if (e.transport.frame !== takeStallFrameRef.current) {
+          takeStallFrameRef.current = e.transport.frame
+          takeStallTicksRef.current = 0
+        } else {
+          takeStallTicksRef.current += 1
+          if (takeStallTicksRef.current === 20) {
+            setSessionError(
+              '⚠ Take clock stalled — frames are not advancing, so the recording is not capturing time. Is audio still playing and this window visible?',
+            )
+          }
+        }
+      } else {
+        takeStallFrameRef.current = -1
+        takeStallTicksRef.current = 0
       }
       // PERFORMING has exactly one way to end (task): the track reaching its
       // natural end must end the take automatically, same as a manual ⏹.
@@ -1436,6 +1465,12 @@ export function App() {
         newEngine.setSceneImage(imageRef.current)
       }
       attachLiveEngine(newEngine)
+      // Session rig (review finding): the rebuilt live scene starts at
+      // DEFAULTS — without re-applying its memory here, the user's rig
+      // vanishes from view after every replay, and worse, the NEXT
+      // switch-away would capture those defaults and erase the remembered
+      // entry for good. Restore the rig the moment the live engine is back.
+      applyMemoryFor(newEngine.scene.meta.id)
     }
     replayCancelRef.current = restoreLive
 
@@ -1684,6 +1719,7 @@ export function App() {
                   <button
                     type="button"
                     className="session-button"
+                    disabled={replay !== null || exporting !== null}
                     onClick={() => {
                       applyRig(restoreOffer, [])
                       setRestoreOffer(null)
@@ -1697,13 +1733,18 @@ export function App() {
                 </div>
               )}
               <div className="session-controls">
-                <button type="button" className="session-button" onClick={exportRig}>
+                <button
+                  type="button"
+                  className="session-button"
+                  disabled={replay !== null || exporting !== null}
+                  onClick={exportRig}
+                >
                   Export session
                 </button>
                 <button
                   type="button"
                   className="session-button"
-                  disabled={recording}
+                  disabled={recording || replay !== null || exporting !== null}
                   onClick={newSession}
                 >
                   New session
