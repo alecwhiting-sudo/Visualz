@@ -30,8 +30,9 @@ function fmt(value: number, schema: Pick<ParamSchema, 'step'>): string {
 }
 
 /**
- * The tap-to-apply suggestions for one param. Deliberately five, in a fixed
- * teaching order: audio-follow, beat-lock, onset-hit, autonomous motion,
+ * The tap-to-apply suggestions for one param, in a fixed teaching order:
+ * the three frequency bands (bass / mids / highs — the same band split the
+ * analysis pipeline publishes), beat-lock, onset-hit, autonomous motion,
  * performance-pad — one exemplar per signal family the DSL exposes.
  */
 export function suggestionsFor(schema: ParamSchema): ExprSuggestion[] {
@@ -41,6 +42,10 @@ export function suggestionsFor(schema: ParamSchema): ExprSuggestion[] {
   const mid = fmt(schema.min + span * 0.5, schema)
   return [
     { label: 'Pulse with the bass', expr: `${lo(0.2)} + bass * ${amp(0.6)}` },
+    // Mids/highs sit lower on the energy scale than bass in most mixes, so
+    // their amplitudes run a touch hotter to produce comparable motion.
+    { label: 'Pulse with the mids', expr: `${lo(0.2)} + mid * ${amp(0.7)}` },
+    { label: 'Pulse with the highs', expr: `${lo(0.2)} + high * ${amp(0.8)}` },
     { label: 'Sweep once per beat', expr: `${lo(0)} + beatPhase * ${amp(1)}` },
     { label: 'Kick on every onset', expr: `${lo(0.15)} + env(0.01, 0.4, onset) * ${amp(0.7)}` },
     { label: 'Slow autonomous wave', expr: `${mid} + sin(time * 0.4) * ${amp(0.35)}` },

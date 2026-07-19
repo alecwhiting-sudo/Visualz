@@ -2428,7 +2428,23 @@ function ExprSuggestMenu({
         ƒx
       </button>
       {open && pos && (
-        <div className="expr-suggest-menu" style={{ position: 'fixed', left: pos.left, top: pos.top }}>
+        <div
+          className="expr-suggest-menu"
+          ref={(el) => {
+            // Vertical viewport clamp, measured from the REAL rendered height
+            // (item count varies — the clear item appears only when bound; a
+            // fixed estimate broke the moment the menu grew): if the menu
+            // would run past the bottom edge, shift it up. The horizontal
+            // clamp happens before first paint above; this one needs the DOM.
+            if (el) {
+              const overflow = el.getBoundingClientRect().bottom - (window.innerHeight - 8)
+              if (overflow > 0) {
+                el.style.top = `${Math.max(8, pos.top - overflow)}px`
+              }
+            }
+          }}
+          style={{ position: 'fixed', left: pos.left, top: pos.top }}
+        >
           {suggestionsFor(schema).map((s) => (
             <button
               key={s.label}

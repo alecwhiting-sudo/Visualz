@@ -28,11 +28,15 @@ test('placeholders are param-specific and the fx menu applies a working binding'
   await firstRow.getByRole('button', { name: 'Expression ideas for X frequency' }).click()
   const menu = page.locator('.expr-suggest-menu')
   await expect(menu).toBeVisible()
-  // Fully on-page (same viewport-clamp contract as the info popovers).
+  // Fully on-page in BOTH axes (the seven-item menu once ran past the
+  // viewport bottom, putting Clear expression off-screen — the vertical
+  // clamp measures the real rendered height).
   const box = (await menu.boundingBox())!
   const viewport = page.viewportSize()!
   expect(box.x).toBeGreaterThanOrEqual(0)
   expect(box.x + box.width).toBeLessThanOrEqual(viewport.width)
+  expect(box.y).toBeGreaterThanOrEqual(0)
+  expect(box.y + box.height).toBeLessThanOrEqual(viewport.height)
 
   await menu.getByRole('button', { name: /Sweep once per beat/ }).click()
   await expect(menu).toHaveCount(0) // menu closes on pick

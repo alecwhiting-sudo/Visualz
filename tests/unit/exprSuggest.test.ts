@@ -23,7 +23,7 @@ describe('exprSuggest', () => {
   for (const schema of SCHEMAS) {
     it(`every suggestion for "${schema.name}" (${schema.min}..${schema.max}) compiles`, () => {
       const suggestions = suggestionsFor(schema)
-      expect(suggestions).toHaveLength(5)
+      expect(suggestions).toHaveLength(7)
       for (const s of suggestions) {
         expect(() => compile(s.expr, `suggest.${schema.name}`)).not.toThrow()
         expect(s.label.length).toBeGreaterThan(5)
@@ -32,8 +32,19 @@ describe('exprSuggest', () => {
   }
 
   it('suggestions are range-mapped: the beat sweep spans the full param range', () => {
-    const [, sweep] = suggestionsFor(SCHEMAS[0]) // freqX 1..12
+    const sweep = suggestionsFor(SCHEMAS[0]).find((s) => s.label === 'Sweep once per beat')! // freqX 1..12
     expect(sweep.expr).toBe('1 + beatPhase * 11')
+  })
+
+  it('all three analysis bands are offered: bass, mids, highs', () => {
+    const labels = suggestionsFor(SCHEMAS[1]).map((s) => s.label)
+    expect(labels).toContain('Pulse with the bass')
+    expect(labels).toContain('Pulse with the mids')
+    expect(labels).toContain('Pulse with the highs')
+    const mids = suggestionsFor(SCHEMAS[1]).find((s) => s.label === 'Pulse with the mids')!
+    const highs = suggestionsFor(SCHEMAS[1]).find((s) => s.label === 'Pulse with the highs')!
+    expect(mids.expr).toContain('mid *')
+    expect(highs.expr).toContain('high *')
   })
 
   it('integer-stepped params get whole numbers, float params keep decimals', () => {
