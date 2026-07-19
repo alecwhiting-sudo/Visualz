@@ -81,6 +81,21 @@ export class SessionRecorder {
   }
 
   finish(frame: number): SessionDoc {
+    const transportFrames = this.relative(frame)
+    // DATA-LOSS GUARD (user lost a 6-minute performance): if the transport's
+    // frame counter stalled or rewound during the take, the frame-based
+    // duration can read 0 even though minutes of events were recorded — and
+    // the App's empty-take rejection then threw the whole performance away.
+    // A take that CONTAINS events is never empty: recover its length from
+    // the last recorded event plus a one-second tail, so the performance is
+    // preserved (replayable/exportable, even if the underlying clock fault
+    // squeezed its timing) instead of destroyed. A take with no events and
+    // no frames stays 0 — genuinely empty, and rejected downstream as before.
+    const lastEventFrame = this.events.reduce((m, e) => Math.max(m, e.frame), 0)
+    const durationFrames =
+      transportFrames <= 0 && this.events.length > 0
+        ? lastEventFrame + this.snapshot.fps
+        : transportFrames
     return {
       version: 1,
       seed: this.snapshot.seed,
@@ -93,7 +108,7 @@ export class SessionRecorder {
       },
       bindings: { ...this.snapshot.bindings },
       audio: this.snapshot.audio ?? { kind: 'demo' },
-      durationFrames: this.relative(frame),
+      durationFrames,
       events: this.events.slice(),
     }
   }

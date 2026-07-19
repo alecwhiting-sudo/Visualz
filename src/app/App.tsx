@@ -495,6 +495,12 @@ export function App() {
   }, [replay])
   const [exporting, setExporting] = useState<{ frame: number; total: number } | null>(null)
   const [sessionError, setSessionError] = useState<string | null>(null)
+  // Take-clock stall alarm (user lost a 6-minute take to a stalled frame
+  // counter): while recording, if transport.frame stops advancing across
+  // ~2s of poll ticks, warn IMMEDIATELY instead of letting the performer
+  // find out at the end. Refs, not state — updated inside the 100ms poll.
+  const takeStallFrameRef = useRef(-1)
+  const takeStallTicksRef = useRef(0)
   // Non-fatal note from the most recent export — currently only set when an
   // H.264/MP4 export dropped its audio track because AAC isn't available in
   // this browser (see EncodedResult.audioSkipped in export/encode.ts).
@@ -833,6 +839,25 @@ export function App() {
       // recordingStartFrameRef's comment).
       if (e.isRecording && recordingStartFrameRef.current !== null) {
         setTakeElapsedSec(Math.max(0, (e.transport.frame - recordingStartFrameRef.current) / e.transport.fps))
+      }
+      // Stall alarm (see takeStallFrameRef): 20 consecutive 100ms ticks with
+      // a frozen frame counter while recording = the take is not capturing
+      // time. Fires once per stall (the === keeps it from re-spamming).
+      if (e.isRecording) {
+        if (e.transport.frame !== takeStallFrameRef.current) {
+          takeStallFrameRef.current = e.transport.frame
+          takeStallTicksRef.current = 0
+        } else {
+          takeStallTicksRef.current += 1
+          if (takeStallTicksRef.current === 20) {
+            setSessionError(
+              '⚠ Take clock stalled — frames are not advancing, so the recording is not capturing time. Is audio still playing and this window visible?',
+            )
+          }
+        }
+      } else {
+        takeStallFrameRef.current = -1
+        takeStallTicksRef.current = 0
       }
       // PERFORMING has exactly one way to end (task): the track reaching its
       // natural end must end the take automatically, same as a manual ⏹.

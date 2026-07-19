@@ -172,7 +172,12 @@ describe('SessionRecorder', () => {
     recorder.recordParam(50, 'freqX', 4)
     const doc = recorder.finish(100)
     expect(doc.events).toEqual([{ frame: 0, type: 'param', name: 'freqX', value: 4 }])
-    expect(doc.durationFrames).toBe(0)
+    // Data-loss guard (recorder.test.ts): a take CONTAINING events is never
+    // 0-length — with the transport reading no elapsed frames, duration is
+    // recovered as last-event-frame + a 1s tail (fps=30 here). The old
+    // assertion (0) encoded the discard-the-performance behavior that lost
+    // a user's 6-minute take.
+    expect(doc.durationFrames).toBe(30)
   })
 })
 
