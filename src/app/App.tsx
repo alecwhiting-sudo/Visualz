@@ -11,6 +11,8 @@ import { sliceExportAudioFromSeconds, type ExportProgress } from '../export/rend
 import type { ExportCodec } from '../export/encode'
 import { InfoPopover } from './InfoPopover'
 import { useParamBinding } from './paramBinding'
+import { placeholderFor, suggestionsFor } from './exprSuggest'
+import type { ParamSchema } from '../scenes/types'
 import { framesToRenderForAudioSync } from './replayPacing'
 import { snapToStep } from '../scenes/paramStep'
 import { SHADER_DOCS } from '../scenes/shaderDocs'
@@ -2372,6 +2374,93 @@ function MacroViewToggle({ view, onChange }: { view: number; onChange: (v: numbe
   )
 }
 
+/**
+ * Expression guidance (user-approved: placeholders + tap-to-apply menu): the
+ * small "fx" button beside each param's expression box. Opens a
+ * fixed-positioned menu (same viewport-clamped technique as InfoPopover —
+ * absolute positioning gets clipped by the panel's overflow) of range-mapped,
+ * ready-to-run expressions for THIS param, plus a clear item when bound.
+ * Picking one applies it immediately — sound-reactive within one tap.
+ */
+function ExprSuggestMenu({
+  schema,
+  bound,
+  onPick,
+}: {
+  schema: ParamSchema
+  bound: boolean
+  onPick: (expr: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
+  const rootRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const rect = rootRef.current?.getBoundingClientRect()
+    if (rect) {
+      const maxLeft = window.innerWidth - 248
+      setPos({ left: Math.max(8, Math.min(rect.left, maxLeft)), top: rect.bottom + 4 })
+    }
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') setOpen(false)
+    }
+    const onPointerDown = (ev: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(ev.target as Node)) setOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('pointerdown', onPointerDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('pointerdown', onPointerDown)
+    }
+  }, [open])
+
+  return (
+    <span className="expr-suggest" ref={rootRef}>
+      <button
+        type="button"
+        className="expr-suggest-button"
+        aria-label={`Expression ideas for ${schema.label}`}
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        ƒx
+      </button>
+      {open && pos && (
+        <div className="expr-suggest-menu" style={{ position: 'fixed', left: pos.left, top: pos.top }}>
+          {suggestionsFor(schema).map((s) => (
+            <button
+              key={s.label}
+              type="button"
+              onClick={() => {
+                onPick(s.expr)
+                setOpen(false)
+              }}
+            >
+              <span className="expr-suggest-label">{s.label}</span>
+              <code>{s.expr}</code>
+            </button>
+          ))}
+          {bound && (
+            <button
+              type="button"
+              className="expr-suggest-clear"
+              onClick={() => {
+                onPick('')
+                setOpen(false)
+              }}
+            >
+              <span className="expr-suggest-label">Clear expression</span>
+              <code>knob takes over again</code>
+            </button>
+          )}
+        </div>
+      )}
+    </span>
+  )
+}
+
 function Knob({
   engine,
   schema,
@@ -2434,17 +2523,27 @@ function Knob({
           engine.setParam(schema.name, v)
         }}
       />
-      <input
-        type="text"
-        className={`expr${error ? ' expr-error' : ''}`}
-        placeholder="expression, e.g. 2 + bass * 4"
-        value={exprText}
-        spellCheck={false}
-        onChange={(ev) => {
-          setExprText(ev.target.value)
-          applyExpr(ev.target.value)
-        }}
-      />
+      <span className="expr-row">
+        <input
+          type="text"
+          className={`expr${error ? ' expr-error' : ''}`}
+          placeholder={placeholderFor(schema, slot)}
+          value={exprText}
+          spellCheck={false}
+          onChange={(ev) => {
+            setExprText(ev.target.value)
+            applyExpr(ev.target.value)
+          }}
+        />
+        <ExprSuggestMenu
+          schema={schema}
+          bound={bound}
+          onPick={(expr) => {
+            setExprText(expr)
+            applyExpr(expr)
+          }}
+        />
+      </span>
       {error && <span className="expr-message">{error}</span>}
     </label>
   )
