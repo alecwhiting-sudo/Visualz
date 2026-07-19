@@ -471,6 +471,71 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
       ],
     },
   },
+  physarum: {
+    'agent-fs': {
+      summary:
+        "Tens of thousands of virtual slime-mold agents, each stored as a texel (position + heading). Every step an agent smells the trail field at three sensor points — ahead-left, ahead, ahead-right — turns toward the strongest scent, and moves forward. That's the whole rule; the glowing vein networks are pure emergence: agents follow trails, trails exist because agents deposited them.",
+      tryThis: [
+        {
+          target: 'const float SCATTER_FRACTION = 0.15;',
+          effect:
+            'the fraction of agents scattered to fresh headings on each onset; raise to 0.4 for a big disruptive burst on every hit, drop to 0.03 for barely-noticeable twitches.',
+        },
+        {
+          target: 'const float TURN_STEP = 0.03;',
+          effect:
+            'how sharply agents can bend per step; raise to 0.08 for tight twitchy curls, lower to 0.01 for slow lazy arcs and longer straighter veins.',
+        },
+        {
+          target: 'const float MOVE_STEP = 0.0035;',
+          effect:
+            'agent stride; raise to 0.008 for fast, sparse, sweeping networks, lower to 0.0015 for a dense slow-crawling mat.',
+        },
+      ],
+    },
+    'trail-fs': {
+      summary:
+        'The chemoattractant field: every frame the deposits from all agents are added in, then the whole field is blurred a little (scent spreads) and decayed (scent fades). The balance of deposit, blur, and decay is what decides whether the colony draws fine threads or thick rivers.',
+      tryThis: [
+        {
+          target: 'const float BASE_DEPOSIT = 0.05;',
+          effect:
+            'raise to 0.12 for thicker fast-forming veins (brightness saturates sooner), lower to 0.02 for faint delicate threads.',
+        },
+        {
+          target: 'float hits = texelFetch(uMask, tc, 0).r / PER_HIT;',
+          effect:
+            'the recovered per-texel visit count; wrap it as min(hits, 4.0) to cap how much one busy junction can dominate, flattening the brightest convergence points.',
+        },
+        {
+          target: 'outState = vec4(blur * uDecay + hits * BASE_DEPOSIT * uDeposit, 0.0, 0.0, 1.0);',
+          effect:
+            'swap blur * uDecay for rd(tc) * uDecay to skip the blur entirely — sharp pixel-crisp trails instead of soft glowing ones.',
+        },
+      ],
+    },
+    'render-fs': {
+      summary:
+        'Turns trail density into light: an exponential tone-map so faint trails still glow, a two-tone palette (deep body color, near-white cores at the busiest junctions) driven by the Hue knob, and a gamma curve under Exposure.',
+      tryThis: [
+        {
+          target: 'float glow = 1.0 - exp(-0.7 * d);',
+          effect:
+            'tone-map steepness; raise 0.7 toward 2.0 so even faint trails burn bright, or lower toward 0.3 so only the densest corridors light up — much moodier.',
+        },
+        {
+          target: 'float hueCore = fract(uHue + 0.08);',
+          effect:
+            'the core color sits 0.08 around the hue wheel from the body; raise to 0.33 for a dramatic complementary split between veins and junctions.',
+        },
+        {
+          target: 'col = pow(clamp(col * uExposure, 0.0, 4.0), vec3(0.85));',
+          effect:
+            'the 0.85 gamma; raise toward 1.5 for a darker, moodier field, lower toward 0.5 for a washed-out high-key look.',
+        },
+      ],
+    },
+  },
   grayscott: {
     'update-fs': {
       summary:
