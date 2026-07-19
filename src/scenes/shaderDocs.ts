@@ -471,6 +471,34 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
       ],
     },
   },
+  orbitdive: {
+    'render-fs': {
+      summary:
+        "A Mandelbrot-family dive where the maths is steered by ORBIT TRAPS: while each pixel's orbit iterates, its closest approach to a geometric trap shape (point → cross → circle → rotating line, morphed by the Trap shape knob) is tracked, and that minimum distance becomes luminous filigree woven through the fractal — structure plain escape-counting can't show. The Family knob continuously morphs the iteration itself from Mandelbrot through Burning Ship toward Tricorn, passing through genuine hybrid fractals on the way.",
+      tryThis: [
+        {
+          target: 'const float TRAP_SHARPNESS = 9.0;',
+          effect:
+            'how tightly the trap glow hugs its shape; lower toward 3.0 for broad wash-like veins, raise toward 15.0 for needle-thin filigree.',
+        },
+        {
+          target: 'float heat = pow(t, 3.0);',
+          effect:
+            'the escape-gradient contrast; lower the exponent toward 1.0 for bright gradual banding (Mandel Dive-style), raise it for a nearly black field where only the boundary burns.',
+        },
+        {
+          target: 'const float HUE_SPREAD = 0.02;',
+          effect:
+            'how far the ember ramp drifts from the Hue knob; raise to 0.3+ to explode the warm monochrome into a full rainbow spread.',
+        },
+        {
+          target: 'vec3 trapCol = hsv2rgb(vec3(fract(uHue + 0.04), 0.18, 1.0));',
+          effect:
+            'the vein color: raise the 0.18 saturation for colorful (less white-gold) filigree, or change the 0.04 offset to move the veins to a contrasting hue.',
+        },
+      ],
+    },
+  },
   physarum: {
     'agent-fs': {
       summary:
