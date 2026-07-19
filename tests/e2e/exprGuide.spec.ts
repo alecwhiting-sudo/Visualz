@@ -60,3 +60,44 @@ test('placeholders are param-specific and the fx menu applies a working binding'
   await expect(firstRow.locator('input[type=range]')).toBeEnabled()
   await expect(exprInput).toHaveValue('')
 })
+
+test('a low-on-page fx menu clamps on-screen and holds still (user report: jiggle loop)', async ({
+  page,
+}) => {
+  // A short viewport guarantees the last param row's menu needs the vertical
+  // clamp — the case that used to oscillate at 10Hz between its unclamped
+  // and clamped positions (state-vs-ref fight, re-triggered by the app's
+  // 100ms meter poll re-render).
+  await page.setViewportSize({ width: 1280, height: 520 })
+  await page.goto('/')
+  await expect(page.locator('.panel')).toBeVisible()
+  await page.waitForFunction(() => window.__vizLive !== undefined)
+
+  const lastParam = await page.evaluate(() => {
+    const params = window.__vizLive!.sceneParams()
+    return params[params.length - 1]
+  })
+  const lastRow = page.locator('.knob').filter({ has: page.locator(`input[type=range]`) }).last()
+  await lastRow.scrollIntoViewIfNeeded()
+  await lastRow.getByRole('button', { name: /Expression ideas/ }).click()
+
+  const menu = page.locator('.expr-suggest-menu')
+  await expect(menu).toBeVisible()
+  const viewport = page.viewportSize()!
+  const box1 = (await menu.boundingBox())!
+  expect(box1.y).toBeGreaterThanOrEqual(0)
+  expect(box1.y + box1.height).toBeLessThanOrEqual(viewport.height)
+
+  // Stability: several meter-poll re-renders later, the menu has not moved a
+  // single pixel (the jiggle loop moved it every ~100ms).
+  await page.waitForTimeout(450)
+  const box2 = (await menu.boundingBox())!
+  expect(box2.x).toBe(box1.x)
+  expect(box2.y).toBe(box1.y)
+  expect(box2.height).toBe(box1.height)
+
+  // And it still works: applying from the clamped menu binds the low param.
+  await menu.getByRole('button', { name: /Sweep once per beat/ }).click()
+  await expect(lastRow.locator('em')).toHaveText('ƒ(t)')
+  expect(lastParam.name.length).toBeGreaterThan(0)
+})

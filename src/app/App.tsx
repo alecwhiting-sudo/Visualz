@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Engine } from '../engine/engine'
 import { SCENES } from '../scenes/registry'
 import { attachKeyboard } from '../mapping/keyboard'
@@ -2658,14 +2658,36 @@ function ExprSuggestMenu({
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
   const rootRef = useRef<HTMLSpanElement>(null)
+  const menuElRef = useRef<HTMLDivElement | null>(null)
+
+  // Measure-once positioning (user report: menus low on the page got stuck
+  // in a "jiggle" loop). The old scheme applied the unclamped position from
+  // state on every render and then MUTATED the element's top in a callback
+  // ref to clamp it — the app re-renders every 100ms (meter poll), so the
+  // two fought at 10Hz whenever clamping was needed. Now the menu renders
+  // hidden for one layout pass, its REAL height is measured exactly once
+  // per open (layout effect, before paint), and the final clamped position
+  // goes into state — nothing mutates it afterward, nothing to fight.
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null)
+      return
+    }
+    const rect = rootRef.current?.getBoundingClientRect()
+    const menu = menuElRef.current
+    if (!rect || !menu) return
+    const menuHeight = menu.getBoundingClientRect().height
+    const maxLeft = window.innerWidth - 248
+    setPos({
+      left: Math.max(8, Math.min(rect.left, maxLeft)),
+      top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuHeight - 8)),
+    })
+    // `bound` changes the item count (the clear entry), so the height must
+    // be re-measured when it flips while open.
+  }, [open, bound])
 
   useEffect(() => {
     if (!open) return
-    const rect = rootRef.current?.getBoundingClientRect()
-    if (rect) {
-      const maxLeft = window.innerWidth - 248
-      setPos({ left: Math.max(8, Math.min(rect.left, maxLeft)), top: rect.bottom + 4 })
-    }
     const onKeyDown = (ev: KeyboardEvent) => {
       if (ev.key === 'Escape') setOpen(false)
     }
@@ -2691,23 +2713,19 @@ function ExprSuggestMenu({
       >
         ƒx
       </button>
-      {open && pos && (
+      {open && (
         <div
           className="expr-suggest-menu"
-          ref={(el) => {
-            // Vertical viewport clamp, measured from the REAL rendered height
-            // (item count varies — the clear item appears only when bound; a
-            // fixed estimate broke the moment the menu grew): if the menu
-            // would run past the bottom edge, shift it up. The horizontal
-            // clamp happens before first paint above; this one needs the DOM.
-            if (el) {
-              const overflow = el.getBoundingClientRect().bottom - (window.innerHeight - 8)
-              if (overflow > 0) {
-                el.style.top = `${Math.max(8, pos.top - overflow)}px`
-              }
-            }
-          }}
-          style={{ position: 'fixed', left: pos.left, top: pos.top }}
+          ref={menuElRef}
+          style={
+            pos
+              ? { position: 'fixed', left: pos.left, top: pos.top }
+              : // Measurement pass: laid out (so height is real) but
+                // invisible and parked off-screen until the clamped
+                // position lands — prevents a one-frame flash at the
+                // unclamped spot.
+                { position: 'fixed', left: -9999, top: -9999, visibility: 'hidden' }
+          }
         >
           {suggestionsFor(schema).map((s) => (
             <button
