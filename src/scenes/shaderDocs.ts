@@ -427,6 +427,50 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
       ],
     },
   },
+  glyphrain: {
+    'glyph-fs': {
+      summary:
+        "The Matrix look, rectilinear by construction: characters fall in perfectly straight vertical columns (bright head, dimming tail), and circuit-trace paths carry a second stream of text through crisp 90° turns. The heads, tails, and flash brightness are all computed on the CPU and arrive as per-glyph color/alpha; this shader just stamps each character by reading the baked 5×7 bitmap font as an on/off ink mask.",
+      tryThis: [
+        {
+          target: 'float mask = texture(uAtlas, vUV).r;',
+          effect:
+            'invert with float mask = 1.0 - texture(uAtlas, vUV).r; for negative rain — solid blocks with letter-shaped holes falling instead of glowing characters.',
+        },
+        {
+          target: 'in vec4 vColor;',
+          effect:
+            'add if (vColor.a < 0.15) discard; at the top of main to hard-cut the faintest tail glyphs instead of letting them fade to near-invisible — shorter, punchier streamers.',
+        },
+        {
+          target: 'outColor = vec4(vColor.rgb, vColor.a * mask);',
+          effect:
+            'try vec4(vColor.rgb * (1.0 + mask * 0.6), vColor.a * mask) to punch every character brighter at its core — a hot phosphor glow on the heads.',
+        },
+      ],
+    },
+    'fade-fs': {
+      summary:
+        'The persistence pass: one nearly-transparent dark rectangle over the whole canvas each frame, which is what leaves the falling characters their ghostly after-image instead of a clean wipe. The Trail knob feeds its opacity.',
+      tryThis: [
+        {
+          target: 'outColor = vec4(0.0, 0.0, 0.0, uFade);',
+          effect:
+            'fade toward vec4(0.0, 0.05, 0.0, uFade) instead of pure black for a green phosphor-burn tint on everything the rain leaves behind.',
+        },
+        {
+          target: 'uFade',
+          effect:
+            'square it — uFade * uFade — so trails decay much more slowly at the same Trail knob setting, long CRT-style ghosting.',
+        },
+        {
+          target: 'void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }',
+          effect:
+            'replace the body with outColor = vec4(0.0, 0.0, 0.0, 1.0); to kill persistence entirely — crisp rain with no ghosting at all.',
+        },
+      ],
+    },
+  },
   grayscott: {
     'update-fs': {
       summary:
