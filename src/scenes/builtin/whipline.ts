@@ -12,29 +12,49 @@ import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../ty
  * the beat.
  *
  * Architecture (lissajous.ts's pattern): a fade-feedback trail pass + one
- * dynamic-VBO line-strip draw per drawn line, a code layer exposing 'line-fs'
- * and 'fade-fs'. The one addition lissajous doesn't need is the physics: a
- * CPU verlet chain of N particles (waves.ts's "fixed frame-clocked substeps"
- * discipline applied to point-mass integration instead of a GPU field) plus a
- * position-based-dynamics relaxation pass that keeps consecutive particles a
- * fixed distance apart — literally "each subsection operates like a particle
- * but remains attached to the next part of the line."
+ * draw per drawn line, a code layer exposing 'line-fs' and 'fade-fs'. Two
+ * additions lissajous doesn't need:
  *
- * Coordinate scheme: physics runs in the SAME undistorted "logical" square
- * space lissajous's curve lives in (aAspect fits it to the real NDC viewport
- * in LINE_VS: p.x /= max(aspect,1), p.y *= min(aspect,1)). Inverting that
- * fit gives the logical-space half-extents of the ACTUAL screen edges for any
- * aspect — Wx = max(aspect,1), Wy = max(1/aspect,1) — so wall bounces (done
- * in logical space, on the CPU, every update()) land exactly on the real
- * edges at 16:9, 9:16, and 1:1 once LINE_VS maps logical -> NDC for drawing.
- * NDC's top edge is always y=+1, i.e. logical y=+Wy, which is why seeding the
- * line from (0,0) to (0,Wy) reaches "the top of screen" at any aspect.
+ * 1. The physics: a CPU verlet chain of N particles (waves.ts's "fixed
+ *    frame-clocked substeps" discipline applied to point-mass integration
+ *    instead of a GPU field) plus a position-based-dynamics relaxation pass
+ *    that keeps consecutive particles a fixed distance apart — literally
+ *    "each subsection operates like a particle but remains attached to the
+ *    next part of the line."
+ *
+ * 2. Real geometric ribbon rendering (post-review rework, task #46b): GL
+ *    line primitives clamp to ~1px on nearly every platform, which read as
+ *    scattered hairlines, not "one continuous elegant ribbon." Every drawn
+ *    line (head + echoes) is instead a screen-space-width TRIANGLE_STRIP:
+ *    per chain point, a tangent/normal computed in already-aspect-corrected
+ *    NDC space (glyphgeometry.ts's "aspect correction on the CPU before
+ *    building the vertex buffer" convention, so a normal offset is never
+ *    skewed by a non-square viewport), offset by ±halfWidth. `thickness` is
+ *    real geometric half-width now, not a brightness scale.
+ *
+ * Coordinate scheme: physics runs in the SAME undistorted "logical" space
+ * lissajous's curve lives in, and buildRibbon() applies that curve's exact
+ * aspect-fit (p.x /= max(aspect,1), p.y *= min(aspect,1)) on the CPU before
+ * computing tangents, so the ribbon never renders in the anisotropic
+ * pre-fit space. Inverting that fit gives the logical-space half-extents of
+ * the ACTUAL screen edges for any aspect — Wx = max(aspect,1), Wy =
+ * max(1/aspect,1) — so wall bounces (done in logical space every update())
+ * land exactly on the real edges at 16:9, 9:16, and 1:1. NDC's top edge is
+ * always y=+1, i.e. logical y=+Wy, which is why seeding the line from
+ * (0,0) to (0,Wy) reaches "the top of screen" at any aspect.
  *
  * Differential rotation: every substep, each particle gets a tangential
  * velocity kick computed as an angular rate around the CURRENT inner-end
  * position (pos[0], captured once at the top of the substep) — omega_i =
  * rotSpeed * (1 + i/(N-1)), i.e. exactly rotSpeed at the inner end and
- * exactly 2*rotSpeed at the outer end, linear between. The inner end is
+ * exactly 2*rotSpeed at the outer end, linear between. Critically, the
+ * kick's MAGNITUDE uses the chain's IDEAL rest-length radius (i*restLen),
+ * not the particle's instantaneous (possibly stretched) distance from the
+ * pivot: using the live distance is a positive-feedback loop (any transient
+ * stretch amplifies the kick, which whips it further, which stretches it
+ * more — the "spaghetti" the first pass shipped) whereas the ideal-radius
+ * version is a bounded torque that can never runaway, only the *direction*
+ * of the kick still follows the chain's current shape. The inner end is
  * never pinned: it free-floats like every other particle (the kick's own
  * radius there is ~0, so the swirl is entirely driven by the rest of the
  * chain dragging it via the length constraints). An initial full-strength
@@ -49,25 +69,31 @@ const N = 48 // particles in the chain — cheap enough to run every substep on 
 const SUBSTEPS = 4 // frame-clocked (not dt-scaled) verlet substeps per update()
 const DT_SUB = 1 / 240 // fixed virtual substep — grayscott/waves-style determinism
 const RELAX_ITERS = 6 // constraint-relaxation iterations per substep
-const DAMPING = 0.995 // mild global per-substep velocity damping (keeps energy bounded)
+const DAMPING = 0.985 // per-substep velocity retention — tuned (post-review) so the
+// bounded-radius drive settles into one coherent serpentine arc at defaults
+// instead of accumulating into a self-crossing tangle, verified at f200/f400.
+const KICK_SCALE = 0.03 // extra internal attenuation on the continuous drive kick
+// (on top of the `drive` param) — keeps the default whip graceful without
+// changing `drive`'s exposed default/range.
 const RING_CAPACITY = 16 // preallocated echo ring-buffer slots (matches echoes' max)
 
 const HUE_DRIFT_RATE = 0.03 // continuous hue creep, 1/s
 const HUE_BEAT_STEP = 0.055 // extra hue jump fired once per beat pulse
 const PULSE_DECAY_RATE = 5 // 1/s exponential decay of the beat-brightness envelope
 
-const LINE_VS = `#version 300 es
+// Ribbon geometry (task #46b): `thickness` is real screen-space half-width in
+// NDC now. HALF_WIDTH_PER_THICKNESS chosen so thickness's default (1.2)
+// renders a ~4px half-width (~8px full width) ribbon at 1080p:
+// 0.004 NDC * (1080/2) px-per-NDC-unit ~= 2.16px half-width per axis.
+const HALF_WIDTH_PER_THICKNESS = 0.004 / 1.2
+const TAPER_MIN = 0.55 // ribbon width at each tail end, as a fraction of the mid-chain width
+
+// Both passes are plain full-NDC-space draws — the ribbon builder does the
+// only aspect-correction this scene needs, entirely on the CPU (see class
+// doc), so neither vertex shader has any uniform left to apply.
+const PASSTHROUGH_VS = `#version 300 es
 layout(location = 0) in vec2 aPos;
-uniform float uAspect;
-void main() {
-  // Same aspect-fit lissajous.ts uses: shrink x on wide screens, shrink y on
-  // tall ones, so a shape built in undistorted logical space (where the
-  // physics runs) lands on the real NDC edges at any aspect.
-  vec2 p = aPos;
-  p.x /= max(uAspect, 1.0);
-  p.y *= min(uAspect, 1.0);
-  gl_Position = vec4(p, 0.0, 1.0);
-}`
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`
 
 const LINE_FS = `#version 300 es
 precision highp float;
@@ -77,10 +103,6 @@ out vec4 outColor;
 void main() {
   outColor = vec4(uColor, uAlpha);
 }`
-
-const FADE_VS = `#version 300 es
-layout(location = 0) in vec2 aPos;
-void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`
 
 const FADE_FS = `#version 300 es
 precision highp float;
@@ -106,12 +128,12 @@ export class WhipLineScene implements SceneRuntime {
 
   params: ParamSchema[] = [
     { name: 'rotSpeed', label: 'Rotation speed', min: 0, max: 3, default: 1 },
-    { name: 'echoes', label: 'Echoes', min: 0, max: 16, step: 1, default: 8 },
+    { name: 'echoes', label: 'Echoes', min: 0, max: 16, step: 1, default: 5 },
     { name: 'tension', label: 'Tension', min: 0.5, max: 1, default: 0.85 },
     { name: 'bounce', label: 'Wall bounce', min: 0.3, max: 1, default: 0.8 },
     { name: 'drive', label: 'Drive', min: 0, max: 1, default: 0.5 },
     { name: 'thickness', label: 'Thickness', min: 0.5, max: 3, default: 1.2 },
-    { name: 'trail', label: 'Trail', min: 0.7, max: 0.995, default: 0.9 },
+    { name: 'trail', label: 'Trail', min: 0.7, max: 0.995, default: 0.82 },
     { name: 'pulse', label: 'Beat pulse', min: 0, max: 1, default: 0.6 },
   ]
 
@@ -135,7 +157,11 @@ export class WhipLineScene implements SceneRuntime {
   private prevX = new Float32Array(N)
   private prevY = new Float32Array(N)
   private restLen = 0
-  private scratch = new Float32Array(N * 2) // reused per-draw upload buffer
+
+  // --- Ribbon-builder scratch (reused across head + every echo draw) ------
+  private ndcX = new Float32Array(N)
+  private ndcY = new Float32Array(N)
+  private ribbonVerts = new Float32Array(N * 4) // 2 verts/point * 2 floats/vert
 
   // --- Beat-echo ring buffer (preallocated at RING_CAPACITY, spec §3) ------
   private ringPosX: Float32Array[] = []
@@ -170,15 +196,15 @@ export class WhipLineScene implements SceneRuntime {
 
     // Seed the initial swirl ("it begins to rotate") — a one-off full-strength
     // tangential kick regardless of `drive`, encoded the same way update()'s
-    // continuous kick is (see integrate()): nudge prevPos backward by the
-    // kick velocity so the very first substep already carries this momentum.
+    // continuous kick is (see kickVector()/integrate()): nudge prevPos
+    // backward by the kick velocity so the very first substep already
+    // carries this momentum.
     const rotSpeed0 = this.getParam('rotSpeed')
     for (let i = 0; i < N; i++) {
-      const dxp = this.posX[i] - this.posX[0]
-      const dyp = this.posY[i] - this.posY[0]
       const omega = rotSpeed0 * (1 + i / (N - 1))
-      const vx = -dyp * omega * DT_SUB
-      const vy = dxp * omega * DT_SUB
+      const { kx, ky } = this.kickVector(i, this.posX[i], this.posY[i], this.posX[0], this.posY[0], omega)
+      const vx = kx * DT_SUB
+      const vy = ky * DT_SUB
       this.prevX[i] = this.posX[i] - vx
       this.prevY[i] = this.posY[i] - vy
     }
@@ -197,14 +223,14 @@ export class WhipLineScene implements SceneRuntime {
     this.pulseEnv = 0
 
     const gl = gpu.gl
-    this.lineProgram = gpu.compileProgram(LINE_VS, this.lineSource)
-    this.fadeProgram = gpu.compileProgram(FADE_VS, this.fadeSource)
+    this.lineProgram = gpu.compileProgram(PASSTHROUGH_VS, this.lineSource)
+    this.fadeProgram = gpu.compileProgram(PASSTHROUGH_VS, this.fadeSource)
 
     this.lineVao = gl.createVertexArray()!
     this.lineVbo = gl.createBuffer()!
     gl.bindVertexArray(this.lineVao)
     gl.bindBuffer(gl.ARRAY_BUFFER, this.lineVbo)
-    gl.bufferData(gl.ARRAY_BUFFER, this.scratch.byteLength, gl.DYNAMIC_DRAW)
+    gl.bufferData(gl.ARRAY_BUFFER, this.ribbonVerts.byteLength, gl.DYNAMIC_DRAW)
     gl.enableVertexAttribArray(0)
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0)
 
@@ -261,6 +287,22 @@ export class WhipLineScene implements SceneRuntime {
     }
   }
 
+  /** Tangential drive-kick velocity for particle `i`: direction follows the
+   * particle's CURRENT position relative to `pivot`, but magnitude uses the
+   * chain's IDEAL rest-length radius (i*restLen) rather than the live
+   * (possibly stretched) distance — see class doc for why that bound is
+   * what keeps the whip from feedback-amplifying into a tangle. */
+  private kickVector(i: number, px: number, py: number, pivotX: number, pivotY: number, omega: number): { kx: number; ky: number } {
+    const dxp = px - pivotX
+    const dyp = py - pivotY
+    const dist = Math.sqrt(dxp * dxp + dyp * dyp)
+    if (dist < 1e-6) return { kx: 0, ky: 0 }
+    const ux = dxp / dist
+    const uy = dyp / dist
+    const idealR = this.restLen * i
+    return { kx: -uy * idealR * omega, ky: ux * idealR * omega }
+  }
+
   /** One verlet substep: velocity-from-prevPos integration, the differential
    * tangential drive kick, then wall-bounce reflection. Constraint relaxation
    * (equal segment lengths — "remains attached to the next part") runs
@@ -274,15 +316,13 @@ export class WhipLineScene implements SceneRuntime {
       let vx = (px - this.prevX[i]) * DAMPING
       let vy = (py - this.prevY[i]) * DAMPING
 
-      // Differential rotation drive: tangential kick around the (free-
-      // floating) inner end, omega_i linear from rotSpeed (i=0) to
+      // Differential rotation drive: omega_i linear from rotSpeed (i=0) to
       // 2*rotSpeed (i=N-1) — the user's exact "outer end moving twice as
       // fast as the inner end."
-      const dxp = px - pivotX
-      const dyp = py - pivotY
       const omega = rotSpeed * (1 + i / (N - 1))
-      vx += -dyp * omega * DT_SUB * drive
-      vy += dxp * omega * DT_SUB * drive
+      const { kx, ky } = this.kickVector(i, px, py, pivotX, pivotY, omega)
+      vx += kx * DT_SUB * drive * KICK_SCALE
+      vy += ky * DT_SUB * drive * KICK_SCALE
 
       let nx = px + vx
       let ny = py + vy
@@ -343,6 +383,56 @@ export class WhipLineScene implements SceneRuntime {
     this.ringCount = Math.min(RING_CAPACITY, this.ringCount + 1)
   }
 
+  /**
+   * Builds a TRIANGLE_STRIP ribbon (2*N vertices, into `this.ribbonVerts`)
+   * for chain `(x, y)` in logical space: converts each point to NDC using
+   * the scene's aspect-fit (glyphgeometry.ts's "aspect correction on the CPU
+   * before building the vertex buffer" convention — a normal computed in
+   * NDC is never skewed by a non-square viewport), takes a central-difference
+   * tangent per point, and offsets ±halfWidth along its normal. Width tapers
+   * down slightly at both tail ends (TAPER_MIN..1) for a whip-like profile.
+   * Shared verbatim by the head line and every echo (task #46b).
+   */
+  private buildRibbon(x: Float32Array, y: Float32Array, halfWidth: number, aspect: number): void {
+    const kx = 1 / Math.max(aspect, 1)
+    const ky = Math.min(aspect, 1)
+    for (let i = 0; i < N; i++) {
+      this.ndcX[i] = x[i] * kx
+      this.ndcY[i] = y[i] * ky
+    }
+
+    let lastTx = 0
+    let lastTy = 1 // fallback tangent (matches the initial straight-up line)
+    for (let i = 0; i < N; i++) {
+      const ax = i > 0 ? i - 1 : i
+      const bx = i < N - 1 ? i + 1 : i
+      let tx = this.ndcX[bx] - this.ndcX[ax]
+      let ty = this.ndcY[bx] - this.ndcY[ax]
+      const len = Math.sqrt(tx * tx + ty * ty)
+      if (len > 1e-8) {
+        tx /= len
+        ty /= len
+        lastTx = tx
+        lastTy = ty
+      } else {
+        tx = lastTx
+        ty = lastTy
+      }
+      const nx = -ty
+      const ny = tx
+
+      const t = i / (N - 1)
+      const w = halfWidth * (TAPER_MIN + (1 - TAPER_MIN) * Math.sin(Math.PI * t))
+
+      const px = this.ndcX[i]
+      const py = this.ndcY[i]
+      this.ribbonVerts[i * 4 + 0] = px + nx * w
+      this.ribbonVerts[i * 4 + 1] = py + ny * w
+      this.ribbonVerts[i * 4 + 2] = px - nx * w
+      this.ribbonVerts[i * 4 + 3] = py - ny * w
+    }
+  }
+
   render(ctx: FrameContext, surface: RenderSurface): void {
     void ctx
     const gl = this.gpu.gl
@@ -352,59 +442,53 @@ export class WhipLineScene implements SceneRuntime {
     gl.enable(gl.BLEND)
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
-    // Fade pass: translucent black quad, leaves a soft motion-blur trail on
-    // top of the crisp beat-echo lines drawn below.
+    // Fade pass: translucent black quad, leaves a soft motion-blur trail
+    // underneath the crisp, discrete beat-echo ribbons drawn below.
     gl.useProgram(this.fadeProgram)
     gl.uniform1f(gl.getUniformLocation(this.fadeProgram, 'uFade'), 1 - clamp(this.getParam('trail'), 0.7, 0.995))
     gl.bindVertexArray(this.fadeVao)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
 
     gl.useProgram(this.lineProgram)
-    gl.uniform1f(gl.getUniformLocation(this.lineProgram, 'uAspect'), aspect)
     gl.bindVertexArray(this.lineVao)
     gl.bindBuffer(gl.ARRAY_BUFFER, this.lineVbo)
 
     const thickness = clamp(this.getParam('thickness'), 0.5, 3)
+    const halfWidth = thickness * HALF_WIDTH_PER_THICKNESS
     const echoesParam = clamp(Math.round(this.getParam('echoes')), 0, RING_CAPACITY)
     const available = Math.min(echoesParam, this.ringCount)
 
-    // Echoes: oldest first (dimmest, drawn behind) up to newest (brightest of
-    // the echoes, drawn just before the head) — "an echo of itself ... spaced
-    // out by the music beats," linearly decreasing alpha, tinted by whatever
-    // hue was live at the moment each one was captured ("progressively back
-    // along the hue trail").
+    // Echoes: oldest first (dimmest, drawn behind) up to newest (drawn just
+    // before the head) — "an echo of itself ... spaced out by the music
+    // beats." Each beat-ghost must read as an individually countable, discrete
+    // copy of the ribbon (task #46b review), so alpha steps linearly across a
+    // wide, clearly-separated band (0.55 newest .. 0.15 oldest) rather than
+    // fading toward invisibility. Tinted by whatever hue was live at the
+    // moment each one was captured ("progressively back along the hue trail").
     for (let rank = available; rank >= 1; rank--) {
       const slot = (this.ringWrite - rank + RING_CAPACITY * 2) % RING_CAPACITY
-      const age = rank / Math.max(1, echoesParam) // 0 (newest) .. ~1 (oldest)
-      const alpha = 0.5 * (1 - age) * thickness
-      if (alpha <= 0) continue
-      const lightness = 0.55 * (1 - 0.5 * age)
+      const age = echoesParam > 1 ? (rank - 1) / (echoesParam - 1) : 0 // 0 (newest) .. 1 (oldest)
+      const alpha = 0.55 - 0.4 * age
+      const lightness = 0.5 - 0.12 * age
       const [r, g, b] = hsl(this.ringHue[slot], 0.85, lightness)
-      this.uploadLine(this.ringPosX[slot], this.ringPosY[slot])
+      this.buildRibbon(this.ringPosX[slot], this.ringPosY[slot], halfWidth, aspect)
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.ribbonVerts)
       gl.uniform3f(gl.getUniformLocation(this.lineProgram, 'uColor'), r, g, b)
       gl.uniform1f(gl.getUniformLocation(this.lineProgram, 'uAlpha'), clamp(alpha, 0, 1))
-      gl.drawArrays(gl.LINE_STRIP, 0, N)
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, N * 2)
     }
 
-    // Head: the live chain, brightest, hue-pulsing on the beat.
+    // Head: the live chain, brightest and fully opaque, hue-pulsing on the beat.
     const pulseBoost = this.getParam('pulse') * this.pulseEnv * 0.35
     const headLightness = clamp(0.55 + pulseBoost, 0, 0.95)
     const [hr, hg, hb] = hsl(this.huePhase, 0.85, headLightness)
-    this.uploadLine(this.posX, this.posY)
-    gl.uniform3f(gl.getUniformLocation(this.lineProgram, 'uColor'), hr * thickness, hg * thickness, hb * thickness)
+    this.buildRibbon(this.posX, this.posY, halfWidth, aspect)
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.ribbonVerts)
+    gl.uniform3f(gl.getUniformLocation(this.lineProgram, 'uColor'), hr, hg, hb)
     gl.uniform1f(gl.getUniformLocation(this.lineProgram, 'uAlpha'), 1)
-    gl.drawArrays(gl.LINE_STRIP, 0, N)
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, N * 2)
 
     gl.bindVertexArray(null)
-  }
-
-  private uploadLine(x: Float32Array, y: Float32Array): void {
-    const gl = this.gpu.gl
-    for (let i = 0; i < N; i++) {
-      this.scratch[i * 2] = x[i]
-      this.scratch[i * 2 + 1] = y[i]
-    }
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.scratch)
   }
 
   resize(width: number, height: number): void {
@@ -433,14 +517,14 @@ export class WhipLineScene implements SceneRuntime {
     const gl = this.gpu.gl
     switch (key) {
       case 'line-fs': {
-        const program = this.gpu.compileProgram(LINE_VS, source) // throws on GLSL error; old program untouched
+        const program = this.gpu.compileProgram(PASSTHROUGH_VS, source) // throws on GLSL error; old program untouched
         gl.deleteProgram(this.lineProgram)
         this.lineProgram = program
         this.lineSource = source
         return
       }
       case 'fade-fs': {
-        const program = this.gpu.compileProgram(FADE_VS, source)
+        const program = this.gpu.compileProgram(PASSTHROUGH_VS, source)
         gl.deleteProgram(this.fadeProgram)
         this.fadeProgram = program
         this.fadeSource = source

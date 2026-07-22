@@ -33,6 +33,50 @@ export interface ShaderDocEntry {
 
 /** sceneId -> stageKey -> doc. */
 export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
+  whipline: {
+    'line-fs': {
+      summary:
+        "The user-defined whip: a chain of particles that stay attached to their neighbors (verlet constraints), driven by a differential rotation — the outer end turns at exactly twice the inner end's rate — and bouncing off the screen edges, each bounce rippling down the line like a wave. On every beat a snapshot of the whole ribbon is captured; the last few play behind it as countable ghosts. This shader colors each ribbon pass (head brightest, ghosts stepped down), with hue advancing and brightness pulsing on the beat.",
+      tryThis: [
+        {
+          target: 'uColor',
+          effect:
+            'fed the hue-cycling, capture-time-tinted color per ribbon; replace with a fixed vec3(1.0, 1.0, 1.0) to make head and every ghost pure white — a monochrome calligraphy look.',
+        },
+        {
+          target: 'uAlpha',
+          effect:
+            'the per-ribbon opacity (1.0 head, stepping down per ghost); hardcode to 1.0 to make every beat-ghost as solid as the head — a full frozen fan instead of a fade.',
+        },
+        {
+          target: 'outColor = vec4(uColor, uAlpha);',
+          effect:
+            'swap for outColor = vec4(uColor * 1.6, uAlpha); to push brightness past 1.0 for a blown-out glowing whip under the trail fade.',
+        },
+      ],
+    },
+    'fade-fs': {
+      summary:
+        'The persistence pass: one nearly-transparent dark rectangle per frame — what leaves the whip its faint motion wake underneath the discrete beat-ghosts. The Trail knob feeds its opacity.',
+      tryThis: [
+        {
+          target: 'vec4(0.0, 0.0, 0.0, uFade)',
+          effect:
+            'the fade color; try 0.02, 0.0, 0.05 for a wake that settles into dark violet instead of pure black.',
+        },
+        {
+          target: 'uFade',
+          effect:
+            'multiply it (uFade * 0.5) for much longer wakes than the Trail knob alone allows — the whip paints persistent light-ribbons.',
+        },
+        {
+          target: 'void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }',
+          effect:
+            'replace the body with a full wipe (alpha 1.0) to remove the wake entirely — only the crisp head and its counted ghosts remain.',
+        },
+      ],
+    },
+  },
   lissajous: {
     'line-fs': {
       summary:
