@@ -400,11 +400,11 @@ export class GuillocheScene implements SceneRuntime {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE)
     gl.useProgram(this.lineProgram)
     for (let li = 0; li < layers; li++) {
-      const h = (hue + li * 0.06) % 1
-      const light = 0.5 + 0.12 * Math.sin(li * 1.9 + 1) + 0.15 * this.accent
-      const [r, g, b] = hsl(h, 0.62, light)
+      const h = (hue + li * 0.07) % 1
+      const light = 0.46 + 0.1 * Math.sin(li * 1.9 + 1) + 0.12 * this.accent
+      const [r, g, b] = hsl(h, 0.8, light)
       gl.uniform3f(this.lineLoc.uColor, r, g, b)
-      gl.uniform1f(this.lineLoc.uAlpha, 0.62 + 0.1 * this.accent)
+      gl.uniform1f(this.lineLoc.uAlpha, 0.42 + 0.12 * this.accent)
       const range = ranges[li]
       gl.drawArrays(gl.TRIANGLE_STRIP, range.start, range.count)
     }

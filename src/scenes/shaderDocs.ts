@@ -564,6 +564,50 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
       ],
     },
   },
+  guilloche: {
+    'line-fs': {
+      summary:
+        "A guilloché engine — the ornamental-lathe curve family used on banknotes and watch faces: each layer sums two harmonically related sines per axis, normalized so the figure's envelope reaches all four screen edges at any aspect (the full-bleed contract). Layers land their phase moves exactly on each beat, and every few beats one layer redraws its harmonics — the figure evolves in musical phrases. This shader colors each ribbon; overlaps brighten additively into the engraved-interference glow.",
+      tryThis: [
+        {
+          target: 'uColor',
+          effect:
+            'fed a hue-cycling per-layer color from the CPU; replace with a fixed vec3 like vec3(0.9, 0.75, 0.2) to lock every layer to gold — the classic engraved-banknote look.',
+        },
+        {
+          target: 'uAlpha',
+          effect:
+            'how much each layer adds under additive blending; push toward 1.0 for blown-out neon, or down to ~0.15 for faint ghostly overlapping traces.',
+        },
+        {
+          target: 'outColor = vec4(uColor * uAlpha, uAlpha);',
+          effect:
+            'swap for outColor = vec4(uColor, 1.0); to disable the additive glow entirely — flat opaque occluding ribbons instead of brightening overlaps.',
+        },
+      ],
+    },
+    'fade-fs': {
+      summary:
+        'The persistence pass: one nearly-transparent dark rectangle each frame, leaving the beat-locked figures their motion echoes. The Trail knob feeds its opacity.',
+      tryThis: [
+        {
+          target: 'vec4(0.0, 0.0, 0.0, uFade)',
+          effect:
+            'the fade color; try 0.02, 0.0, 0.05 so trails settle into dark violet instead of pure black.',
+        },
+        {
+          target: 'uFade',
+          effect:
+            'multiply it (uFade * 1.6) to clear trails faster than the Trail knob range allows — crisper beat arrivals, less accumulation.',
+        },
+        {
+          target: 'void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }',
+          effect:
+            'replace the body with a full wipe (alpha 1.0) to kill persistence — the ornament becomes a crisp single figure with no echoes at all.',
+        },
+      ],
+    },
+  },
   grayscott: {
     'update-fs': {
       summary:
