@@ -15,6 +15,8 @@ import { GlyphGeometryScene } from './builtin/glyphgeometry'
 import { GlyphRainScene } from './builtin/glyphrain'
 import { PhysarumScene } from './builtin/physarum'
 import { OrbitDiveScene } from './builtin/orbitdive'
+import { WhipLineScene } from './builtin/whipline'
+import { GuillocheScene } from './builtin/guilloche'
 import { CompositeScene, type CompositeChild } from './composite'
 import type { SceneRuntime } from './types'
 
@@ -61,6 +63,8 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
   glyphrain: { name: 'Glyph Rain', create: () => new GlyphRainScene() },
   physarum: { name: 'Physarum', create: () => new PhysarumScene() },
   orbitdive: { name: 'Orbit Dive', create: () => new OrbitDiveScene() },
+  whipline: { name: 'Whip Line', create: () => new WhipLineScene() },
+  guilloche: { name: 'Guilloché', create: () => new GuillocheScene() },
   'blend-julia-flow': {
     name: 'Julia × Flow field',
     create: () =>
