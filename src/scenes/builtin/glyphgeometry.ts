@@ -92,6 +92,7 @@ const MAX_DENSITY = 200
 const MIN_WORD_LEN = 3
 const MAX_WORD_LEN = 8
 const GLYPH_SCALE = 2.5 // maps the glyphSize knob to a legible on-screen size (same convention as glyphlattice.ts)
+const TRAVEL_RATE = 0.5 // rad/s of glyph-chain traversal per unit of the `speed` knob (see class doc)
 const GLYPH_FLOATS_PER_VERTEX = 8 // pos.xy + uv.xy + color.rgba
 const MAX_GLYPH_VERTS = MAX_RINGS * MAX_DENSITY * 6
 
@@ -227,17 +228,25 @@ interface RenderCtx {
   evolve: number
   bass: number
   breatheFactor: number
+  // Uniform enlargement of the whole manifestation (positions AND glyph size
+  // scale together — see render()) so the mandala fills more of the screen
+  // without losing its "chain of touching glyphs" density.
+  zoom: number
+  // A shared phase added to every ring's rotation so the glyph chains slide
+  // ("traverse") along their curves at a knob-controlled rate, on top of each
+  // ring's own steady `rotRate`. Pure `speed * TRAVEL_RATE * t` — deterministic.
+  travelPhase: number
   ax: number
   ay: number
 }
 
 /** Raw (pre-aspect-correction) point for ring `idx` at arc-parameter `s`. */
 function ringPoint(rp: RingParams, s: number, rotOffset: number, idx: number, ctx: RenderCtx): [number, number] {
-  const rot = rp.rotRate * ctx.evolve * ctx.t + rotOffset
+  const rot = rp.rotRate * ctx.evolve * ctx.t + rotOffset + ctx.travelPhase
   const theta = s + rot
   const driftT = ctx.t * ctx.evolve
   const [rx, ry] = ringRawPoint(rp, theta, driftT, ctx.figure, ctx.bass)
-  const scale = AMP_BASE * ringScaleFor(idx) * ctx.breatheFactor
+  const scale = AMP_BASE * ringScaleFor(idx) * ctx.breatheFactor * ctx.zoom
   return [rx * scale, ry * scale]
 }
 
@@ -295,6 +304,8 @@ export class GlyphGeometryScene implements SceneRuntime {
   meta = { id: 'glyphgeometry', name: 'Glyph Geometry', family: 'geometry' as const }
 
   params: ParamSchema[] = [
+    { name: 'zoom', label: 'Zoom', min: 0.5, max: 2.5, default: 1 },
+    { name: 'speed', label: 'Speed', min: 0, max: 6, default: 1 },
     { name: 'figure', label: 'Figure', min: 0, max: 2, default: 0.4 },
     { name: 'rings', label: 'Rings', min: 1, max: 8, default: 4, step: 1 },
     { name: 'density', label: 'Density', min: 20, max: 200, default: 90, step: 1 },
@@ -454,6 +465,8 @@ export class GlyphGeometryScene implements SceneRuntime {
     const trail = this.getParam('trail')
     const hue = this.getParam('hue')
     const glyphSize = this.getParam('glyphSize')
+    const zoom = this.getParam('zoom')
+    const speed = this.getParam('speed')
 
     const renderCtx: RenderCtx = {
       t,
@@ -461,6 +474,8 @@ export class GlyphGeometryScene implements SceneRuntime {
       evolve,
       bass,
       breatheFactor: 1 + breathe * rms * 0.6, // rms gently breathes the overall radius
+      zoom,
+      travelPhase: speed * TRAVEL_RATE * t,
       ax,
       ay,
     }
@@ -478,7 +493,7 @@ export class GlyphGeometryScene implements SceneRuntime {
     // --- The mandala: rings x density glyph quads, rotated to each ring's
     // local tangent. No line primitive is ever drawn — this pass is the
     // entire visible geometry. ---
-    const halfWBase = (glyphSize * GLYPH_SCALE) / 2
+    const halfWBase = ((glyphSize * GLYPH_SCALE) / 2) * zoom
 
     let cursor = 0
     for (let ring = 0; ring < rings; ring++) {

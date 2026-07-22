@@ -11,6 +11,14 @@ import { expect, test } from '@playwright/test'
  * beat pulses — the ring buffer already holds multiple captured echoes by
  * then, which is what the golden/replay/aspect tests are meant to exercise
  * (not just the empty-buffer startup state).
+ *
+ * Task #46c (follow-up feature work) added three params (`length`,
+ * `dispersion`, `beatDiv`) and a behavioral requirement — the whip must
+ * visibly and regularly reach a wall at defaults — plus two new tests below:
+ * a pixel-evidence wall-margin contract (mirrors guilloche.spec.ts's
+ * full-bleed edge test) and a `beatDiv` echo-cadence smoke test. Goldens were
+ * regenerated for this task — the default `length`/internal-constant retune
+ * needed to make defaults reach a wall is an intentional visual change.
  */
 
 async function boot(page: import('@playwright/test').Page, size?: string) {
@@ -138,6 +146,9 @@ test('whipline stays bounded and finite at extreme params over 300 frames', asyn
   await boot(page)
   await page.evaluate(() => {
     window.__viz!.setParam('rotSpeed', 3)
+    window.__viz!.setParam('length', 1.6)
+    window.__viz!.setParam('dispersion', 4)
+    window.__viz!.setParam('beatDiv', 4)
     window.__viz!.setParam('tension', 1)
     window.__viz!.setParam('bounce', 1)
     window.__viz!.setParam('drive', 1)
@@ -156,6 +167,9 @@ test('whipline stays bounded and finite at extreme params over 300 frames', asyn
   await boot(page)
   await page.evaluate(() => {
     window.__viz!.setParam('rotSpeed', 3)
+    window.__viz!.setParam('length', 1.6)
+    window.__viz!.setParam('dispersion', 4)
+    window.__viz!.setParam('beatDiv', 4)
     window.__viz!.setParam('tension', 1)
     window.__viz!.setParam('bounce', 1)
     window.__viz!.setParam('drive', 1)
@@ -168,6 +182,83 @@ test('whipline stays bounded and finite at extreme params over 300 frames', asyn
   const hash2 = await page.evaluate(() => window.__viz!.pixelHash())
 
   expect(hash2).toBe(hash1)
+})
+
+// --- Wall contract (task #46c): at defaults, the whip must visibly and
+// regularly reach a wall — pixel-evidence based, mirroring guilloche.spec.ts's
+// full-bleed edge test but as a margin BAND scan (the ribbon's exact contact
+// point isn't a fixed coordinate the way guilloche's lathe-curve edge points
+// are), checked periodically over a 400-frame run. Canvas defaults to 640x360
+// (src/testing/hooks.ts) at 16:9. ------------------------------------------
+
+async function wallHits(page: import('@playwright/test').Page): Promise<Record<'left' | 'right' | 'top' | 'bottom', boolean>> {
+  return page.evaluate(() => {
+    const canvas = document.querySelector('canvas')!
+    const gl = canvas.getContext('webgl2')!
+    const width = canvas.width
+    const height = canvas.height
+    const marginX = Math.round(width * 0.05)
+    const marginY = Math.round(height * 0.05)
+    const pixels = new Uint8Array(width * height * 4)
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+    const out = { left: false, right: false, top: false, bottom: false }
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = (y * width + x) * 4
+        if (pixels[idx] + pixels[idx + 1] + pixels[idx + 2] <= 30) continue
+        if (x < marginX) out.left = true
+        if (x >= width - marginX) out.right = true
+        // WebGL readPixels origin is bottom-left: row y=0 is the visual
+        // bottom edge, y=height-1 is the visual top edge (guilloche.spec.ts's
+        // convention too).
+        if (y < marginY) out.bottom = true
+        if (y >= height - marginY) out.top = true
+      }
+    }
+    return out
+  })
+}
+
+test('whipline visibly reaches at least two walls over 400 frames at defaults', async ({ page }) => {
+  await boot(page)
+  const seen = { left: false, right: false, top: false, bottom: false }
+  for (let step = 0; step < 20; step++) {
+    await page.evaluate(() => window.__viz!.renderFrames(20))
+    const hits = await wallHits(page)
+    for (const key of Object.keys(seen) as (keyof typeof seen)[]) {
+      if (hits[key]) seen[key] = true
+    }
+    if (Object.values(seen).filter(Boolean).length >= 2) break
+  }
+  expect(Object.values(seen).filter(Boolean).length).toBeGreaterThanOrEqual(2)
+})
+
+// --- beatDiv (task #46c): a coarser division (whole notes, beatDiv=0) must
+// capture fewer echoes than a finer one (sixteenths, beatDiv=4) over the same
+// demo-signal span. Asserted via pixel-hash inequality (the rendered echo
+// trails differ) rather than exposing new internal state. -------------------
+
+test('beatDiv changes echo-capture cadence (whole notes vs sixteenths differ)', async ({ page }) => {
+  await boot(page)
+  const wholeDoc = {
+    ...minimalDoc(200),
+    scene: { id: 'whipline', params: { beatDiv: 0 } },
+  }
+  const sixteenthDoc = {
+    ...minimalDoc(200),
+    scene: { id: 'whipline', params: { beatDiv: 4 } },
+  }
+  const hashWhole = await page.evaluate((d) => {
+    window.__viz!.loadSession(d)
+    window.__viz!.renderFrames(d.durationFrames)
+    return window.__viz!.pixelHash()
+  }, wholeDoc)
+  const hashSixteenth = await page.evaluate((d) => {
+    window.__viz!.loadSession(d)
+    window.__viz!.renderFrames(d.durationFrames)
+    return window.__viz!.pixelHash()
+  }, sixteenthDoc)
+  expect(hashSixteenth).not.toBe(hashWhole)
 })
 
 // --- Code layer: 'line-fs' and 'fade-fs' stages are both exposed and

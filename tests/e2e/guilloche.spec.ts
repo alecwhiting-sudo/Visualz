@@ -135,6 +135,15 @@ test('guilloche replays byte-identically via loadSession across several beats', 
 
 test('guilloche fills the full 9:16 frame — curve visits all four edge midpoints', async ({ page }) => {
   await boot(page, '&w=360&h=640')
+  // Pin spin=0: at the new stock default (0.06) the whole-figure rotation
+  // (applied to every symmetry copy including the untransformed k=0 base —
+  // see guilloche.ts's class doc) momentarily pulls the base copy's corners
+  // in from the far edges as it turns. That's the intended, accepted
+  // performer-facing behavior of nonzero spin, but it's orthogonal to the
+  // full-bleed CONTRACT this test checks (the envelope construction, not the
+  // rotation) — so freeze spin here the same way symmetry defaults to a
+  // no-op fold (1) that doesn't touch this test either.
+  await page.evaluate(() => window.__viz!.setParam('spin', 0))
   const width = 360
   const height = 640
   const margin = 20 // inset from the true edge
@@ -163,4 +172,62 @@ test('guilloche fills the full 9:16 frame — curve visits all four edge midpoin
   }
 
   expect(seen).toEqual({ top: true, bottom: true, left: true, right: true })
+})
+
+// --- Follow-up: symmetry / breathe / spin ---------------------------------
+//
+// `symmetry`, `breathe`, `spin` are CPU-side only (params 2/5/6 in the new
+// 11-param schema) — the stock `line-fs`/`fade-fs` GLSL is unchanged, so
+// these are param-motion / geometry-path tests, not new shader stages.
+
+test('symmetry=4 renders a different figure than symmetry=1 (the fold does something)', async ({ page }) => {
+  await boot(page)
+  const hashSym1 = await page.evaluate((n) => {
+    window.__viz!.setParam('symmetry', 1)
+    window.__viz!.renderFrames(n)
+    return window.__viz!.pixelHash()
+  }, GOLDEN_FRAME)
+
+  await boot(page)
+  const hashSym4 = await page.evaluate((n) => {
+    window.__viz!.setParam('symmetry', 4)
+    window.__viz!.renderFrames(n)
+    return window.__viz!.pixelHash()
+  }, GOLDEN_FRAME)
+
+  expect(hashSym4).not.toBe(hashSym1)
+})
+
+test('symmetry copies are rotation-true at 9:16 (no NaN/shear collapse)', async ({ page }) => {
+  // Smoke test for the aspect-corrected rotation path (guilloche.ts's
+  // toSquare/toNDCFromSquare/rotateNDC): a non-square aspect is exactly where
+  // a naive NDC-space rotation would shear into an ellipse or, if any NaN
+  // crept into the maths, collapse to a blank/corrupted canvas. Asserting
+  // plain non-blank output after actually exercising `symmetry=2` at 9:16 is
+  // sufficient to catch either failure mode without hand-deriving pixel
+  // positions of a rotated rosette.
+  await boot(page, '&w=360&h=640')
+  await page.evaluate((n) => {
+    window.__viz!.setParam('symmetry', 2)
+    window.__viz!.renderFrames(n)
+  }, GOLDEN_FRAME)
+  expect(await litPixelCount(page)).toBeGreaterThan(2000)
+})
+
+test('spin=+1 and spin=-1 render different figures at the same frame', async ({ page }) => {
+  await boot(page)
+  const hashPos = await page.evaluate((n) => {
+    window.__viz!.setParam('spin', 1)
+    window.__viz!.renderFrames(n)
+    return window.__viz!.pixelHash()
+  }, GOLDEN_FRAME)
+
+  await boot(page)
+  const hashNeg = await page.evaluate((n) => {
+    window.__viz!.setParam('spin', -1)
+    window.__viz!.renderFrames(n)
+    return window.__viz!.pixelHash()
+  }, GOLDEN_FRAME)
+
+  expect(hashNeg).not.toBe(hashPos)
 })

@@ -46,23 +46,49 @@ import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../ty
  * Differential rotation: every substep, each particle gets a tangential
  * velocity kick computed as an angular rate around the CURRENT inner-end
  * position (pos[0], captured once at the top of the substep) — omega_i =
- * rotSpeed * (1 + i/(N-1)), i.e. exactly rotSpeed at the inner end and
- * exactly 2*rotSpeed at the outer end, linear between. Critically, the
- * kick's MAGNITUDE uses the chain's IDEAL rest-length radius (i*restLen),
- * not the particle's instantaneous (possibly stretched) distance from the
- * pivot: using the live distance is a positive-feedback loop (any transient
- * stretch amplifies the kick, which whips it further, which stretches it
- * more — the "spaghetti" the first pass shipped) whereas the ideal-radius
- * version is a bounded torque that can never runaway, only the *direction*
- * of the kick still follows the chain's current shape. The inner end is
- * never pinned: it free-floats like every other particle (the kick's own
- * radius there is ~0, so the swirl is entirely driven by the rest of the
- * chain dragging it via the length constraints). An initial full-strength
- * kick is seeded once in init() ("it begins to rotate"); every subsequent
- * substep re-applies the SAME kick scaled by `drive` ("keep feeding the
- * differential torque so it keeps whipping" — drive=0 coasts on pure
- * momentum/bounces/constraints after the initial swirl, drive=1 keeps
- * driving it hard).
+ * rotSpeed * (1 + (dispersion-1) * i/(N-1)) (computeOmega()), generalizing
+ * the user's original "outer end moving twice as fast as the inner" (that's
+ * exactly `dispersion=2`, the default) to a tunable "difference in size of
+ * the circle on the inner edge versus the outer edge" — 1 = rigid rotation,
+ * 4 = violent 4x shear. Critically, the kick's MAGNITUDE uses the chain's
+ * IDEAL rest-length radius (i*restLen), not the particle's instantaneous
+ * (possibly stretched) distance from the pivot: using the live distance is a
+ * positive-feedback loop (any transient stretch amplifies the kick, which
+ * whips it further, which stretches it more — the "spaghetti" the first pass
+ * shipped) whereas the ideal-radius version is a bounded torque that can
+ * never runaway, only the *direction* of the kick still follows the chain's
+ * current shape. The inner end is never pinned: it free-floats like every
+ * other particle (the kick's own radius there is ~0, so the swirl is
+ * entirely driven by the rest of the chain dragging it via the length
+ * constraints). An initial full-strength kick is seeded once in init() ("it
+ * begins to rotate"); every subsequent substep re-applies the SAME kick
+ * scaled by `drive` ("keep feeding the differential torque so it keeps
+ * whipping" — drive=0 coasts on pure momentum/bounces/constraints after the
+ * initial swirl, drive=1 keeps driving it hard).
+ *
+ * `length` (task #46c, follow-up feature): scales the chain's rest length
+ * per segment (`restLen = baseRestLen * length`, recomputed every update()
+ * so it stays live-tweakable — a macro-slot param). `baseRestLen` (fixed at
+ * init from the center-to-top-edge distance) is what `length=1.0` means;
+ * the default of 1.2 is deliberate — a rope rest-length longer than the
+ * center-to-edge distance guarantees the tip overshoots the screen edge and
+ * wall-bounces regularly once the constraint relaxation stretches the chain
+ * out to it, which is the user's explicit "it never bounces at defaults"
+ * fix. Initial seed positions are unaffected by `length` (still exactly
+ * reach the real top edge at t=0, per the class doc above) — the chain
+ * organically stretches out to the larger rest length over its first few
+ * updates, rather than snapping to it in one frame.
+ *
+ * `beatDiv` (task #46c): decouples the echo-capture cadence from the raw
+ * per-beat pulse. A continuous beat clock (`beatCount` — incremented once
+ * per `beat===1` pulse — plus the fractional `beatPhase` signal) is compared
+ * against a musical division (`BEATS_PER_ECHO[beatDiv]`: whole/half/quarter/
+ * eighth/sixteenth notes); an echo captures whenever the clock crosses into
+ * a new division index. Pure function of the signal stream (`beat`,
+ * `beatPhase`), so replay-deterministic by construction; the first frame is
+ * guarded (no spurious capture before any real beat has elapsed) and at
+ * most one capture fires per frame even if a mid-take `beatDiv` change makes
+ * the division index jump by more than one (see update()).
  */
 
 const N = 48 // particles in the chain — cheap enough to run every substep on the CPU
@@ -72,14 +98,21 @@ const RELAX_ITERS = 6 // constraint-relaxation iterations per substep
 const DAMPING = 0.985 // per-substep velocity retention — tuned (post-review) so the
 // bounded-radius drive settles into one coherent serpentine arc at defaults
 // instead of accumulating into a self-crossing tangle, verified at f200/f400.
-const KICK_SCALE = 0.03 // extra internal attenuation on the continuous drive kick
-// (on top of the `drive` param) — keeps the default whip graceful without
-// changing `drive`'s exposed default/range.
+const KICK_SCALE = 0.045 // extra internal attenuation on the continuous drive kick
+// (on top of the `drive` param) — re-tuned slightly up from the previous
+// rework's 0.03 alongside `length`'s new default (task #46c) so the longer
+// rest length actually reaches and bounces off a wall within a graceful
+// timeframe (verified non-blank wall contact at f200/f400/f700 at defaults),
+// while still reading as one coherent ribbon, not a tangle.
 const RING_CAPACITY = 16 // preallocated echo ring-buffer slots (matches echoes' max)
 
 const HUE_DRIFT_RATE = 0.03 // continuous hue creep, 1/s
 const HUE_BEAT_STEP = 0.055 // extra hue jump fired once per beat pulse
 const PULSE_DECAY_RATE = 5 // 1/s exponential decay of the beat-brightness envelope
+
+// beatDiv -> beats-per-echo (whole, half, quarter [default: current per-beat
+// behavior], eighth, sixteenth notes). Smaller = more frequent captures.
+const BEATS_PER_ECHO = [4, 2, 1, 0.5, 0.25]
 
 // Ribbon geometry (task #46b): `thickness` is real screen-space half-width in
 // NDC now. HALF_WIDTH_PER_THICKNESS chosen so thickness's default (1.2)
@@ -114,6 +147,14 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v))
 }
 
+/** Differential-rotation angular rate for particle `i` (0-indexed, N total):
+ * `rotSpeed` at the inner end, `rotSpeed*dispersion` at the outer end,
+ * linear between — dispersion=2 is the user's original "outer end moving
+ * twice as fast as the inner" spec; dispersion=1 is rigid rotation. */
+function computeOmega(rotSpeed: number, dispersion: number, i: number): number {
+  return rotSpeed * (1 + (dispersion - 1) * (i / (N - 1)))
+}
+
 function hsl(h: number, s: number, l: number): [number, number, number] {
   const a = s * Math.min(l, 1 - l)
   const f = (n: number) => {
@@ -126,15 +167,21 @@ function hsl(h: number, s: number, l: number): [number, number, number] {
 export class WhipLineScene implements SceneRuntime {
   meta = { id: 'whipline', name: 'Whip Line', family: 'geometry' as const }
 
+  // Order is a contract (task #46c): the first 8 are the hardware macro
+  // slots. `tension` dropped out of the macro-8 (still a UI knob, just past
+  // slot 8) to make room for the 3 new params.
   params: ParamSchema[] = [
     { name: 'rotSpeed', label: 'Rotation speed', min: 0, max: 3, default: 1 },
+    { name: 'length', label: 'Length', min: 0.3, max: 1.6, default: 1.2 },
+    { name: 'dispersion', label: 'Dispersion', min: 1, max: 4, default: 2 },
+    { name: 'beatDiv', label: 'Echo spacing', min: 0, max: 4, step: 1, default: 2 },
     { name: 'echoes', label: 'Echoes', min: 0, max: 16, step: 1, default: 5 },
-    { name: 'tension', label: 'Tension', min: 0.5, max: 1, default: 0.85 },
-    { name: 'bounce', label: 'Wall bounce', min: 0.3, max: 1, default: 0.8 },
     { name: 'drive', label: 'Drive', min: 0, max: 1, default: 0.5 },
+    { name: 'bounce', label: 'Wall bounce', min: 0.3, max: 1, default: 0.8 },
+    { name: 'pulse', label: 'Beat pulse', min: 0, max: 1, default: 0.6 },
+    { name: 'tension', label: 'Tension', min: 0.5, max: 1, default: 0.85 },
     { name: 'thickness', label: 'Thickness', min: 0.5, max: 3, default: 1.2 },
     { name: 'trail', label: 'Trail', min: 0.7, max: 0.995, default: 0.82 },
-    { name: 'pulse', label: 'Beat pulse', min: 0, max: 1, default: 0.6 },
   ]
 
   private values = new Map<string, number>()
@@ -156,7 +203,8 @@ export class WhipLineScene implements SceneRuntime {
   private posY = new Float32Array(N)
   private prevX = new Float32Array(N)
   private prevY = new Float32Array(N)
-  private restLen = 0
+  private baseRestLen = 0 // fixed at init: per-segment rest length at `length`=1.0
+  private restLen = 0 // this frame's effective rest length (baseRestLen * length), see update()
 
   // --- Ribbon-builder scratch (reused across head + every echo draw) ------
   private ndcX = new Float32Array(N)
@@ -173,6 +221,11 @@ export class WhipLineScene implements SceneRuntime {
   // --- Color / brightness state --------------------------------------------
   private huePhase = 0
   private pulseEnv = 0
+
+  // --- beatDiv echo-capture clock (task #46c, see class doc) ---------------
+  private beatCount = 0
+  private lastEchoIndex = 0
+  private echoClockInit = false
 
   init(gpu: Gpu, _seed: number): void {
     this.gpu = gpu
@@ -192,7 +245,8 @@ export class WhipLineScene implements SceneRuntime {
       this.prevX[i] = 0
       this.prevY[i] = t * Wy
     }
-    this.restLen = Wy / (N - 1)
+    this.baseRestLen = Wy / (N - 1)
+    this.restLen = this.baseRestLen * clamp(this.getParam('length'), 0.3, 1.6)
 
     // Seed the initial swirl ("it begins to rotate") — a one-off full-strength
     // tangential kick regardless of `drive`, encoded the same way update()'s
@@ -200,8 +254,9 @@ export class WhipLineScene implements SceneRuntime {
     // backward by the kick velocity so the very first substep already
     // carries this momentum.
     const rotSpeed0 = this.getParam('rotSpeed')
+    const dispersion0 = clamp(this.getParam('dispersion'), 1, 4)
     for (let i = 0; i < N; i++) {
-      const omega = rotSpeed0 * (1 + i / (N - 1))
+      const omega = computeOmega(rotSpeed0, dispersion0, i)
       const { kx, ky } = this.kickVector(i, this.posX[i], this.posY[i], this.posX[0], this.posY[0], omega)
       const vx = kx * DT_SUB
       const vy = ky * DT_SUB
@@ -221,6 +276,10 @@ export class WhipLineScene implements SceneRuntime {
 
     this.huePhase = 0
     this.pulseEnv = 0
+
+    this.beatCount = 0
+    this.lastEchoIndex = 0
+    this.echoClockInit = false
 
     const gl = gpu.gl
     this.lineProgram = gpu.compileProgram(PASSTHROUGH_VS, this.lineSource)
@@ -258,9 +317,14 @@ export class WhipLineScene implements SceneRuntime {
   update(ctx: FrameContext): void {
     const { frame, signals } = ctx
     const rotSpeed = this.getParam('rotSpeed')
+    const dispersion = clamp(this.getParam('dispersion'), 1, 4)
     const tension = clamp(this.getParam('tension'), 0.5, 1)
     const bounce = clamp(this.getParam('bounce'), 0.3, 1)
     const drive = clamp(this.getParam('drive'), 0, 1)
+
+    // `length` scales the rest length live every frame (a macro-slot param —
+    // see class doc for why the default of 1.15 is deliberate).
+    this.restLen = this.baseRestLen * clamp(this.getParam('length'), 0.3, 1.6)
 
     // Aspect read fresh every update() (gpu dims track canvas/resize()), so
     // wall bounds track the real screen edges even if the surface resizes.
@@ -269,21 +333,41 @@ export class WhipLineScene implements SceneRuntime {
     const Wy = Math.max(1 / aspect, 1)
 
     for (let s = 0; s < SUBSTEPS; s++) {
-      this.integrate(rotSpeed, drive, bounce, Wx, Wy)
+      this.integrate(rotSpeed, dispersion, drive, bounce, Wx, Wy)
       for (let k = 0; k < RELAX_ITERS; k++) this.relax(tension)
     }
 
     // Hue: continuous drift plus a per-beat jump ("its hue changes ... to the
     // beat"). Brightness: a CPU dt-decay envelope, reset to 1 on each beat,
-    // scaled by `pulse` at draw time.
+    // scaled by `pulse` at draw time. Both are tied to the raw per-beat pulse
+    // (never to `beatDiv`, which only governs echo-capture cadence below).
     this.huePhase = (this.huePhase + HUE_DRIFT_RATE * frame.dt) % 1
     const beat = signals.get('beat')
     if (beat === 1) {
       this.huePhase = (this.huePhase + HUE_BEAT_STEP) % 1
       this.pulseEnv = 1
-      this.captureEcho()
+      this.beatCount += 1
     } else {
       this.pulseEnv *= Math.exp(-PULSE_DECAY_RATE * frame.dt)
+    }
+
+    // Echo-capture cadence (`beatDiv`, task #46c — see class doc): a
+    // continuous beat clock compared against a musical division. Pure
+    // function of (beatCount, beatPhase); guards the first frame (no
+    // spurious capture at clock 0) and fires at most one capture per frame
+    // even if `beatDiv` changes mid-take jump the division index by more
+    // than one — the `!==` check below only ever advances `lastEchoIndex`
+    // to the new value once, never loops to "catch up".
+    const beatDivIndex = clamp(Math.round(this.getParam('beatDiv')), 0, BEATS_PER_ECHO.length - 1)
+    const beatsPerEcho = BEATS_PER_ECHO[beatDivIndex]
+    const beatClock = this.beatCount + signals.get('beatPhase')
+    const echoIndex = Math.floor(beatClock / beatsPerEcho)
+    if (!this.echoClockInit) {
+      this.lastEchoIndex = echoIndex
+      this.echoClockInit = true
+    } else if (echoIndex !== this.lastEchoIndex) {
+      this.lastEchoIndex = echoIndex
+      this.captureEcho()
     }
   }
 
@@ -307,7 +391,7 @@ export class WhipLineScene implements SceneRuntime {
    * tangential drive kick, then wall-bounce reflection. Constraint relaxation
    * (equal segment lengths — "remains attached to the next part") runs
    * separately, right after this, in relax(). */
-  private integrate(rotSpeed: number, drive: number, bounce: number, Wx: number, Wy: number): void {
+  private integrate(rotSpeed: number, dispersion: number, drive: number, bounce: number, Wx: number, Wy: number): void {
     const pivotX = this.posX[0]
     const pivotY = this.posY[0]
     for (let i = 0; i < N; i++) {
@@ -317,9 +401,9 @@ export class WhipLineScene implements SceneRuntime {
       let vy = (py - this.prevY[i]) * DAMPING
 
       // Differential rotation drive: omega_i linear from rotSpeed (i=0) to
-      // 2*rotSpeed (i=N-1) — the user's exact "outer end moving twice as
-      // fast as the inner end."
-      const omega = rotSpeed * (1 + i / (N - 1))
+      // rotSpeed*dispersion (i=N-1) — dispersion=2 is the user's original
+      // "outer end moving twice as fast as the inner end."
+      const omega = computeOmega(rotSpeed, dispersion, i)
       const { kx, ky } = this.kickVector(i, px, py, pivotX, pivotY, omega)
       vx += kx * DT_SUB * drive * KICK_SCALE
       vy += ky * DT_SUB * drive * KICK_SCALE

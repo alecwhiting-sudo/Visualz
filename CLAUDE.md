@@ -28,7 +28,7 @@ A change without a runnable check is not done. Golden tests run twice locally if
 determinism is in doubt — the second run must match byte-for-byte.
 
 ## Delegation hierarchy
-The main session (Fable) is the architect: it owns interface design, cross-module
+The main session (Opus 4.8) is the architect: it owns interface design, cross-module
 changes, ARCHITECTURE.md/REQUIREMENTS.md edits, and final review before push.
 Delegate the rest:
 

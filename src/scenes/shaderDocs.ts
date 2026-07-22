@@ -77,6 +77,138 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
       ],
     },
   },
+  terrain: {
+    'line-fs': {
+      summary:
+        "The app's first true 3D scene: a wireframe landscape scrolls toward a pinhole camera, one new row spawning at the horizon each time the scroll crosses a boundary, its ridges carved live from the bass massif, mid side-ridges and treble sparkle. All the projection, depth fog and height tint happen CPU-side; this shader just paints the interpolated per-vertex color the grid arrives with.",
+      tryThis: [
+        {
+          target: 'outColor = vColor;',
+          effect:
+            'the whole body — replace with outColor = vec4(vColor.rgb * 1.6, 1.0); to push the wireframe past 1.0 for a blown-out neon glow under the trail fade.',
+        },
+        {
+          target: 'vColor',
+          effect:
+            'the interpolated line color (height tint × depth fog, both computed CPU-side); use vColor.gbra in the output to rotate the whole palette toward cyan/magenta without touching the maths.',
+        },
+        {
+          target: 'out vec4 outColor;',
+          effect:
+            'the stage\'s single output; add a `uniform float uBoost;` line above it and multiply the result to wire in a live brightness knob (needs a matching setUniform in render()).',
+        },
+      ],
+    },
+    'fade-fs': {
+      summary:
+        'The persistence pass: one nearly-transparent dark rectangle drawn every frame, leaving the receding wireframe a faint motion wake so the terrain reads as continuous flight rather than a flicker of disconnected grids. The Fog/Trail feel comes from its opacity.',
+      tryThis: [
+        {
+          target: 'vec4(0.0, 0.0, 0.0, uFade)',
+          effect:
+            'the fade color; try 0.0, 0.01, 0.04 for a wake that settles into deep blue instead of pure black, matching the synthwave grid.',
+        },
+        {
+          target: 'uFade',
+          effect:
+            'multiply it (uFade * 0.5) for much longer wakes — the ridges smear into light-trails as they rush past the camera.',
+        },
+        {
+          target: 'void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }',
+          effect:
+            'replace the body with a full wipe (alpha 1.0) to kill the wake entirely — only the crisp current grid remains, a harder Tron look.',
+        },
+      ],
+    },
+  },
+  orrery: {
+    'line-fs': {
+      summary:
+        'A visible drawing machine: beat-locked geared arms swing on an escapement, their pen tracing a persistent ornamental curve while the mechanism itself — gears, rods, joints — redraws crisply on top every frame. Every phrase the gear ratios change, so the accumulated filigree keeps evolving. This shader colors each stroke; the hue auto-advances and alpha carries the additive brightening of overlapping ink.',
+      tryThis: [
+        {
+          target: 'uColor',
+          effect:
+            'the per-stroke ink/machine color (hue auto-advances over the drawing); replace with a fixed vec3(0.9, 0.8, 0.5) for a single-color brass engraving.',
+        },
+        {
+          target: 'uAlpha',
+          effect:
+            "the additive contribution per stroke; hardcode to 1.0 to make the faint accumulating trace as bright as the machine's own rods.",
+        },
+        {
+          target: 'outColor = vec4(uColor * uAlpha, uAlpha);',
+          effect:
+            'swap uColor * uAlpha for uColor * uAlpha * 1.5 to over-brighten crossing strokes into hot glowing nodes where the pen doubles back.',
+        },
+      ],
+    },
+    'fade-fs': {
+      summary:
+        "The persistence pass: a near-transparent dark rectangle each frame. It's what lets the pen's trace accumulate into filigree instead of vanishing — a slower fade keeps more of the drawing, a faster one keeps only the machine and its freshest ink.",
+      tryThis: [
+        {
+          target: 'vec4(0.0, 0.0, 0.0, uFade)',
+          effect:
+            'the fade color; try 0.03, 0.02, 0.0 for a warm sepia settling under the trace instead of pure black — an aged-paper feel.',
+        },
+        {
+          target: 'uFade',
+          effect:
+            'multiply it (uFade * 0.4) so the pen paints an almost-permanent engraving that barely fades across the whole phrase.',
+        },
+        {
+          target: 'void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }',
+          effect:
+            'replace the body with a full wipe (alpha 1.0) to erase the trace every frame — you then see only the bare geared machine turning.',
+        },
+      ],
+    },
+  },
+  whipstorm: {
+    'line-fs': {
+      summary:
+        'A Whip Line variant with several whips at once: each is a chain of attached particles (verlet constraints) swinging under a differential rotation and bouncing off the walls, but their heads also attract or repel each other under a bass-signed magnetic force, so the whips braid and scatter as a storm. Wall strikes throw off hash-deterministic sparks. This shader colors each whip (its own hue) and its stepped-down echo strands.',
+      tryThis: [
+        {
+          target: 'uColor',
+          effect:
+            'the per-whip hue; replace with a fixed vec3(1.0, 1.0, 1.0) so every whip and spark is pure white — a monochrome ink-storm.',
+        },
+        {
+          target: 'uAlpha',
+          effect:
+            'the per-strand opacity (head brightest, echoes stepped down); hardcode to 1.0 to make every echo strand as solid as the whip head.',
+        },
+        {
+          target: 'outColor = vec4(uColor, uAlpha);',
+          effect:
+            'swap for outColor = vec4(uColor * 1.6, uAlpha); to push the whips past 1.0 for a blown-out glowing storm under the trail fade.',
+        },
+      ],
+    },
+    'fade-fs': {
+      summary:
+        'The persistence pass: one nearly-transparent dark rectangle per frame, leaving each whip and its wall-sparks a faint motion wake. The Trail knob feeds its opacity — the difference between crisp whips and long smeared light-storms.',
+      tryThis: [
+        {
+          target: 'vec4(0.0, 0.0, 0.0, uFade)',
+          effect:
+            'the fade color; try 0.04, 0.0, 0.05 for a wake that settles into dark magenta instead of pure black.',
+        },
+        {
+          target: 'uFade',
+          effect:
+            'multiply it (uFade * 0.5) for much longer wakes than the Trail knob allows — the whips paint persistent ribbons across the storm.',
+        },
+        {
+          target: 'void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }',
+          effect:
+            'replace the body with a full wipe (alpha 1.0) to remove the wake — only the crisp live whips and their sparks remain.',
+        },
+      ],
+    },
+  },
   lissajous: {
     'line-fs': {
       summary:
