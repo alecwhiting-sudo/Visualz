@@ -17,6 +17,9 @@ import { PhysarumScene } from './builtin/physarum'
 import { OrbitDiveScene } from './builtin/orbitdive'
 import { WhipLineScene } from './builtin/whipline'
 import { GuillocheScene } from './builtin/guilloche'
+import { TerrainFlightScene } from './builtin/terrain'
+import { OrreryScene } from './builtin/orrery'
+import { WhipStormScene } from './builtin/whipstorm'
 import { CompositeScene, type CompositeChild } from './composite'
 import type { SceneRuntime } from './types'
 
@@ -65,6 +68,9 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
   orbitdive: { name: 'Orbit Dive', create: () => new OrbitDiveScene() },
   whipline: { name: 'Whip Line', create: () => new WhipLineScene() },
   guilloche: { name: 'Guilloché', create: () => new GuillocheScene() },
+  terrain: { name: 'Terrain Flight', create: () => new TerrainFlightScene() },
+  orrery: { name: 'Orrery', create: () => new OrreryScene() },
+  whipstorm: { name: 'Whip Storm', create: () => new WhipStormScene() },
   'blend-julia-flow': {
     name: 'Julia × Flow field',
     create: () =>
