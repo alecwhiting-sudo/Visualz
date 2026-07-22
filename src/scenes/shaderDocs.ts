@@ -332,7 +332,7 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
   glyphgeometry: {
     'glyph-fs': {
       summary:
-        "Everything on screen is text — there are no line primitives in this scene at all. Nested rings of glyphs trace closed curves that morph between a superformula, a spirograph, and a star-rose as the Figure knob turns, each character rotated to the curve's local direction. This shader stamps each glyph: it reads the baked 5×7 bitmap font atlas as an on/off ink mask and multiplies it by the ring's color and trail alpha.",
+        "Everything on screen is text — there are no line primitives in this scene at all. Nested rings of glyphs trace closed curves that morph between an epitrochoid rosette, a spirograph, and a star-rose as the Figure knob turns, each character rotated to the curve's local direction. This shader stamps each glyph: it reads the baked 5×7 bitmap font atlas as an on/off ink mask and multiplies it by the ring's color and trail alpha.",
       tryThis: [
         {
           target: 'float mask = texture(uAtlas, vUV).r;',

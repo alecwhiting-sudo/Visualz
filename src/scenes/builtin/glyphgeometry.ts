@@ -34,20 +34,11 @@ import {
  *
  * The outline maths continuously morphs across three families by the
  * `figure` knob (0..2):
- *   0 — superformula (Gielis curve): r(theta) = (|cos(m*theta/4)|^n2 +
- *       |sin(m*theta/4)|^n3)^(-1/n1). `m`/`n1`/`n2`/`n3` drift slowly with
- *       time (rate set by `evolve`); `bass` widens the swing of `m`'s drift
- *       for audio-reactive spikiness without ever touching the PRNG.
- *   1 — spirograph epitrochoid: x=(R-r)cos(th)+d*cos((R-r)/r * th),
- *       y=(R-r)sin(th)-d*sin((R-r)/r * th), R/r/d rolled per ring at init.
- *       R is constructed as an exact integer multiple of r so the curve
- *       always closes after exactly one `s` loop (0..TAU) — no partial-loop
- *       seams in the sampled ring.
- *   2 — star-polygon / rose hybrid: a triangle-wave-in-angle "sharp star"
- *       radius is blended with a plain cos(k*theta) rose term (the
- *       "softened by a cos term" the task asked for) by a per-ring softness
- *       draw.
- * `figure` in [0,1] blends superformula->spirograph; [1,2] blends
+ *   0 — epitrochoid rosette (rolling-circle curve, integer ratio so it
+ *       closes; petal depth breathed by bass)
+ *   1 — spirograph (inner-roll trochoid)
+ *   2 — star-polygon / rose hybrid
+ * `figure` in [0,1] blends epitrochoid->spirograph; [1,2] blends
  * spirograph->star/rose — same adjacent-pair lerp idiom as glyphlattice's
  * `morph`.
  *
@@ -105,12 +96,17 @@ const GLYPH_FLOATS_PER_VERTEX = 8 // pos.xy + uv.xy + color.rgba
 const MAX_GLYPH_VERTS = MAX_RINGS * MAX_DENSITY * 6
 
 interface RingParams {
-  // Superformula (family A).
-  sfM: number
-  sfN1: number
-  sfN2: number
-  sfN3: number
-  sfPhase: number
+  // Epitrochoid rosette (family A) — swapped in for the Gielis superformula
+  // (user decision: the superformula's APPLICATIONS are actively patented
+  // (Gielis/Genicap), a commercial-sale risk; the epitrochoid is classic
+  // public-domain 19th-century curve maths with comparable ornamental
+  // richness). hyK is the integer rolling ratio so the curve closes over one
+  // s:[0,TAU) loop; hyD is the pen distance (petal depth), breathed by bass.
+  hyr: number
+  hyK: number
+  hyD: number
+  hyWob: number
+  hyPhase: number
   // Spirograph epitrochoid (family B). spR is always spr*kFactor so R/r is
   // an exact integer and the curve closes after exactly one s:[0,TAU) loop.
   spR: number
@@ -133,11 +129,11 @@ function genRingParams(rng: Prng): RingParams {
   const kFactor = 2 + Math.floor(rng() * 4) // 2..5
   const spR = spr * kFactor
   return {
-    sfM: 2 + Math.floor(rng() * 10),
-    sfN1: 0.3 + rng() * 3,
-    sfN2: 0.5 + rng() * 4,
-    sfN3: 0.5 + rng() * 4,
-    sfPhase: rng() * TAU,
+    hyr: 1 + Math.floor(rng() * 3),
+    hyK: 2 + Math.floor(rng() * 5),
+    hyD: 0.4 + rng() * 1.4,
+    hyWob: 0.15 + rng() * 0.5,
+    hyPhase: rng() * TAU,
     spR,
     spr,
     spd: (0.3 + rng() * 1.2) * spr,
@@ -161,21 +157,22 @@ function genRingWord(rng: Prng): RingWord {
   return { glyphs }
 }
 
-/** Family A: superformula / Gielis curve. `bass` widens the drift swing of
- *  `m` ("spikiness"), never its base value, so figure=0 stays recognizable
- *  as the same ring shape between beats. */
-function superformulaPoint(rp: RingParams, theta: number, driftT: number, bass: number): [number, number] {
-  const spike = 1 + bass * 1.6
-  const mDrift = rp.sfM + spike * 0.7 * Math.sin(driftT * 0.11 + rp.sfPhase)
-  const n1Drift = Math.max(0.15, rp.sfN1 + 0.3 * Math.sin(driftT * 0.05 + rp.sfPhase * 1.3))
-  const n2Drift = Math.max(0.2, rp.sfN2 + 0.4 * Math.cos(driftT * 0.06 + rp.sfPhase * 0.7))
-  const n3Drift = Math.max(0.2, rp.sfN3 + 0.4 * Math.sin(driftT * 0.04 - rp.sfPhase * 0.5))
-  const angle = (mDrift * theta) / 4
-  const term1 = Math.pow(Math.abs(Math.cos(angle)), n2Drift)
-  const term2 = Math.pow(Math.abs(Math.sin(angle)), n3Drift)
-  const denom = Math.max(term1 + term2, 1e-4)
-  const r = Math.min(1.8, Math.max(0.2, Math.pow(denom, -1 / n1Drift)))
-  return [r * Math.cos(theta), r * Math.sin(theta)]
+/** Family A: epitrochoid rosette — a circle of radius `hyr` rolling around
+ *  the OUTSIDE of a larger one (integer ratio hyK+1, so the curve closes),
+ *  pen at distance `d` from the rolling center. `bass` deepens the petals
+ *  (pen distance), never the ratio, so figure=0 stays recognizable as the
+ *  same ring shape between beats; `hyWob` adds a slow ornamental wobble. */
+function epitrochoidPoint(rp: RingParams, theta: number, driftT: number, bass: number): [number, number] {
+  const th = theta + rp.hyPhase
+  const ratio = rp.hyK + 1
+  const arm = rp.hyr * ratio // R + r with R = hyr * hyK
+  const d =
+    rp.hyD * rp.hyr * (1 + bass * 0.5 + rp.hyWob * Math.sin(driftT * 0.09 + rp.hyPhase))
+  const reach = arm + Math.abs(d)
+  const scale = 1 / (reach * 1.05)
+  const x = (arm * Math.cos(th) - d * Math.cos(ratio * th)) * scale
+  const y = (arm * Math.sin(th) - d * Math.sin(ratio * th)) * scale
+  return [x, y]
 }
 
 /** Family B: spirograph epitrochoid, normalized so its max reach is ~1
@@ -207,12 +204,12 @@ function starRosePoint(rp: RingParams, theta: number): [number, number] {
   return [r * Math.cos(th), r * Math.sin(th)]
 }
 
-/** Blends the three families by `figure` (0..2): [0,1] superformula->
+/** Blends the three families by `figure` (0..2): [0,1] epitrochoid->
  *  spirograph, [1,2] spirograph->star/rose. */
 function ringRawPoint(rp: RingParams, theta: number, driftT: number, figure: number, bass: number): [number, number] {
   const f = figure < 0 ? 0 : figure > 2 ? 2 : figure
   if (f <= 1) {
-    const [ax, ay] = superformulaPoint(rp, theta, driftT, bass)
+    const [ax, ay] = epitrochoidPoint(rp, theta, driftT, bass)
     const [bx, by] = spirographPoint(rp, theta)
     return [ax + (bx - ax) * f, ay + (by - ay) * f]
   }
