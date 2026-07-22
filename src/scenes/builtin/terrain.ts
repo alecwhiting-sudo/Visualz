@@ -211,6 +211,13 @@ export class TerrainFlightScene implements SceneRuntime {
   private gpu!: Gpu
   private seedXor = 0
 
+  // The TerrainMirrorScene subclass (bottom of this file) sets this true to
+  // ALSO emit every terrain line reflected across the horizon line into the
+  // upper half of the screen — a "water reflection, but upward" mirror. Base
+  // Terrain Flight leaves it false, so its render path (and golden) is
+  // byte-for-byte unchanged: every mirror branch below is gated on it.
+  protected mirror = false
+
   // Ring buffer: two components per (row,col) cell, kept separate so `ridge`
   // remixes noise vs music live rather than being baked in at spawn time.
   private ringNoise = new Float32Array(ROWS * COLS)
@@ -257,6 +264,11 @@ export class TerrainFlightScene implements SceneRuntime {
     this.scrollDistance = 0
     this.bobEnv = 0
     this.flashEnv = 0
+
+    // Mirror mode emits every line twice (real + horizon reflection), so it
+    // needs double the vertex buffer. Base Terrain Flight keeps the original
+    // single-size buffer (this.mirror === false).
+    this.lineVerts = new Float32Array(MAX_VERTS * (this.mirror ? 2 : 1) * FLOATS_PER_VERTEX)
 
     // Pre-fill the ring so the very first frame already shows a full grid.
     // Spawned with all-zero signals (init() gets no SignalBus) — the first
@@ -406,6 +418,26 @@ export class TerrainFlightScene implements SceneRuntime {
       this.lineVerts[n++] = this.gridB[idx]
       this.lineVerts[n++] = 1.0
     }
+
+    // Terrain Mirror: the horizon (where infinitely-far flat ground projects)
+    // sits at y = tan(pitch)/halfExtentY in the same NDC gridY lives in.
+    // Reflecting each vertex across it (y -> 2*horizonY - y) maps the terrain,
+    // which lives below the horizon, up into the empty upper half — a mirror
+    // that meets the real terrain exactly at the horizon line. The reflection
+    // is dimmed by the Reflection knob (a real reflection is darker than the
+    // source). Gated on this.mirror, so base Terrain Flight is untouched.
+    const mirror = this.mirror
+    const horizonY = (sinP / cosP) / halfExtentY
+    const reflect = mirror ? clamp(this.getParam('reflect'), 0, 1) : 0
+    const pushMirror = (idx: number) => {
+      this.lineVerts[n++] = this.gridX[idx]
+      this.lineVerts[n++] = 2 * horizonY - this.gridY[idx]
+      this.lineVerts[n++] = this.gridR[idx] * reflect
+      this.lineVerts[n++] = this.gridG[idx] * reflect
+      this.lineVerts[n++] = this.gridB[idx] * reflect
+      this.lineVerts[n++] = 1.0
+    }
+
     for (let j = 0; j < ROWS; j++) {
       for (let c = 0; c < COLS - 1; c++) {
         const a = j * COLS + c
@@ -413,6 +445,10 @@ export class TerrainFlightScene implements SceneRuntime {
         if (this.gridVisible[a] && this.gridVisible[b]) {
           push(a)
           push(b)
+          if (mirror) {
+            pushMirror(a)
+            pushMirror(b)
+          }
         }
       }
     }
@@ -423,6 +459,10 @@ export class TerrainFlightScene implements SceneRuntime {
         if (this.gridVisible[a] && this.gridVisible[b]) {
           push(a)
           push(b)
+          if (mirror) {
+            pushMirror(a)
+            pushMirror(b)
+          }
         }
       }
     }
@@ -491,4 +531,31 @@ export class TerrainFlightScene implements SceneRuntime {
         throw new Error(`Unknown shader stage "${key}" for scene "${this.meta.id}"`)
     }
   }
+}
+
+/**
+ * "Terrain Mirror" — Terrain Flight with a horizon mirror: the same 3D
+ * wireframe flythrough, but every line is also drawn reflected across the
+ * horizon line into the upper half of the screen (see the base render()'s
+ * Pass 2). The terrain and its reflection meet at the horizon like a landscape
+ * over still water, except the water is the sky. A `Reflection` knob (second
+ * param, so it lands on a macro slot) dims the mirrored copy from invisible
+ * (0) to a full-brightness twin (1). Everything else — geometry, determinism
+ * discipline, editable shaders — is inherited unchanged from TerrainFlightScene.
+ */
+export class TerrainMirrorScene extends TerrainFlightScene {
+  meta = { id: 'terrainmirror', name: 'Terrain Mirror', family: 'geometry' as const }
+  protected mirror = true
+
+  params: ParamSchema[] = [
+    { name: 'speed', label: 'Speed', min: 0.2, max: 3, default: 1 },
+    { name: 'reflect', label: 'Reflection', min: 0, max: 1, default: 0.6 },
+    { name: 'relief', label: 'Relief', min: 0.2, max: 2.5, default: 1 },
+    { name: 'ridge', label: 'Ridge', min: 0, max: 1, default: 0.5 },
+    { name: 'pitch', label: 'Pitch', min: 0.05, max: 0.5, default: 0.22 },
+    { name: 'fog', label: 'Fog', min: 0.3, max: 1, default: 0.65 },
+    { name: 'glow', label: 'Glow', min: 0.3, max: 2, default: 1 },
+    { name: 'hue', label: 'Hue', min: 0, max: 1, default: 0.58 },
+    { name: 'pulseBob', label: 'Pulse bob', min: 0, max: 1, default: 0.5 },
+  ]
 }

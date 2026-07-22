@@ -16,7 +16,7 @@ import { SHADER_DOCS } from '../../src/scenes/shaderDocs'
 describe('SHADER_DOCS', () => {
   const sceneIds = Object.keys(SHADER_DOCS)
 
-  it('covers all 22 builtin scenes (not the blend-* composites)', () => {
+  it('covers all 23 builtin scenes (not the blend-* composites)', () => {
     expect(sceneIds.sort()).toEqual(
       [
         'flowfield',
@@ -37,6 +37,7 @@ describe('SHADER_DOCS', () => {
         'physarum',
         'resonance',
         'terrain',
+        'terrainmirror',
         'tunnel',
         'waves',
         'whipline',

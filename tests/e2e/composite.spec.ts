@@ -238,7 +238,7 @@ test('shader stages are prefixed and blend-fs is editable', async ({ page }) => 
 // reuses the same frame 60 convention — eyeballed non-blank, colorful mandala
 // blend of the tunnel's rings and the kaleidoscope's feedback fold. -------
 
-for (const combo of ['blend-rd-flow', 'blend-tunnel-kaleido'] as const) {
+for (const combo of ['blend-rd-flow', 'blend-tunnel-kaleido', 'blend-tunnel-terrainmirror'] as const) {
   test(`${combo} renders deterministically at frame 60`, async ({ page }) => {
     await page.goto(`/?test=1&seed=42&scene=${combo}&count=16384`)
     await page.waitForFunction(() => window.__viz !== undefined)
