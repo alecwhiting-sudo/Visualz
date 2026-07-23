@@ -20,6 +20,7 @@ import { GuillocheScene } from './builtin/guilloche'
 import { TerrainFlightScene, TerrainMirrorScene } from './builtin/terrain'
 import { OrreryScene } from './builtin/orrery'
 import { WhipStormScene } from './builtin/whipstorm'
+import { NeuralWebScene } from './builtin/neuralweb'
 import { CompositeScene, type CompositeChild } from './composite'
 import type { SceneRuntime } from './types'
 
@@ -73,6 +74,7 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
   terrainmirror: { name: 'Terrain Mirror', create: () => new TerrainMirrorScene() },
   orrery: { name: 'Orrery', create: () => new OrreryScene() },
   whipstorm: { name: 'Whip Storm', create: () => new WhipStormScene() },
+  neuralweb: { name: 'Neural Web', create: () => new NeuralWebScene() },
   'blend-julia-flow': {
     name: 'Julia × Flow field',
     create: () =>
