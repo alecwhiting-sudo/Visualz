@@ -6,35 +6,36 @@ import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../ty
 /**
  * Geometry family: "Neural Web" — a graph that BUILDS itself to the beat. It
  * starts as a small seed cluster; every beat spawns `additions` new nodes, each
- * springing from a randomly chosen living node and wiring itself to that parent
- * plus its next-nearest neighbours (`connectivity` edges total). A force-
- * directed layout (edges are springs, all nodes repel) makes the web spread
- * and rearrange organically as it grows. Nodes live for `fade` seconds then
- * dim to black and are culled; their edges go with them.
+ * springing from a (frontier-biased) living node and wiring to that parent plus
+ * its next-nearest neighbours (`connectivity` edges total). A force-directed
+ * layout (edges are springs, all nodes repel) spreads the web; a soft boundary
+ * keeps it framed on screen (so population is set by `fade`/lifetime, not by
+ * nodes escaping), and `zoom` enlarges that boundary for more room to grow.
+ * Nodes live `fade` seconds then dim to black and are culled, edges with them.
  *
- * Each node is randomly a BASS (red), MID (blue) or TREBLE (green) node. When a
- * band gets loud, a few of that band's living nodes fire a light PULSE that
- * travels FORWARD ONLY — along edges toward YOUNGER nodes (higher spawn id) —
- * re-emitting at each node it reaches, so a wavefront ripples out through the
- * part of the graph that grew after the emitter. A node that has begun fading
- * can neither emit nor re-emit. Pulses are drawn additively, so where a red and
- * a blue pulse cross you get magenta, all three give white — real light mixing,
- * for free from the ONE,ONE blend (see class doc's "colour" note).
+ * PULSES OF LIGHT (redesigned): the bass is the single driver. On each bass hit
+ * a pulse is injected into 2-4 nodes and travels FORWARD ONLY — along edges
+ * toward YOUNGER nodes (higher spawn id) — re-emitting at each node it reaches,
+ * so a wavefront ripples through the part of the graph that grew after it.
+ * `reach` caps how many nodes deep it propagates (0-40). A node that has begun
+ * fading can neither emit nor re-emit.
+ *
+ * COLOUR: `hue` randomises each injected pulse's initial hue (0 = white). When
+ * pulses CONVERGE on a node, the re-emitted pulse adopts the DOMINANT incoming
+ * colour — the majority by hue, not an additive blend (three arrivals, two blue
+ * one red -> blue continues). So colour propagates by consensus through the web.
  *
  * DETERMINISM (ARCHITECTURE.md §1):
- *  - Randomness (seed-cluster layout, per-node band, parent choice, spawn
- *    jitter) comes only from the seeded `random` PRNG, advanced ONLY at init()
- *    and on each beat-spawn — a discrete event, exactly resonance.ts's rule. It
- *    is NEVER advanced per-frame.
- *  - Which nodes fire a pulse on a loud band uses a PURE HASH of (fireCounter,
- *    node id), not the shared PRNG, so the spawn stream stays independent of how
- *    many pulses happened to fire (pulses are signal-triggered, and coupling the
- *    two streams would make node layout depend on audio loudness history).
+ *  - Spawn randomness (seed layout, parent choice, jitter) comes only from the
+ *    seeded `random` PRNG, advanced ONLY at init() and on each beat-spawn — a
+ *    discrete event (resonance.ts's rule), never per-frame.
+ *  - Pulse injection (which nodes fire, their random hue) uses a PURE HASH of
+ *    an injection counter, independent of the spawn PRNG, so node layout never
+ *    depends on audio loudness history.
  *  - The force sim and pulse travel advance a FIXED amount per update() call
- *    (frame-clocked, like whipline.ts) — NOT scaled by frame.dt — so frame N is
- *    identical in live (60fps) and render (fixed 1/fps) mode. Node lifetime/fade
- *    is measured in real seconds off frame.time (a genuinely continuous quantity
- *    that render mode reproduces exactly by stepping time in fixed increments).
+ *    (frame-clocked, like whipline.ts), not scaled by frame.dt; node lifetime is
+ *    real seconds off frame.time. So frame N is identical in live and render
+ *    mode — verified by a byte-identical loadSession replay test.
  */
 
 // --- Shaders ----------------------------------------------------------------
@@ -72,7 +73,8 @@ out vec4 outColor;
 void main() {
   // Soft round dot: fade from centre so points read as glowing blobs, not
   // squares. Premultiplied for the additive (ONE,ONE) blend, so overlapping
-  // pulses ADD their colours (red+green=yellow, all three=white).
+  // light brightens (the LOGICAL colour of a pulse is resolved by the dominant-
+  // colour rule at nodes; this blend is just how the glow accumulates on screen).
   float d = length(gl_PointCoord - vec2(0.5));
   float a = smoothstep(0.5, 0.0, d);
   outColor = vec4(vColor.rgb * a * vColor.a, 1.0);
@@ -92,40 +94,35 @@ void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }`
 
 const MAX_NODES = 260
 const MAX_EDGES = MAX_NODES * 8
-const MAX_PULSES = 900
-const MAX_HOPS = 6 // a pulse re-emits at most this many nodes deep before dying
+const MAX_PULSES = 1400
+const REACH_MAX = 40 // the Reach param's ceiling — how many nodes deep a pulse runs
 
 const BASE_VIEW = 2.6 // world half-extent shown on screen at zoom = 1
 
-// Force-directed layout (frame-clocked; tuned for a contained, calm-but-alive
-// web: strong-enough gravity that the cloud fills the view without most nodes
-// escaping to the cull edge, so the population is governed by `fade`/lifetime
-// — a fuller web — while anything that does reach the edge is still culled).
+// Force-directed layout (frame-clocked; contained by a soft boundary).
 const SUBSTEPS = 2
 const SIM_DT = 0.45
 const REST_LEN = 0.5
 const SPRING = 0.05
 const REPULSE = 0.09
-const REPULSE_SOFT = 0.04 // softening so near-coincident nodes don't blow up
+const REPULSE_SOFT = 0.04
 const MAX_FORCE = 0.5
 const DAMP = 0.9
-const GRAVITY = 0.015 // centering pull so the web stays roughly framed (soft boundary contains the spread)
-const BOUND_K = 0.09 // inward spring once a node passes the soft boundary (see simulate)
-const BOUND_FRAC = 0.9 // soft boundary sits at this fraction of the view half-extent
-const SAFETY_CULL = 2.2 // only cull-by-position this far out (× view half) — a stability net
-const SPAWN_JITTER = 0.24 // how far a new node starts from its parent
+const GRAVITY = 0.015
+const BOUND_K = 0.09
+const BOUND_FRAC = 0.9
+const SAFETY_CULL = 2.2
+const SPAWN_JITTER = 0.24
 
 const PULSE_BASE_SPEED = 0.018 // edge-fraction per frame at pulseSpeed = 1
 
-// Band → base colour (user's mapping: bass red, mid blue, treble green).
-const BAND_COLOR: ReadonlyArray<readonly [number, number, number]> = [
-  [1.0, 0.15, 0.15], // bass  = red
-  [0.2, 0.4, 1.0], // mid   = blue
-  [0.2, 1.0, 0.35], // treble = green
-]
-const BAND_SIGNAL = ['bass', 'mid', 'high'] as const
+// The dim neutral colour of the structural web (nodes + edges) — the pulses
+// carry all the hue now that nodes are no longer band-typed.
+const NODE_R = 0.5
+const NODE_G = 0.58
+const NODE_B = 0.72
 
-// --- Pure hash (pulse-emitter selection; see class doc) ---------------------
+// --- Pure hash (pulse injection; see class doc) -----------------------------
 
 function hash32(x: number): number {
   x = (x + 0x9e3779b9) >>> 0
@@ -141,27 +138,61 @@ function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v
 }
 
+function hsv2rgb(h: number, s: number, v: number): [number, number, number] {
+  const hp = (((h % 1) + 1) % 1) * 6
+  const c = v * s
+  const x = c * (1 - Math.abs((hp % 2) - 1))
+  let r = 0
+  let g = 0
+  let b = 0
+  if (hp < 1) { r = c; g = x } else if (hp < 2) { r = x; g = c } else if (hp < 3) { g = c; b = x } else if (hp < 4) { g = x; b = c } else if (hp < 5) { r = x; b = c } else { r = c; b = x }
+  const m = v - c
+  return [r + m, g + m, b + m]
+}
+
+/** Hue bucket for the dominant-colour vote: 8 hue wedges, plus bucket 8 for
+ *  near-white/desaturated pulses (so all-white pulses vote together). */
+function hueBucket(r: number, g: number, b: number): number {
+  const mx = Math.max(r, g, b)
+  const mn = Math.min(r, g, b)
+  const sat = mx <= 1e-6 ? 0 : (mx - mn) / mx
+  if (sat < 0.22) return 8
+  const d = mx - mn
+  let h: number
+  if (mx === r) h = ((g - b) / d + 6) % 6
+  else if (mx === g) h = (b - r) / d + 2
+  else h = (r - g) / d + 4
+  h = (((h / 6) % 1) + 1) % 1
+  return Math.floor(h * 8) % 8
+}
+
 interface Node {
   active: boolean
-  id: number // monotonic spawn counter — age & "forward" ordering
+  id: number
   x: number
   y: number
   vx: number
   vy: number
-  band: number // 0 bass, 1 mid, 2 treble
-  spawnT: number // frame.time at spawn (for lifetime/fade)
+  spawnT: number
 }
 
 interface Edge {
-  a: number // node slot
-  b: number // node slot
+  a: number
+  b: number
 }
 
 interface Pulse {
   active: boolean
   a: number // from-node slot
   b: number // to-node slot (always the YOUNGER of the pair)
-  pos: number // 0..1 along the edge a->b
+  pos: number // 0..1 along edge a->b
+  r: number
+  g: number
+  bl: number
+  hops: number // nodes passed through so far
+}
+
+interface Arrival {
   r: number
   g: number
   bl: number
@@ -177,6 +208,8 @@ export class NeuralWebScene implements SceneRuntime {
     { name: 'fade', label: 'Fade', min: 2, max: 30, default: 12 },
     { name: 'connectivity', label: 'Connectivity', min: 1, max: 8, default: 3, step: 1 },
     { name: 'zoom', label: 'Zoom', min: 0.5, max: 4, default: 1 },
+    { name: 'reach', label: 'Reach', min: 0, max: REACH_MAX, default: 14, step: 1 },
+    { name: 'hue', label: 'Hue spread', min: 0, max: 1, default: 0.6 },
     { name: 'sensitivity', label: 'Sensitivity', min: 0, max: 1, default: 0.5 },
     { name: 'pulseSpeed', label: 'Pulse speed', min: 0.3, max: 3, default: 1 },
     { name: 'glow', label: 'Glow', min: 0.3, max: 2, default: 1 },
@@ -186,7 +219,6 @@ export class NeuralWebScene implements SceneRuntime {
   private gpu!: Gpu
   private random: Prng = mulberry32(1)
 
-  // Node pool (slot-indexed; `active` marks live slots, freed slots reused).
   private nodes: Node[] = []
   private freeSlots: number[] = []
   private edges: Edge[] = []
@@ -194,12 +226,11 @@ export class NeuralWebScene implements SceneRuntime {
   private freePulses: number[] = []
 
   private nextId = 0
-  private seeded = false // seed cluster laid down on the first beat (or first update)
-  private fireCounter = 0
-  private bandArmed = [true, true, true]
-  private bandEnv = [0, 0, 0] // slow per-band baseline for transient (hit) detection
+  private seeded = false
+  private bassEnv = 0
+  private bassArmed = true
+  private injectCounter = 0
 
-  // GL resources
   private lineProgram!: WebGLProgram
   private pointProgram!: WebGLProgram
   private fadeProgram!: WebGLProgram
@@ -210,11 +241,9 @@ export class NeuralWebScene implements SceneRuntime {
   private pointVbo!: WebGLBuffer
   private fadeVao!: WebGLVertexArrayObject
 
-  // Scratch CPU buffers (sized once).
-  private lineVerts = new Float32Array(MAX_EDGES * 2 * 6) // 2 verts/edge, pos.xy+color.rgba
-  private pointVerts = new Float32Array((MAX_NODES + MAX_PULSES) * 7) // pos.xy+color.rgba+size
+  private lineVerts = new Float32Array(MAX_EDGES * 2 * 6)
+  private pointVerts = new Float32Array((MAX_NODES + MAX_PULSES) * 7)
 
-  // Code layer: editable source per stage.
   private lineSource = LINE_FS
   private pointSource = POINT_FS
   private fadeSource = FADE_FS
@@ -224,12 +253,11 @@ export class NeuralWebScene implements SceneRuntime {
     this.random = mulberry32(seed >>> 0)
     for (const p of this.params) this.values.set(p.name, p.default)
 
-    // Fresh pools.
     this.nodes = []
     this.freeSlots = []
     for (let i = 0; i < MAX_NODES; i++) {
-      this.nodes.push({ active: false, id: -1, x: 0, y: 0, vx: 0, vy: 0, band: 0, spawnT: 0 })
-      this.freeSlots.push(MAX_NODES - 1 - i) // pop() hands out 0,1,2,... in order
+      this.nodes.push({ active: false, id: -1, x: 0, y: 0, vx: 0, vy: 0, spawnT: 0 })
+      this.freeSlots.push(MAX_NODES - 1 - i)
     }
     this.edges = []
     this.pulses = []
@@ -240,9 +268,9 @@ export class NeuralWebScene implements SceneRuntime {
     }
     this.nextId = 0
     this.seeded = false
-    this.fireCounter = 0
-    this.bandArmed = [true, true, true]
-    this.bandEnv = [0, 0, 0]
+    this.bassEnv = 0
+    this.bassArmed = true
+    this.injectCounter = 0
 
     this.lineSource = LINE_FS
     this.pointSource = POINT_FS
@@ -254,7 +282,6 @@ export class NeuralWebScene implements SceneRuntime {
     this.fadeProgram = gpu.compileProgram(FADE_VS, this.fadeSource)
     this.fadeLoc = { uFade: gl.getUniformLocation(this.fadeProgram, 'uFade') }
 
-    // Line VAO/VBO (edges).
     this.lineVao = gl.createVertexArray()!
     this.lineVbo = gl.createBuffer()!
     gl.bindVertexArray(this.lineVao)
@@ -268,7 +295,6 @@ export class NeuralWebScene implements SceneRuntime {
       gl.vertexAttribPointer(1, 4, gl.FLOAT, false, stride, 2 * 4)
     }
 
-    // Point VAO/VBO (nodes + pulses).
     this.pointVao = gl.createVertexArray()!
     this.pointVbo = gl.createBuffer()!
     gl.bindVertexArray(this.pointVao)
@@ -284,7 +310,6 @@ export class NeuralWebScene implements SceneRuntime {
       gl.vertexAttribPointer(2, 1, gl.FLOAT, false, stride, 6 * 4)
     }
 
-    // Fade quad (fullscreen triangle).
     this.fadeVao = gl.createVertexArray()!
     const quad = gl.createBuffer()!
     gl.bindVertexArray(this.fadeVao)
@@ -307,7 +332,7 @@ export class NeuralWebScene implements SceneRuntime {
 
   // --- Spawning ---------------------------------------------------------------
 
-  private allocNode(x: number, y: number, band: number, t: number): number {
+  private allocNode(x: number, y: number, t: number): number {
     const slot = this.freeSlots.pop()
     if (slot === undefined) return -1
     const n = this.nodes[slot]
@@ -317,23 +342,18 @@ export class NeuralWebScene implements SceneRuntime {
     n.y = y
     n.vx = 0
     n.vy = 0
-    n.band = band
     n.spawnT = t
     return slot
   }
 
   private addEdge(a: number, b: number): void {
     if (a === b || this.edges.length >= MAX_EDGES) return
-    // Dedup (small degree, linear scan is fine).
     for (const e of this.edges) {
       if ((e.a === a && e.b === b) || (e.a === b && e.b === a)) return
     }
     this.edges.push({ a, b })
   }
 
-  /** Connect `slot` to its nearest `count-1` active nodes (excluding itself and
-   *  any already-connected), plus it is assumed already wired to its parent by
-   *  the caller. Nearest-neighbour scan over the live nodes. */
   private wireNearest(slot: number, count: number): void {
     const me = this.nodes[slot]
     const cand: { s: number; d: number }[] = []
@@ -353,37 +373,28 @@ export class NeuralWebScene implements SceneRuntime {
     }
   }
 
-  /** Lay down the seed cluster near the origin (once). */
   private seedCluster(t: number): void {
     const target = Math.round(clamp(this.getParam('nodes'), 1, 40))
     const conn = Math.round(clamp(this.getParam('connectivity'), 1, 8))
     for (let i = 0; i < target; i++) {
       const ang = this.random() * Math.PI * 2
       const rad = this.random() * 0.8
-      const band = Math.floor(this.random() * 3) % 3
-      this.allocNode(Math.cos(ang) * rad, Math.sin(ang) * rad, band, t)
+      this.allocNode(Math.cos(ang) * rad, Math.sin(ang) * rad, t)
     }
-    // Wire each seed node to its nearest neighbours.
     for (let s = 0; s < MAX_NODES; s++) {
-      if (this.nodes[s].active) this.wireNearest(s, conn - 1 + 1) // parent-less: use `conn` nearest
+      if (this.nodes[s].active) this.wireNearest(s, conn)
     }
     this.seeded = true
   }
 
-  /** One beat: spawn `additions` new nodes, each from a random living parent. */
   private spawnBeat(t: number): void {
     const additions = Math.round(clamp(this.getParam('additions'), 1, 6))
     const conn = Math.round(clamp(this.getParam('connectivity'), 1, 8))
     for (let k = 0; k < additions; k++) {
-      // Choose a living parent, biased toward the NEWEST nodes so the web grows
-      // outward at its frontier (a branching mesh) instead of every node wiring
-      // back to the old central core (a star). random()² biases the pick toward
-      // index 0 of the id-sorted list = the youngest live node.
       const live: number[] = []
       for (let s = 0; s < MAX_NODES; s++) if (this.nodes[s].active && !this.isFading(s, t)) live.push(s)
       if (live.length === 0) {
-        // Everything faded — reseed a lone node at origin so the web can restart.
-        this.allocNode((this.random() - 0.5) * 0.4, (this.random() - 0.5) * 0.4, Math.floor(this.random() * 3) % 3, t)
+        this.allocNode((this.random() - 0.5) * 0.4, (this.random() - 0.5) * 0.4, t)
         continue
       }
       live.sort((p, q) => this.nodes[q].id - this.nodes[p].id) // newest first
@@ -391,16 +402,10 @@ export class NeuralWebScene implements SceneRuntime {
       const parent = live[Math.floor(bias * live.length) % live.length]
       const p = this.nodes[parent]
       const ang = this.random() * Math.PI * 2
-      const band = Math.floor(this.random() * 3) % 3
-      const slot = this.allocNode(
-        p.x + Math.cos(ang) * SPAWN_JITTER,
-        p.y + Math.sin(ang) * SPAWN_JITTER,
-        band,
-        t,
-      )
-      if (slot < 0) return // pool full
-      this.addEdge(slot, parent) // the node it sprang from
-      this.wireNearest(slot, conn - 1) // + the next-nearest neighbours
+      const slot = this.allocNode(p.x + Math.cos(ang) * SPAWN_JITTER, p.y + Math.sin(ang) * SPAWN_JITTER, t)
+      if (slot < 0) return
+      this.addEdge(slot, parent)
+      this.wireNearest(slot, conn - 1)
     }
   }
 
@@ -412,7 +417,6 @@ export class NeuralWebScene implements SceneRuntime {
   private isFading(slot: number, t: number): boolean {
     return t - this.nodes[slot].spawnT > this.lifetime()
   }
-  /** 1 while alive, ramps 1→0 over FADE_DURATION after lifetime, then culled. */
   private fadeAlpha(slot: number, t: number): number {
     const age = t - this.nodes[slot].spawnT
     const life = this.lifetime()
@@ -433,7 +437,6 @@ export class NeuralWebScene implements SceneRuntime {
   private killNode(slot: number): void {
     this.nodes[slot].active = false
     this.freeSlots.push(slot)
-    // Remove edges touching this slot, and pulses on them.
     this.edges = this.edges.filter((e) => e.a !== slot && e.b !== slot)
     for (let i = 0; i < this.pulses.length; i++) {
       const pu = this.pulses[i]
@@ -478,107 +481,117 @@ export class NeuralWebScene implements SceneRuntime {
     }
   }
 
-  /** A band went loud: fire a few of its living nodes (newest + a hashed
-   *  subset), each emitting a forward pulse of the band colour. */
-  private fireBand(band: number, t: number): void {
-    const [r, g, bl] = BAND_COLOR[band]
+  /** A bass hit: inject a pulse into 2-4 living nodes, each with a hue-randomised
+   *  (or white) colour, emitting forward. Node picks + hues are a pure hash of
+   *  the injection counter (deterministic, decoupled from the spawn PRNG). */
+  private injectBass(t: number): void {
     const live: number[] = []
-    for (let s = 0; s < MAX_NODES; s++) {
-      const n = this.nodes[s]
-      if (n.active && n.band === band && !this.isFading(s, t)) live.push(s)
-    }
+    for (let s = 0; s < MAX_NODES; s++) if (this.nodes[s].active && !this.isFading(s, t)) live.push(s)
     if (live.length === 0) return
-    // Newest of the band always fires; plus up to 2 hashed picks (deterministic,
-    // independent of the spawn PRNG — see class doc).
-    live.sort((p, q) => this.nodes[q].id - this.nodes[p].id)
-    const fired = new Set<number>()
-    fired.add(live[0])
-    const picks = Math.min(2, live.length - 1)
-    for (let k = 0; k < picks; k++) {
-      const h = hash32(this.fireCounter * 131 + band * 977 + k * 31)
-      fired.add(live[1 + (h % Math.max(1, live.length - 1))])
+    const hueSpread = clamp(this.getParam('hue'), 0, 1)
+    const count = Math.min(live.length, 2 + (hash32(this.injectCounter * 7 + 13) % 3)) // 2..4
+    const picked = new Set<number>()
+    let attempts = 0
+    while (picked.size < count && attempts < count * 5) {
+      const h = hash32(this.injectCounter * 101 + picked.size * 331 + attempts * 17)
+      picked.add(live[h % live.length])
+      attempts++
     }
-    this.fireCounter++
-    for (const s of fired) this.emitForward(s, r, g, bl, 0, t)
+    let k = 0
+    for (const slot of picked) {
+      const hh = hash32(this.injectCounter * 977 + k * 49297) / 4294967296
+      const [r, g, b] = hsv2rgb(hh, hueSpread, 1) // hueSpread 0 -> white
+      this.emitForward(slot, r, g, b, 0, t)
+      k++
+    }
+    this.injectCounter++
   }
 
-  private updatePulses(): void {
+  /** Advance pulses; at each node they CONVERGE on this frame, resolve the
+   *  dominant incoming colour and re-emit forward (if within `reach`). */
+  private updatePulses(reach: number, t: number): void {
     const speed = PULSE_BASE_SPEED * clamp(this.getParam('pulseSpeed'), 0.3, 3)
-    // Snapshot count: children are appended to free slots but we don't want to
-    // advance a freshly-emitted child within the same frame (it starts at 0).
+    const arrivals = new Map<number, Arrival[]>()
     for (let i = 0; i < this.pulses.length; i++) {
       const pu = this.pulses[i]
       if (!pu.active) continue
       pu.pos += speed
       if (pu.pos >= 1) {
-        // Arrived at `b`: re-emit forward from there (if it's still a living,
-        // non-fading node — checked inside emitForward), then retire.
-        this.freePulse(i)
-        if (pu.hops + 1 < MAX_HOPS) {
-          this.emitForward(pu.b, pu.r, pu.g, pu.bl, pu.hops + 1, this._nowT)
+        let list = arrivals.get(pu.b)
+        if (!list) {
+          list = []
+          arrivals.set(pu.b, list)
         }
+        list.push({ r: pu.r, g: pu.g, bl: pu.bl, hops: pu.hops })
+        this.freePulse(i)
       }
     }
+    // Resolve each convergence node: dominant colour by hue-bucket majority.
+    for (const [slot, list] of arrivals) {
+      if (!this.nodes[slot].active || this.isFading(slot, t)) continue
+      const counts = new Array(9).fill(0)
+      const sumR = new Array(9).fill(0)
+      const sumG = new Array(9).fill(0)
+      const sumB = new Array(9).fill(0)
+      let minHops = Infinity
+      for (const a of list) {
+        const bkt = hueBucket(a.r, a.g, a.bl)
+        counts[bkt]++
+        sumR[bkt] += a.r
+        sumG[bkt] += a.g
+        sumB[bkt] += a.bl
+        if (a.hops < minHops) minHops = a.hops
+      }
+      let win = 0
+      for (let b = 1; b < 9; b++) if (counts[b] > counts[win]) win = b // ties -> lowest bucket
+      const n = counts[win]
+      const r = sumR[win] / n
+      const g = sumG[win] / n
+      const bl = sumB[win] / n
+      const depth = minHops + 1
+      if (depth <= reach) this.emitForward(slot, r, g, bl, depth, t)
+    }
   }
-
-  private _nowT = 0
 
   update(ctx: FrameContext): void {
     const { frame, signals } = ctx
     const t = frame.time
-    this._nowT = t
 
     if (!this.seeded) this.seedCluster(t)
 
-    // Beat: build the web.
     if (signals.get('beat') > 0.5) this.spawnBeat(t)
 
-    // Band-loudness → pulses. A per-band TRANSIENT detector: each band keeps a
-    // slow baseline (bandEnv), and a "hit" is the level jumping above that
-    // baseline by more than `rise`. This works across bands with very different
-    // resting levels (bass sits high, treble low) where a fixed threshold can't,
-    // and fires on musical hits/onsets rather than steady loudness. Sensitivity
-    // lowers the jump needed. Armed/disarmed so one swell fires once.
+    // Bass hit -> pulse injection (transient detector: bass jumping above its
+    // own moving baseline; sensitivity lowers the jump needed).
     const sens = clamp(this.getParam('sensitivity'), 0, 1)
-    const rise = 0.2 - sens * 0.16 // sens 0..1 -> 0.20..0.04 jump-above-baseline
-    for (let band = 0; band < 3; band++) {
-      const level = signals.get(BAND_SIGNAL[band])
-      this.bandEnv[band] += (level - this.bandEnv[band]) * 0.08 // slow follower
-      const jump = level - this.bandEnv[band]
-      if (this.bandArmed[band] && jump > rise) {
-        this.fireBand(band, t)
-        this.bandArmed[band] = false
-      } else if (!this.bandArmed[band] && jump < rise * 0.4) {
-        this.bandArmed[band] = true
-      }
+    const rise = 0.2 - sens * 0.16
+    const bass = signals.get('bass')
+    this.bassEnv += (bass - this.bassEnv) * 0.08
+    const jump = bass - this.bassEnv
+    if (this.bassArmed && jump > rise) {
+      this.injectBass(t)
+      this.bassArmed = false
+    } else if (!this.bassArmed && jump < rise * 0.4) {
+      this.bassArmed = true
     }
 
-    // Force-directed relaxation (frame-clocked substeps).
     const viewHalfSim = BASE_VIEW * clamp(this.getParam('zoom'), 0.5, 4)
     this.simulate(viewHalfSim * BOUND_FRAC)
 
-    // Advance travelling pulses (re-emit at nodes, forward only).
-    this.updatePulses()
+    const reach = Math.round(clamp(this.getParam('reach'), 0, REACH_MAX))
+    this.updatePulses(reach, t)
 
-    // Cull nodes that faded out (lifetime) — plus a far safety net for anything
-    // that somehow escaped the soft boundary. Normal operation culls only by
-    // fade, so the web fills the contained area.
     const viewHalf = BASE_VIEW * clamp(this.getParam('zoom'), 0.5, 4)
     this.cull(t, viewHalf * SAFETY_CULL)
   }
 
   private simulate(softR: number): void {
     for (let step = 0; step < SUBSTEPS; step++) {
-      // Repulsion (O(N^2) over live nodes; N bounded by MAX_NODES).
       for (let i = 0; i < MAX_NODES; i++) {
         const a = this.nodes[i]
         if (!a.active) continue
         let fx = -a.x * GRAVITY
         let fy = -a.y * GRAVITY
-        // Soft boundary: once a node passes softR from the origin, a spring
-        // pulls it back — this CONTAINS the web on screen so its population is
-        // set by lifetime, not by nodes escaping and being culled. Zooming out
-        // enlarges softR (via viewHalf), giving the web genuinely more room.
         const rr = Math.sqrt(a.x * a.x + a.y * a.y)
         if (rr > softR) {
           const over = (rr - softR) * BOUND_K
@@ -598,11 +611,9 @@ export class NeuralWebScene implements SceneRuntime {
           fx += (dx / dist) * fmag
           fy += (dy / dist) * fmag
         }
-        // stash force in velocity accumulator via temporary fields
         a.vx += fx * SIM_DT
         a.vy += fy * SIM_DT
       }
-      // Springs along edges.
       for (const e of this.edges) {
         const a = this.nodes[e.a]
         const b = this.nodes[e.b]
@@ -618,7 +629,6 @@ export class NeuralWebScene implements SceneRuntime {
         b.vx -= ux * f * SIM_DT
         b.vy -= uy * f * SIM_DT
       }
-      // Integrate + damp.
       for (let i = 0; i < MAX_NODES; i++) {
         const a = this.nodes[i]
         if (!a.active) continue
@@ -636,7 +646,6 @@ export class NeuralWebScene implements SceneRuntime {
     const gl = this.gpu.gl
     surface.bind()
     const t = ctx.frame.time
-    this._nowT = t
 
     const viewHalf = BASE_VIEW * clamp(this.getParam('zoom'), 0.5, 4)
     const glow = clamp(this.getParam('glow'), 0.3, 2)
@@ -647,36 +656,31 @@ export class NeuralWebScene implements SceneRuntime {
     const toNdcX = (x: number) => x * inv * ax
     const toNdcY = (y: number) => y * inv * ay
 
-    // --- Build edge line-list. Edge brightness = min of endpoint fades, tinted
-    // by the two node bands (a dim structural web that the pulses light up). ---
+    // Edges: dim neutral structural web, brightness = min endpoint fade.
     let ln = 0
     for (const e of this.edges) {
       const a = this.nodes[e.a]
       const b = this.nodes[e.b]
       if (!a.active || !b.active) continue
-      const fa = this.fadeAlpha(e.a, t)
-      const fb = this.fadeAlpha(e.b, t)
-      const dim = Math.min(fa, fb) * 0.22 * glow
-      const [ar, ag, ab] = BAND_COLOR[a.band]
-      const [br, bg, bb] = BAND_COLOR[b.band]
-      // endpoint A
+      const dim = Math.min(this.fadeAlpha(e.a, t), this.fadeAlpha(e.b, t)) * 0.2 * glow
+      const r = NODE_R * dim
+      const g = NODE_G * dim
+      const bb = NODE_B * dim
       this.lineVerts[ln++] = toNdcX(a.x)
       this.lineVerts[ln++] = toNdcY(a.y)
-      this.lineVerts[ln++] = ar * dim
-      this.lineVerts[ln++] = ag * dim
-      this.lineVerts[ln++] = ab * dim
+      this.lineVerts[ln++] = r
+      this.lineVerts[ln++] = g
+      this.lineVerts[ln++] = bb
       this.lineVerts[ln++] = 1
-      // endpoint B
       this.lineVerts[ln++] = toNdcX(b.x)
       this.lineVerts[ln++] = toNdcY(b.y)
-      this.lineVerts[ln++] = br * dim
-      this.lineVerts[ln++] = bg * dim
-      this.lineVerts[ln++] = bb * dim
+      this.lineVerts[ln++] = r
+      this.lineVerts[ln++] = g
+      this.lineVerts[ln++] = bb
       this.lineVerts[ln++] = 1
     }
     const lineVertCount = ln / 6
 
-    // --- Build point list: nodes (dim, band colour) then pulses (bright). ---
     let pn = 0
     const pushPoint = (x: number, y: number, r: number, g: number, b: number, sz: number) => {
       this.pointVerts[pn++] = x
@@ -689,14 +693,11 @@ export class NeuralWebScene implements SceneRuntime {
     }
     const nodeSize = clamp(6 / clamp(this.getParam('zoom'), 0.5, 4) + 2, 3, 9)
     for (let s = 0; s < MAX_NODES; s++) {
-      const n = this.nodes[s]
-      if (!n.active) continue
-      const f = this.fadeAlpha(s, t)
-      const [r, g, b] = BAND_COLOR[n.band]
-      const k = 0.5 * f * glow
-      pushPoint(toNdcX(n.x), toNdcY(n.y), r * k, g * k, b * k, nodeSize)
+      const nd = this.nodes[s]
+      if (!nd.active) continue
+      const k = 0.6 * this.fadeAlpha(s, t) * glow
+      pushPoint(toNdcX(nd.x), toNdcY(nd.y), NODE_R * k, NODE_G * k, NODE_B * k, nodeSize)
     }
-    // Pulses: interpolate along their edge, draw bright.
     const pulseSize = nodeSize * 1.7
     for (const pu of this.pulses) {
       if (!pu.active) continue
@@ -705,7 +706,7 @@ export class NeuralWebScene implements SceneRuntime {
       if (!a.active || !b.active) continue
       const x = a.x + (b.x - a.x) * pu.pos
       const y = a.y + (b.y - a.y) * pu.pos
-      const k = 1.4 * glow
+      const k = 1.1 * glow
       pushPoint(toNdcX(x), toNdcY(y), pu.r * k, pu.g * k, pu.bl * k, pulseSize)
     }
     const pointCount = pn / 7
@@ -713,15 +714,12 @@ export class NeuralWebScene implements SceneRuntime {
     gl.enable(gl.BLEND)
     gl.disable(gl.DEPTH_TEST)
 
-    // Fade/trail pass: pulses leave comet streaks; static edges/nodes restamp
-    // crisply on top each frame.
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
     gl.useProgram(this.fadeProgram)
     gl.uniform1f(this.fadeLoc.uFade, 0.45)
     gl.bindVertexArray(this.fadeVao)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
 
-    // Edges (additive glow).
     gl.blendFunc(gl.ONE, gl.ONE)
     if (lineVertCount > 0) {
       gl.useProgram(this.lineProgram)
@@ -730,8 +728,6 @@ export class NeuralWebScene implements SceneRuntime {
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.lineVerts, 0, ln)
       gl.drawArrays(gl.LINES, 0, lineVertCount)
     }
-
-    // Nodes + pulses (additive points → colours ADD where they overlap).
     if (pointCount > 0) {
       gl.useProgram(this.pointProgram)
       gl.bindVertexArray(this.pointVao)

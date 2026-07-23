@@ -124,7 +124,7 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
   neuralweb: {
     'line-fs': {
       summary:
-        'A graph that builds itself to the beat: nodes spawn on each beat wired to a parent and nearest neighbours, a force-directed layout spreads them, and each node is a bass (red), mid (blue) or treble (green) node. This shader draws the EDGES — the dim structural web whose brightness fades with its endpoint nodes, tinted by the two bands it connects. The bright travelling light is the separate point pass.',
+        'A graph that builds itself to the beat: nodes spawn on each beat wired to a parent and nearest neighbours, and a force-directed layout spreads the web. This shader draws the EDGES — the dim neutral structural web whose brightness fades with its endpoint nodes. All the colour lives in the travelling pulses (the separate point pass); the web itself is just the wiring.',
       tryThis: [
         {
           target: 'outColor = vColor;',
@@ -145,7 +145,7 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
     },
     'point-fs': {
       summary:
-        'Draws the NODES and the travelling PULSES as soft round glowing dots. Output is premultiplied for the additive (ONE,ONE) blend, so where a red and a blue pulse overlap you get magenta and all three give white — the colour mixing happens here, in the blend, for free. A pulse fires forward-only (toward younger nodes) when its band gets loud and re-emits at each node it reaches.',
+        'Draws the NODES and the travelling PULSES as soft round glowing dots. Each bass hit injects a pulse into 2-4 nodes (white, or a randomised hue via the Hue spread knob) that runs forward-only toward younger nodes and re-emits at each node it reaches, up to the Reach depth. Where pulses converge on a node the re-emitted one adopts the DOMINANT incoming colour (majority by hue). Output is premultiplied for the additive (ONE,ONE) blend so overlapping light brightens.',
       tryThis: [
         {
           target: 'float d = length(gl_PointCoord - vec2(0.5));',
