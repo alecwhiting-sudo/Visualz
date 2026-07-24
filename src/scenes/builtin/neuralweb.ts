@@ -104,6 +104,7 @@ const MAX_PULSES = 1600
 const REACH_MAX = 40 // the Reach param's ceiling — how many nodes deep a pulse runs
 
 const BASE_VIEW = 2.6 // world half-extent shown on screen at zoom = 1
+const ZOOM_MAX = 16 // Zoom can pull WAY out (was 4) so the web's shapes can grow large
 
 // Force-directed layout (frame-clocked; contained by a soft boundary).
 const SUBSTEPS = 2
@@ -222,7 +223,7 @@ export class NeuralWebScene implements SceneRuntime {
     // sim bogs the CPU), rising toward 1 = ever more aggressive (rapid death).
     { name: 'fade', label: 'Fade', min: 0, max: 1, default: 0.3 },
     { name: 'connectivity', label: 'Connectivity', min: 1, max: 8, default: 3, step: 1 },
-    { name: 'zoom', label: 'Zoom', min: 0.5, max: 4, default: 1 },
+    { name: 'zoom', label: 'Zoom', min: 0.5, max: ZOOM_MAX, default: 1 },
     { name: 'reach', label: 'Reach', min: 0, max: REACH_MAX, default: 14, step: 1 },
     { name: 'streak', label: 'Streak', min: 0, max: 1, default: 0.35 },
     { name: 'hue', label: 'Hue spread', min: 0, max: 1, default: 0.6 },
@@ -603,14 +604,14 @@ export class NeuralWebScene implements SceneRuntime {
       this.bassArmed = true
     }
 
-    const viewHalfSim = BASE_VIEW * clamp(this.getParam('zoom'), 0.5, 4)
+    const viewHalfSim = BASE_VIEW * clamp(this.getParam('zoom'), 0.5, ZOOM_MAX)
     this.simulate(viewHalfSim * BOUND_FRAC)
 
     const reach = Math.round(clamp(this.getParam('reach'), 0, REACH_MAX))
     this.updatePulses(reach, t)
     this.warmEdges()
 
-    const viewHalf = BASE_VIEW * clamp(this.getParam('zoom'), 0.5, 4)
+    const viewHalf = BASE_VIEW * clamp(this.getParam('zoom'), 0.5, ZOOM_MAX)
     this.cull(t, viewHalf * SAFETY_CULL)
   }
 
@@ -695,7 +696,7 @@ export class NeuralWebScene implements SceneRuntime {
     surface.bind()
     const t = ctx.frame.time
 
-    const viewHalf = BASE_VIEW * clamp(this.getParam('zoom'), 0.5, 4)
+    const viewHalf = BASE_VIEW * clamp(this.getParam('zoom'), 0.5, ZOOM_MAX)
     const glow = clamp(this.getParam('glow'), 0.3, 2)
     const aspect = surface.width / surface.height
     const ax = 1 / Math.max(aspect, 1)
@@ -742,7 +743,7 @@ export class NeuralWebScene implements SceneRuntime {
       this.pointVerts[pn++] = 1
       this.pointVerts[pn++] = sz
     }
-    const nodeSize = clamp(6 / clamp(this.getParam('zoom'), 0.5, 4) + 2, 3, 9)
+    const nodeSize = clamp(6 / clamp(this.getParam('zoom'), 0.5, ZOOM_MAX) + 2, 3, 9)
     for (let s = 0; s < MAX_NODES; s++) {
       const nd = this.nodes[s]
       if (!nd.active) continue
