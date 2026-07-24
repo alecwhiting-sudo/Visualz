@@ -11,14 +11,16 @@ import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../ty
  * layout (edges are springs, all nodes repel) spreads the web; a soft boundary
  * keeps it framed on screen (so population is set by `fade`/lifetime, not by
  * nodes escaping), and `zoom` enlarges that boundary for more room to grow.
- * Nodes live `fade` seconds then dim to black and are culled, edges with them.
+ * `fade` sets node lifetime: 0 = never fade (the web grows without limit until
+ * the O(N^2) sim bogs the CPU), rising toward 1 = ever more rapid death.
  *
  * PULSES OF LIGHT (redesigned): the bass is the single driver. On each bass hit
  * a pulse is injected into 2-4 nodes and travels FORWARD ONLY — along edges
  * toward YOUNGER nodes (higher spawn id) — re-emitting at each node it reaches,
  * so a wavefront ripples through the part of the graph that grew after it.
- * `reach` caps how many nodes deep it propagates (0-40). A node that has begun
- * fading can neither emit nor re-emit.
+ * `reach` caps how many nodes deep it propagates (0-40). Any node more than 50%
+ * un-faded can host/emit a pulse (so pulses appear in older nodes too, not just
+ * fresh ones). `streak` leaves a fading warmth on each edge a pulse rides.
  *
  * COLOUR: `hue` randomises each injected pulse's initial hue (0 = white). When
  * pulses CONVERGE on a node, the re-emitted pulse adopts the DOMINANT incoming
@@ -92,9 +94,13 @@ void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }`
 
 // --- Model constants ---------------------------------------------------------
 
-const MAX_NODES = 260
+// With Fade at 0 (no fading) the web grows without an age limit — the O(N^2)
+// force sim is what eventually bogs the CPU (the "processor limit" the user
+// wants at that extreme). This is the hard ceiling so a runaway can't take the
+// whole tab down: growth stalls here rather than crashing.
+const MAX_NODES = 1000
 const MAX_EDGES = MAX_NODES * 8
-const MAX_PULSES = 1400
+const MAX_PULSES = 1600
 const REACH_MAX = 40 // the Reach param's ceiling — how many nodes deep a pulse runs
 
 const BASE_VIEW = 2.6 // world half-extent shown on screen at zoom = 1
@@ -179,12 +185,19 @@ interface Node {
 interface Edge {
   a: number
   b: number
+  // "Warmth" a passing pulse leaves behind (the Streak trail): set toward 1 as a
+  // pulse rides the edge, decays each frame, and tints the edge its colour.
+  heat: number
+  hr: number
+  hg: number
+  hb: number
 }
 
 interface Pulse {
   active: boolean
   a: number // from-node slot
   b: number // to-node slot (always the YOUNGER of the pair)
+  edge: Edge | null // the edge this pulse rides (for depositing streak warmth)
   pos: number // 0..1 along edge a->b
   r: number
   g: number
@@ -205,10 +218,13 @@ export class NeuralWebScene implements SceneRuntime {
   params: ParamSchema[] = [
     { name: 'nodes', label: 'Nodes', min: 1, max: 40, default: 8, step: 1 },
     { name: 'additions', label: 'Additions', min: 1, max: 6, default: 2, step: 1 },
-    { name: 'fade', label: 'Fade', min: 2, max: 30, default: 12 },
+    // Fade: 0 = no fading at all (nodes never die -> the web grows until the
+    // sim bogs the CPU), rising toward 1 = ever more aggressive (rapid death).
+    { name: 'fade', label: 'Fade', min: 0, max: 1, default: 0.3 },
     { name: 'connectivity', label: 'Connectivity', min: 1, max: 8, default: 3, step: 1 },
     { name: 'zoom', label: 'Zoom', min: 0.5, max: 4, default: 1 },
     { name: 'reach', label: 'Reach', min: 0, max: REACH_MAX, default: 14, step: 1 },
+    { name: 'streak', label: 'Streak', min: 0, max: 1, default: 0.35 },
     { name: 'hue', label: 'Hue spread', min: 0, max: 1, default: 0.6 },
     { name: 'sensitivity', label: 'Sensitivity', min: 0, max: 1, default: 0.5 },
     { name: 'pulseSpeed', label: 'Pulse speed', min: 0.3, max: 3, default: 1 },
@@ -263,7 +279,7 @@ export class NeuralWebScene implements SceneRuntime {
     this.pulses = []
     this.freePulses = []
     for (let i = 0; i < MAX_PULSES; i++) {
-      this.pulses.push({ active: false, a: 0, b: 0, pos: 0, r: 0, g: 0, bl: 0, hops: 0 })
+      this.pulses.push({ active: false, a: 0, b: 0, edge: null, pos: 0, r: 0, g: 0, bl: 0, hops: 0 })
       this.freePulses.push(MAX_PULSES - 1 - i)
     }
     this.nextId = 0
@@ -351,7 +367,7 @@ export class NeuralWebScene implements SceneRuntime {
     for (const e of this.edges) {
       if ((e.a === a && e.b === b) || (e.a === b && e.b === a)) return
     }
-    this.edges.push({ a, b })
+    this.edges.push({ a, b, heat: 0, hr: 0, hg: 0, hb: 0 })
   }
 
   private wireNearest(slot: number, count: number): void {
@@ -411,8 +427,13 @@ export class NeuralWebScene implements SceneRuntime {
 
   // --- Lifetime ---------------------------------------------------------------
 
+  /** Node lifetime in seconds before it starts fading. Fade=0 -> Infinity (no
+   *  fading, unbounded growth); rising Fade -> shorter life via a 1/fade curve
+   *  (fade=1 -> ~3s rapid death, 0.3 -> 10s, 0.1 -> 30s). */
   private lifetime(): number {
-    return clamp(this.getParam('fade'), 2, 30)
+    const f = clamp(this.getParam('fade'), 0, 1)
+    if (f < 0.02) return Infinity
+    return 3 / f
   }
   private isFading(slot: number, t: number): boolean {
     return t - this.nodes[slot].spawnT > this.lifetime()
@@ -420,9 +441,15 @@ export class NeuralWebScene implements SceneRuntime {
   private fadeAlpha(slot: number, t: number): number {
     const age = t - this.nodes[slot].spawnT
     const life = this.lifetime()
-    if (age <= life) return 1
+    if (age <= life) return 1 // covers life === Infinity (never fades)
     const fadeDur = Math.max(1.5, life * 0.35)
     return clamp(1 - (age - life) / fadeDur, 0, 1)
+  }
+  /** A node can host / emit a pulse while it is more than 50% un-faded — so
+   *  pulses appear in OLDER nodes too, not just fresh ones, right up until a
+   *  node is halfway to black. */
+  private canEmit(slot: number, t: number): boolean {
+    return this.nodes[slot].active && this.fadeAlpha(slot, t) > 0.5
   }
 
   private cull(t: number, bound: number): void {
@@ -446,13 +473,14 @@ export class NeuralWebScene implements SceneRuntime {
 
   // --- Pulses -----------------------------------------------------------------
 
-  private allocPulse(a: number, b: number, r: number, g: number, bl: number, hops: number): void {
+  private allocPulse(a: number, b: number, edge: Edge, r: number, g: number, bl: number, hops: number): void {
     const i = this.freePulses.pop()
     if (i === undefined) return
     const pu = this.pulses[i]
     pu.active = true
     pu.a = a
     pu.b = b
+    pu.edge = edge
     pu.pos = 0
     pu.r = r
     pu.g = g
@@ -466,9 +494,9 @@ export class NeuralWebScene implements SceneRuntime {
   }
 
   /** Emit a pulse of `color` from node `slot` along every FORWARD edge (toward
-   *  a strictly younger node). Only living, non-fading nodes emit. */
+   *  a strictly younger node). Only nodes >50% un-faded emit (see canEmit). */
   private emitForward(slot: number, r: number, g: number, bl: number, hops: number, t: number): void {
-    if (!this.nodes[slot].active || this.isFading(slot, t)) return
+    if (!this.canEmit(slot, t)) return
     const myId = this.nodes[slot].id
     for (const e of this.edges) {
       let other = -1
@@ -476,7 +504,7 @@ export class NeuralWebScene implements SceneRuntime {
       else if (e.b === slot) other = e.a
       else continue
       if (this.nodes[other].active && this.nodes[other].id > myId) {
-        this.allocPulse(slot, other, r, g, bl, hops)
+        this.allocPulse(slot, other, e, r, g, bl, hops)
       }
     }
   }
@@ -486,7 +514,7 @@ export class NeuralWebScene implements SceneRuntime {
    *  the injection counter (deterministic, decoupled from the spawn PRNG). */
   private injectBass(t: number): void {
     const live: number[] = []
-    for (let s = 0; s < MAX_NODES; s++) if (this.nodes[s].active && !this.isFading(s, t)) live.push(s)
+    for (let s = 0; s < MAX_NODES; s++) if (this.canEmit(s, t)) live.push(s)
     if (live.length === 0) return
     const hueSpread = clamp(this.getParam('hue'), 0, 1)
     const count = Math.min(live.length, 2 + (hash32(this.injectCounter * 7 + 13) % 3)) // 2..4
@@ -528,7 +556,7 @@ export class NeuralWebScene implements SceneRuntime {
     }
     // Resolve each convergence node: dominant colour by hue-bucket majority.
     for (const [slot, list] of arrivals) {
-      if (!this.nodes[slot].active || this.isFading(slot, t)) continue
+      if (!this.canEmit(slot, t)) continue
       const counts = new Array(9).fill(0)
       const sumR = new Array(9).fill(0)
       const sumG = new Array(9).fill(0)
@@ -580,9 +608,29 @@ export class NeuralWebScene implements SceneRuntime {
 
     const reach = Math.round(clamp(this.getParam('reach'), 0, REACH_MAX))
     this.updatePulses(reach, t)
+    this.warmEdges()
 
     const viewHalf = BASE_VIEW * clamp(this.getParam('zoom'), 0.5, 4)
     this.cull(t, viewHalf * SAFETY_CULL)
+  }
+
+  /** The Streak trail: pulses "warm" the edge they ride. Each frame every edge's
+   *  heat decays (slower decay = longer streak), then active pulses re-stamp
+   *  their current edge to full heat in their colour. Streak=0 -> heat never
+   *  contributes (see render()). Deterministic per-frame float state, reset with
+   *  the edges at init(). */
+  private warmEdges(): void {
+    const streak = clamp(this.getParam('streak'), 0, 1)
+    const decay = 0.8 + streak * 0.185 // streak 0 -> 0.80 (fast), 1 -> ~0.985 (long trail)
+    for (const e of this.edges) e.heat *= decay
+    for (const pu of this.pulses) {
+      if (!pu.active || !pu.edge) continue
+      const e = pu.edge
+      e.heat = 1
+      e.hr = pu.r
+      e.hg = pu.g
+      e.hb = pu.bl
+    }
   }
 
   private simulate(softR: number): void {
@@ -656,16 +704,19 @@ export class NeuralWebScene implements SceneRuntime {
     const toNdcX = (x: number) => x * inv * ax
     const toNdcY = (y: number) => y * inv * ay
 
-    // Edges: dim neutral structural web, brightness = min endpoint fade.
+    // Edges: dim neutral structural web (brightness = min endpoint fade), plus
+    // the Streak trail — a pulse's leftover warmth glows the edge in its colour.
+    const streak = clamp(this.getParam('streak'), 0, 1)
     let ln = 0
     for (const e of this.edges) {
       const a = this.nodes[e.a]
       const b = this.nodes[e.b]
       if (!a.active || !b.active) continue
       const dim = Math.min(this.fadeAlpha(e.a, t), this.fadeAlpha(e.b, t)) * 0.2 * glow
-      const r = NODE_R * dim
-      const g = NODE_G * dim
-      const bb = NODE_B * dim
+      const heat = e.heat * streak * 1.3 * glow // warmed-pathway contribution
+      const r = NODE_R * dim + e.hr * heat
+      const g = NODE_G * dim + e.hg * heat
+      const bb = NODE_B * dim + e.hb * heat
       this.lineVerts[ln++] = toNdcX(a.x)
       this.lineVerts[ln++] = toNdcY(a.y)
       this.lineVerts[ln++] = r

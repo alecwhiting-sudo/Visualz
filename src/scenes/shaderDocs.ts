@@ -124,7 +124,7 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
   neuralweb: {
     'line-fs': {
       summary:
-        'A graph that builds itself to the beat: nodes spawn on each beat wired to a parent and nearest neighbours, and a force-directed layout spreads the web. This shader draws the EDGES — the dim neutral structural web whose brightness fades with its endpoint nodes. All the colour lives in the travelling pulses (the separate point pass); the web itself is just the wiring.',
+        'A graph that builds itself to the beat: nodes spawn on each beat wired to a parent and nearest neighbours, and a force-directed layout spreads the web. This shader draws the EDGES — the dim neutral structural web, plus the Streak "warmth" a passing pulse leaves glowing along the pathway behind it (that colour is baked into the vertex colour CPU-side). The bright travelling heads are the separate point pass.',
       tryThis: [
         {
           target: 'outColor = vColor;',
@@ -182,6 +182,115 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
           target: 'void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }',
           effect:
             'replace the body with a full wipe (alpha 1.0) to kill the trails entirely — crisp nodes and instantaneous pulse dots only.',
+        },
+      ],
+    },
+  },
+  starflight: {
+    'line-fs': {
+      summary:
+        'A warp-speed flight through a 3D starfield: stars stream past a pinhole camera and, the faster you go, stretch into long radial STREAKS emanating from the centre (classic hyperspace). Bass hits punch the speed for warp bursts. This shader colours the streak line segment each star leaves behind itself.',
+      tryThis: [
+        {
+          target: 'outColor = vColor;',
+          effect:
+            'the whole body — replace with outColor = vec4(vColor.rgb * 1.5, 1.0); to over-brighten the streaks into hotter warp lines.',
+        },
+        {
+          target: 'vColor',
+          effect:
+            'the per-star streak colour (from the Hue knob and per-star brightness, computed CPU-side); use vColor.bgra to flip warm stars to cool.',
+        },
+        {
+          target: 'out vec4 outColor;',
+          effect:
+            "the stage's single output; add a `uniform float uBoost;` above it and multiply for a live streak-brightness knob (needs a matching setUniform in render()).",
+        },
+      ],
+    },
+    'point-fs': {
+      summary:
+        "The bright STAR HEAD at the near end of each streak — a soft round dot, biggest and brightest for the nearest stars (small depth) and shrinking toward the vanishing point. Premultiplied for the additive glow so dense clusters near centre bloom.",
+      tryThis: [
+        {
+          target: 'float falloff = smoothstep(1.0, 0.0, r);',
+          effect:
+            'the dot softness; try smoothstep(1.0, 0.6, r) for a hard pinpoint star instead of a soft glow.',
+        },
+        {
+          target: 'vec2 d = gl_PointCoord - vec2(0.5);',
+          effect:
+            'centres the dot coordinates; scale it (e.g. (gl_PointCoord - 0.5) * 1.6) to shrink the lit core within the point sprite.',
+        },
+        {
+          target: 'outColor = vec4(vColor.rgb * falloff, vColor.a * falloff);',
+          effect:
+            'swap for outColor = vec4(vColor.rgb * falloff * falloff, vColor.a * falloff); to tighten the glow into a hotter core.',
+        },
+      ],
+    },
+    'fade-fs': {
+      summary:
+        'The persistence pass: a near-transparent dark rectangle each frame. It is what smears fast-moving stars into motion trails — the Streak knob feeds its opacity, so a longer trail = more of that liquid hyperspace blur behind every star.',
+      tryThis: [
+        {
+          target: 'vec4(0.0, 0.0, 0.0, uFade)',
+          effect:
+            'the fade colour; try 0.0, 0.0, 0.03 so the warp trails cool into deep-space blue rather than pure black.',
+        },
+        {
+          target: 'uFade',
+          effect:
+            'multiply it (uFade * 0.4) for very long light-trails — the stars melt into continuous rivers of light at speed.',
+        },
+        {
+          target: 'void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }',
+          effect:
+            'replace the body with a full wipe (alpha 1.0) to kill the trails — crisp individual stars and streaks only.',
+        },
+      ],
+    },
+  },
+  attractor: {
+    'point-fs': {
+      summary:
+        'A Clifford strange attractor: a single chaotic trajectory of tens of thousands of points, x′ = sin(a·y)+c·cos(a·x), y′ = sin(b·x)+d·cos(b·y), redrawn every frame — an alien filamentary cloud that slowly reshapes as the four constants A/B/C/D drift and the music nudges them. This shader draws each point as a soft round glow; additive blending makes the dense filaments burn brightest where the trajectory lingers.',
+      tryThis: [
+        {
+          target: 'float alpha = smoothstep(1.0, 0.0, r2);',
+          effect:
+            'the dot softness; try smoothstep(1.0, 0.5, r2) for crisp grains that make the filaments look sharper and more particulate.',
+        },
+        {
+          target: 'vec2 d = gl_PointCoord * 2.0 - 1.0;',
+          effect:
+            'centres the point coordinates; scale it (e.g. (gl_PointCoord*2.0 - 1.0) * 1.4) to shrink the lit core so points read as tinier sparks.',
+        },
+        {
+          target: 'outColor = vec4(vColor.rgb * alpha, alpha);',
+          effect:
+            'swap for outColor = vec4(vColor.rgb * alpha * 1.8, alpha); to push the bright cores past 1.0 for a molten, blown-out glow.',
+        },
+      ],
+    },
+    'fade-fs': {
+      summary:
+        'The afterglow pass: a faint dark rectangle each frame so the cloud leaves a soft ghost of its previous shape as it morphs, rather than snapping between frames. A gentler fade = more smear as the attractor reshapes.',
+      tryThis: [
+        {
+          target: 'vec4(0.0, 0.0, 0.0, uFade)',
+          effect:
+            'the fade colour; try 0.02, 0.0, 0.03 so the afterglow settles into dark violet, matching the default hue.',
+        },
+        {
+          target: 'uFade',
+          effect:
+            'multiply it (uFade * 0.5) for long morph-trails — the attractor smears into a continuous ghostly ribbon as its constants drift.',
+        },
+        {
+          target: 'void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }',
+          effect:
+            'replace the body with a full wipe (alpha 1.0) to remove the afterglow — only the crisp current point cloud shows.',
         },
       ],
     },
