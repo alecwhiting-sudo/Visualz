@@ -1,5 +1,31 @@
 import { describe, expect, it } from 'vitest'
-import { Transport } from '../../src/core/transport'
+import { Transport, framesToCatchUp } from '../../src/core/transport'
+
+/**
+ * Drives a live-mode Transport through the engine's fixed-timestep catch-up
+ * loop (framesToCatchUp + stepLive) for a given sequence of rAF clock samples,
+ * returning the total number of update() steps run (== the final frame). This
+ * is the exact shape of Engine.advanceLiveTo, minus the scene work.
+ */
+function simulateLive(rafClockTimes: number[], fps: number, cap = 30): { updates: number; frame: number } {
+  const t = new Transport('live', fps)
+  let updates = 0
+  for (const target of rafClockTimes) {
+    const steps = framesToCatchUp(t.frame, target, fps, cap)
+    for (let i = 0; i < steps; i++) {
+      t.stepLive()
+      updates++
+    }
+  }
+  return { updates, frame: t.frame }
+}
+
+function evenTicks(hz: number, seconds: number): number[] {
+  const out: number[] = []
+  const n = Math.round(hz * seconds)
+  for (let i = 1; i <= n; i++) out.push(i / hz)
+  return out
+}
 
 describe('Transport', () => {
   it('render mode advances by exact fixed timesteps', () => {
@@ -63,6 +89,74 @@ describe('Transport', () => {
   it('mode-mismatched calls throw', () => {
     expect(() => new Transport('live').step()).toThrow()
     expect(() => new Transport('render').advanceTo(1)).toThrow()
+  })
+
+  it('stepLive advances one fixed timestep, dt is fixed, time is pinned to frame/fps', () => {
+    const t = new Transport('live', 60)
+    const a = t.stepLive()
+    const b = t.stepLive()
+    expect([a.frame, b.frame]).toEqual([1, 2])
+    expect(a.dt).toBeCloseTo(1 / 60, 12)
+    expect(b.dt).toBeCloseTo(1 / 60, 12) // NEVER a real-elapsed dt — that is the fix
+    expect(b.time).toBeCloseTo(2 / 60, 12)
+    expect(() => new Transport('render', 60).stepLive()).toThrow()
+  })
+
+  // THE fix for live-vs-export divergence: the number of update() steps to reach
+  // a given audio time depends ONLY on that time, never on the rAF/display rate.
+  it('fixed-timestep catch-up reaches the same frame regardless of display refresh rate', () => {
+    const fps = 60
+    const seconds = 2
+    const expected = Math.floor(seconds * fps) // 120
+    const at60 = simulateLive(evenTicks(60, seconds), fps)
+    const at120 = simulateLive(evenTicks(120, seconds), fps) // high-refresh monitor
+    const at144 = simulateLive(evenTicks(144, seconds), fps)
+    const at30 = simulateLive(evenTicks(30, seconds), fps) // slow / throttled
+
+    // Every refresh rate runs the SAME number of updates to reach 2s of audio —
+    // so a per-call-clocked scene (terrain scroll, whip physics, GPGPU sims) is
+    // in the identical state at 2s live and on a fixed-fps export. Before the
+    // fix, the 120Hz run did ~2x the updates the 60fps export does: the bug.
+    for (const r of [at60, at120, at144, at30]) {
+      expect(r.updates).toBe(expected)
+      expect(r.frame).toBe(expected)
+    }
+  })
+
+  it('catch-up is jitter-proof (irregular rAF timing still lands on floor(time*fps))', () => {
+    const fps = 60
+    // A gnarly irregular clock: uneven gaps, a couple of tiny sub-frame ticks
+    // (two rAFs in one bucket), summing to exactly 1.0s.
+    const jitter = [0.005, 0.02, 0.021, 0.05, 0.11, 0.2, 0.201, 0.4, 0.66, 0.9, 0.95, 1.0]
+    const r = simulateLive(jitter, fps)
+    expect(r.frame).toBe(60)
+    expect(r.updates).toBe(60)
+  })
+
+  it('a stutter recovers over multiple rAFs without skipping frames (cap bounds the burst)', () => {
+    const fps = 60
+    const cap = 30
+    // Steady 60Hz ticks across 2s, but the rAF loop FREEZES for 600ms (ticks in
+    // [0.1, 0.7) never fire — a GC pause / backgrounded compositor). When ticks
+    // resume, the clock is 36 frames ahead; the cap (30) bounds the recovery
+    // burst so it drains across a couple of rAFs — but NO frame is skipped, so
+    // the sim still reaches floor(2.0*60) and stays locked to the audio clock.
+    const t = new Transport('live', fps)
+    let updates = 0
+    let maxBurst = 0
+    for (let i = 1; i <= 120; i++) {
+      const target = i / fps
+      if (target > 0.1 && target < 0.7) continue // frozen window: no rAF
+      const steps = framesToCatchUp(t.frame, target, fps, cap)
+      maxBurst = Math.max(maxBurst, steps)
+      for (let s = 0; s < steps; s++) {
+        t.stepLive()
+        updates++
+      }
+    }
+    expect(t.frame).toBe(120) // fully caught up after the freeze — nothing lost
+    expect(updates).toBe(120)
+    expect(maxBurst).toBe(cap) // the freeze recovery did hit the cap, then drained
   })
 
   it('reset rewinds time and frame counter', () => {

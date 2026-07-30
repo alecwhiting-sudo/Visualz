@@ -46,6 +46,25 @@ export class Transport {
   }
 
   /**
+   * Live mode: advance the simulation by exactly ONE fixed timestep (1/fps),
+   * same as render mode's `step()`. The engine's live loop drives this in a
+   * catch-up loop (see `framesToCatchUp`) to track the audio clock, so that
+   * `update()` runs the SAME number of times per second of audio in live and
+   * render — which is what makes per-call-clocked scene simulations (terrain
+   * scroll, whip physics, GPGPU ping-pong, DSL env/lfo helpers) look identical
+   * live and on export. `dt` is the fixed step, never a real-elapsed value, so
+   * a jittery/high-refresh rAF can't smear the simulation. `time` is pinned to
+   * `frame/fps` (not accumulated) so a long performance can't drift.
+   */
+  stepLive(): Frame {
+    if (this.mode !== 'live') throw new Error('stepLive() is live-mode only')
+    const dt = 1 / this.fps
+    this.n += 1
+    this.t = this.n / this.fps
+    return { time: this.t, dt, frame: this.n }
+  }
+
+  /**
    * Live mode: advance to the externally-supplied clock (normally the audio clock).
    *
    * The frame counter is time-derived (`floor(time * fps)`), not a per-call tick —
@@ -90,4 +109,21 @@ export class Transport {
     this.t = time
     this.n = Math.round(time * this.fps)
   }
+}
+
+/**
+ * How many fixed `1/fps` steps the live loop should run this rAF to catch the
+ * simulation frame up to the audio clock at `targetTime`, bounded by `cap`
+ * (so a long stall recovers over several rAFs instead of one giant burst).
+ *
+ * This is THE fix for live-vs-export divergence: the answer depends ONLY on the
+ * elapsed audio time, never on how often the rAF loop happened to fire — so a
+ * 60Hz monitor, a 120Hz monitor, and a jittery/throttled tab all run the SAME
+ * total number of `update()` calls to reach a given audio time (== `floor(time*
+ * fps)`), which is exactly what a fixed-fps export does. Per-call-clocked scene
+ * state is therefore reproduced on export instead of racing ahead live.
+ */
+export function framesToCatchUp(currentFrame: number, targetTime: number, fps: number, cap: number): number {
+  const targetFrame = Math.floor(targetTime * fps + 1e-9)
+  return Math.max(0, Math.min(cap, targetFrame - currentFrame))
 }
