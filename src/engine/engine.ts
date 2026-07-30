@@ -740,6 +740,46 @@ export class Engine {
           data: encodeImageBase64(this.storedImage.data),
         }
       : undefined
+    // Reset the live scene to the exact fresh, seeded state that replay/export
+    // reproduces from this doc — THE fix for "the export looks totally different
+    // from what I performed". A scene accumulates per-frame simulation state from
+    // the moment it is created (terrain/terrain-mirror scroll distance, the tunnel
+    // ring phase, particle & force-graph layouts, Gray-Scott/ping-pong fields);
+    // none of that is serialisable, so the take doc carries only params/bindings/
+    // shaders/image, and `loadSession` rebuilds the scene COLD at frame 0. Without
+    // this reset, a take armed after any rehearsal or idle time starts from
+    // whatever the sim had drifted to, while the export starts from zero — so
+    // every frame diverges (reported for a Tunnel × Terrain Mirror blend, whose
+    // scroll had run far ahead live). Recorder is still null here, so the
+    // re-applied params/shaders are NOT recorded as spurious frame-0 events; the
+    // engine-level bindings/mappings/bus/inputSignals persist across the re-init
+    // and keep driving the scene exactly as the captured snapshot describes.
+    this.scene.dispose()
+    this.scene.init(this.gpu, this.seed)
+    for (const [name, value] of Object.entries(params)) this.scene.setParam(name, value)
+    if (shaders && this.scene.setShaderSource) {
+      for (const [key, source] of Object.entries(shaders)) this.scene.setShaderSource(key, source)
+    }
+    if (this.storedImage) {
+      if (acceptsImage(this.scene)) this.scene.setImage(this.storedImage)
+      else if (hasIngest(this.scene)) this.scene.ingest(this.storedImage)
+    }
+    // Also reset the transient signal-producer state that `loadSession` resets
+    // for replay/export but that has been accumulating live since the scene
+    // loaded: the causal audio-event detector (demo/mic beat tracking — its
+    // adaptive state must start fresh, exactly as replay does via events.reset)
+    // and the mapping layer's in-flight ramp/pulse state. Without this a
+    // demo/mic take's beat-driven visuals diverge from export by the detector's
+    // carried-over phase. (File takes read a pure timeline lookup, so their
+    // signals already match — but resetting is harmless there and correct here.)
+    this.events.reset()
+    this.detectorStale = false
+    this.mappings.reset()
+    // A scene-handoff dissolve still in flight belongs to the pre-record live
+    // state; replay/export (loadSession) clears it, so clear it here too or a
+    // take armed mid-dissolve would show the fade live but not on export.
+    this.clearHandoffFade()
+
     this.recorder = new SessionRecorder(
       {
         seed: this.seed,
