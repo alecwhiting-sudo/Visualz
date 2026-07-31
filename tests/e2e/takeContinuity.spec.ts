@@ -26,6 +26,13 @@ test('changing the Scene dropdown mid-take keeps recording and records the switc
     .locator('input[type=file][accept*="audio"]')
     .setInputFiles({ name: 'fixture.wav', mimeType: 'audio/wav', buffer: wavFixture(20) })
   await expect(page.locator('.transport-row')).toBeVisible()
+  // Recording a file take is blocked until its offline analysis finishes (the
+  // filename shows "(analyzing N%)" until then) — else the take would be a
+  // generic `demo` and the export would replay a fake beat, not the track.
+  await expect(page.locator('label.file').filter({ hasText: 'fixture.wav' })).not.toContainText(
+    'analyzing',
+    { timeout: 15000 },
+  )
 
   // Track auto-plays on decode, so Arm starts the take immediately.
   await page.getByRole('button', { name: 'Arm' }).click()

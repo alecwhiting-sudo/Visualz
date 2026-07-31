@@ -62,6 +62,14 @@ async function loadFixtureAudio(page: Page, durationSec = 8) {
     buffer: makeWavBuffer(durationSec),
   })
   await expect(page.locator('.transport-row')).toBeVisible()
+  // Wait for the offline beat-grid analysis to finish (the filename shows
+  // "(analyzing N%)" until it does). Recording is now blocked until it lands —
+  // a file take needs the feature timeline or it would be snapshotted as a
+  // generic `demo` and the export would replay a fake beat, not the track.
+  await expect(page.locator('label.file').filter({ hasText: 'take.wav' })).not.toContainText(
+    'analyzing',
+    { timeout: 15000 },
+  )
 }
 
 const footerModeLine = (page: Page) => page.locator('.panel-footer .perf-mode-line')

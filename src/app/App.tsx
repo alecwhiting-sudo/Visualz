@@ -1344,7 +1344,21 @@ export function App() {
     if (!e) return
     if (e.isRecording) {
       endTake()
-    } else if (e.audio.hasFile && !e.audio.isPlaying) {
+      return
+    }
+    // Block recording a loaded track until its offline analysis (beat grid /
+    // band energies) is ready — otherwise the take is snapshotted as a generic
+    // `demo` and the export replays a fake beat, not the song (engine throws
+    // too). Checks the engine's timeline directly so an analysis failure blocks
+    // just the same as an in-progress one.
+    if (e.audio.hasFile && !e.audio.timeline) {
+      setArmed(false)
+      setSessionError(
+        'Track is still analyzing — wait for the beat grid to finish (the file row shows the %), then record. Recording now would replay a generic demo beat on export, not your track.',
+      )
+      return
+    }
+    if (e.audio.hasFile && !e.audio.isPlaying) {
       // Recording can't start against a frozen transport (engine throws), so
       // with a stopped/paused track the button ARMS instead: the next ▶ press
       // starts audio and the recording together on the same frame.
