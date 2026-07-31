@@ -1,4 +1,4 @@
-import { Transport, framesToCatchUp, type TransportMode } from '../core/transport'
+import { Transport, type TransportMode } from '../core/transport'
 import { SignalBus } from '../core/signals'
 import { Gpu } from '../gpu/context'
 import { DefaultSurface, FullscreenPass } from '../gpu/targets'
@@ -59,12 +59,6 @@ function round4(seconds: number): number {
  * UI dial's bottom stop means "cut", and the full-res frame copy is skipped
  * entirely so an unset signal costs nothing. */
 const HANDOFF_CUT_THRESHOLD = 0.15
-
-/** Max fixed-timestep sim steps the live loop runs in one rAF (see
- * `advanceLiveTo`). Bounds a post-stutter catch-up burst so a GC pause recovers
- * over a couple of rAFs instead of one giant hitch; normal operation is 0–1
- * steps/rAF so this is never hit. 30 ≈ half a second at 60fps. */
-const MAX_CATCHUP_STEPS = 30
 
 /** Held "UI mode" input signals baselined into a take at `startRecording`
  * (each is a review-finding class: set before arming, it silently shaped the
@@ -357,14 +351,6 @@ export class Engine {
   seekAudio(seconds: number): void {
     if (this.isRecording) return
     this.audio.seek(seconds)
-    // Jump the transport frame to the seek target. The live loop's fixed-timestep
-    // catch-up (advanceLiveTo) only moves the sim FORWARD toward the audio clock,
-    // so without this a seek while playing would stall (seek back) or burst-sim
-    // through every skipped frame (seek forward). Resetting makes a seek a clean
-    // jump in time — scene state deliberately carries on (see this method's doc),
-    // matching the old advanceTo-follows-the-clock behaviour. Seeks are locked
-    // during recording, so a take's internal frame numbering is never affected.
-    this.transport.reset(seconds)
     // Re-render at the new position while paused (signals are a pure timeline
     // lookup, so bindings/meters jump correctly even with the clock frozen).
     this.controlsDirty = true
@@ -940,42 +926,19 @@ export class Engine {
   }
 
   /**
-   * Live loop step (fixed-timestep catch-up). Instead of advancing the sim
-   * once per rAF straight to the audio clock — which made per-call-clocked
-   * scenes (terrain scroll, whip physics, GPGPU ping-pong, DSL env/lfo) race
-   * ahead on a high-refresh display and then look nothing like the fixed-fps
-   * export — this runs `update()`+`render()` in exact `1/fps` steps until the
-   * simulation frame reaches `floor(targetTime*fps)`. The step COUNT depends
-   * only on elapsed audio time (see `framesToCatchUp`), so live and export run
-   * the same number of updates to reach any given audio moment: a live
-   * performance now re-renders frame-for-frame on export.
-   *
-   * Every catch-up frame runs a FULL updateAndRender (not update-only): some
-   * scenes advance their simulation inside render() via GPU ping-pong
-   * (Gray-Scott, particle swarms), so skipping render would under-step them.
-   * The `cap` bounds a post-stutter burst; normal operation is 0–1 steps/rAF
-   * (a 120Hz display simply renders on every other rAF), so there is no waste.
+   * Live loop step: advance the transport to the audio clock and render one
+   * frame. (An earlier fixed-timestep "catch-up" variant that forced live to
+   * the export fps was reverted — it dropped the render rate on high-refresh
+   * displays, doubling fade-trail length into a wash-out, and stalled on a
+   * backward clock jump. The live-vs-export frame-rate divergence it targeted
+   * is instead being addressed by making the rendering itself frame-rate-
+   * independent — see docs.) `advanceTo` follows the clock in both directions,
+   * so a new track / seek / loop just moves the frame, no stall.
    */
   private advanceLiveTo(targetTime: number): void {
-    const fps = this.transport.fps
-    // The audio clock jumped BACKWARD relative to the sim clock — a new track
-    // loaded (its clock starts near 0 while the sim frame had climbed during
-    // demo/previous playback), a seek that bypassed seekAudio, or a loop. The
-    // fixed-timestep catch-up below only moves FORWARD, so without this it would
-    // stall — the visuals would freeze until the audio clock climbed back up to
-    // where the sim already was (on a fresh track, effectively forever: the
-    // "loading a song froze it" bug). Snap the transport to the new position.
-    // Guarded off during recording, where the clock is monotonic (seeks/loads
-    // are locked) so a take's frame numbering is never disturbed.
-    if (!this.isRecording && targetTime < this.transport.time - 1 / fps) {
-      this.transport.reset(targetTime)
-    }
-    const steps = framesToCatchUp(this.transport.frame, targetTime, fps, MAX_CATCHUP_STEPS)
-    for (let i = 0; i < steps; i++) {
-      if (this.player) this.player.applyUpTo(this.transport.frame - this.playerFrameOffset, this.playerTarget)
-      const frame = this.transport.stepLive()
-      this.updateAndRender(frame)
-    }
+    if (this.player) this.player.applyUpTo(this.transport.frame - this.playerFrameOffset, this.playerTarget)
+    const frame = this.transport.advanceTo(targetTime)
+    this.updateAndRender(frame)
   }
 
   /**
