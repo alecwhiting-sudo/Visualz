@@ -409,6 +409,15 @@ export class TerrainFlightScene implements SceneRuntime {
     // `uDeposit = uFade / TRAIL_FADE_REF`, so steady state = `L/TRAIL_FADE_REF`
     // regardless of frame rate. At dt === REF_STEP both factors are 1 / the old
     // constant, so 30fps goldens are byte-identical.
+    //
+    // dt is clamped to MAX_DT so a stalled live rAF can't teleport the trail;
+    // never bites export/replay (dt = 1/fps ≤ 1/30 for every output target,
+    // REQUIREMENTS §5.2). A dt of exactly 0 means no time passed — mainly the
+    // frozen control tick (update() skipped, grid redrawn onto itself), but also
+    // the odd live frame where the audio clock returns an unchanged value; in
+    // either case fall back to one REF_STEP of fade so a still frame that keeps
+    // additively redrawing can't blow itself out to white. This fallback is
+    // live-only (render-mode dt is always 1/fps > 0), so export is untouched.
     const fadeDt = ctx.frame.dt > 0 ? Math.min(ctx.frame.dt, MAX_DT) : REF_STEP
     const uFade = 1 - Math.pow(1 - TRAIL_FADE_REF, fadeDt / REF_STEP)
     const uDeposit = uFade / TRAIL_FADE_REF
@@ -518,11 +527,9 @@ export class TerrainFlightScene implements SceneRuntime {
 
     // Fade pass: translucent black quad — leaves the wireframe a faint motion
     // wake, matching lissajous/glyphlattice's trail-persistence convention. The
-    // dt-paced uFade (computed above Pass 1, so the deposit could be matched to
-    // it) makes the decay-per-second — and thus the trail LENGTH — invariant
-    // across frame rates. Frozen control ticks (dt === 0, update() skipped) fall
-    // back to one REF_STEP of fade so repeated tweaks can't additively blow the
-    // held frame out to white.
+    // dt-paced uFade (computed with the matched uDeposit above Pass 1) makes the
+    // decay-per-second — and thus the trail LENGTH — invariant across frame
+    // rates.
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
     gl.useProgram(this.fadeProgram)
     gl.uniform1f(this.fadeLoc.uFade, uFade)
