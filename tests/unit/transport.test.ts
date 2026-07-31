@@ -20,6 +20,31 @@ function simulateLive(rafClockTimes: number[], fps: number, cap = 30): { updates
   return { updates, frame: t.frame }
 }
 
+/**
+ * Same as simulateLive but with Engine.advanceLiveTo's backward-jump snap: when
+ * the audio clock drops below the sim clock (new track loaded / seek / loop),
+ * the transport resets to it instead of stalling (the forward-only catch-up
+ * can't rewind). `recording` disables the snap (a take's clock is monotonic).
+ */
+function simulateLiveWithReset(
+  rafClockTimes: number[],
+  fps: number,
+  cap = 30,
+  recording = false,
+): { updates: number; frame: number } {
+  const t = new Transport('live', fps)
+  let updates = 0
+  for (const target of rafClockTimes) {
+    if (!recording && target < t.time - 1 / fps) t.reset(target)
+    const steps = framesToCatchUp(t.frame, target, fps, cap)
+    for (let i = 0; i < steps; i++) {
+      t.stepLive()
+      updates++
+    }
+  }
+  return { updates, frame: t.frame }
+}
+
 function evenTicks(hz: number, seconds: number): number[] {
   const out: number[] = []
   const n = Math.round(hz * seconds)
@@ -157,6 +182,30 @@ describe('Transport', () => {
     expect(t.frame).toBe(120) // fully caught up after the freeze — nothing lost
     expect(updates).toBe(120)
     expect(maxBurst).toBe(cap) // the freeze recovery did hit the cap, then drained
+  })
+
+  it('loading a track after a long demo run does NOT freeze the sim (backward-jump snap)', () => {
+    const fps = 60
+    // Demo mode ran for ~100s (frame ~6000), THEN a track loads and its clock
+    // starts near 0 and plays forward. Without the backward-jump snap the
+    // forward-only catch-up would stall at frame 6000 forever — the "loading a
+    // song froze it" bug. With it, the transport snaps to the track and advances.
+    const demo = evenTicks(60, 100) // ~6000 frames of demo
+    const track = evenTicks(60, 2).map((s) => s) // track from 0 to 2s
+    const r = simulateLiveWithReset([...demo, ...track], fps)
+    // After the snap it tracks the NEW clock: 2s of track = frame 120, not stuck
+    // at the ~6000 the demo had climbed to.
+    expect(r.frame).toBe(120)
+  })
+
+  it('a backward-jump snap is suppressed while recording (monotonic take clock)', () => {
+    const fps = 60
+    // A pathological backward blip mid-recording must NOT reset the take clock.
+    const times = [...evenTicks(60, 1), 0.2 /* blip back */, ...evenTicks(60, 1).map((s) => 1 + s)]
+    const rec = simulateLiveWithReset(times, fps, 30, true)
+    // No snap: the counter only ever moved forward (the blip advanced 0 frames),
+    // ending where the final forward ticks left it — never rewound.
+    expect(rec.frame).toBe(120)
   })
 
   it('reset rewinds time and frame counter', () => {

@@ -957,7 +957,20 @@ export class Engine {
    * (a 120Hz display simply renders on every other rAF), so there is no waste.
    */
   private advanceLiveTo(targetTime: number): void {
-    const steps = framesToCatchUp(this.transport.frame, targetTime, this.transport.fps, MAX_CATCHUP_STEPS)
+    const fps = this.transport.fps
+    // The audio clock jumped BACKWARD relative to the sim clock — a new track
+    // loaded (its clock starts near 0 while the sim frame had climbed during
+    // demo/previous playback), a seek that bypassed seekAudio, or a loop. The
+    // fixed-timestep catch-up below only moves FORWARD, so without this it would
+    // stall — the visuals would freeze until the audio clock climbed back up to
+    // where the sim already was (on a fresh track, effectively forever: the
+    // "loading a song froze it" bug). Snap the transport to the new position.
+    // Guarded off during recording, where the clock is monotonic (seeks/loads
+    // are locked) so a take's frame numbering is never disturbed.
+    if (!this.isRecording && targetTime < this.transport.time - 1 / fps) {
+      this.transport.reset(targetTime)
+    }
+    const steps = framesToCatchUp(this.transport.frame, targetTime, fps, MAX_CATCHUP_STEPS)
     for (let i = 0; i < steps; i++) {
       if (this.player) this.player.applyUpTo(this.transport.frame - this.playerFrameOffset, this.playerTarget)
       const frame = this.transport.stepLive()
