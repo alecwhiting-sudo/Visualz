@@ -25,16 +25,39 @@ import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../ty
  * preceding update(), and since the ring buffer only ever needs a row computed
  * once, at the moment it's spawned).
  *
- * Frame-clocked scroll (CLAUDE.md "scroll/spawn strictly frame-clocked"):
- * `scrollDistance` advances in update() by `speed * FIXED_STEP` — a constant
- * per-call step, not `speed * frame.dt`. That ties row-spawn cadence to the
- * *count* of update() calls (i.e. to frame number), not to whatever dt a given
- * frame happened to report, so replay reproduces the exact same spawn frame
- * numbers regardless of any timing jitter. `frame.dt` is still used (as
- * everywhere else in the codebase) for the genuinely continuous beat-bob/onset
- * envelopes in update() — those are audio-reactive shaping, not row-spawn
- * timing, so decaying them in real seconds is correct and matches
- * flowfield.ts's onset-pulse pattern.
+ * Wall-clock-paced scroll & trail — "what I see live is what exports" (the
+ * export wash-out fix). The live loop calls update()/render() once per rAF,
+ * i.e. at the DISPLAY refresh (~120Hz), while an export steps at a fixed output
+ * fps (30/60). An earlier version advanced scroll by a constant `speed *
+ * (1/30)` per CALL and faded the trail by a constant 0.35 per FRAME, so the
+ * same performance rendered differently at different frame rates: on a 60fps
+ * export the terrain flew half as fast AND its additive trails persisted twice
+ * as long (in seconds) as on the 120Hz live view — the two compounding into the
+ * washed-out, piled-up look. Both are now paced by elapsed SECONDS (`frame.dt`)
+ * so 30/60/120fps and the export all cover the same ground and hold the same
+ * trail length per wall-second.
+ *
+ * Anchor = the LIVE look, not the golden's 30fps. The dt formulas are
+ * calibrated to `REF_DT` (= 1/120, the live refresh): at `dt === REF_DT` the
+ * scroll increment and fade alpha equal the previous per-frame constants
+ * exactly, so the 120Hz live view is byte-unchanged and the 30/60fps exports
+ * are made to reproduce IT. (This deliberately re-renders the 30fps goldens —
+ * the old goldens were the washed 30fps look we're fixing.)
+ *
+ * Deposit stays CONSTANT (full line brightness) — the load-bearing difference
+ * from the reverted attempt. That version also scaled the additive wireframe
+ * deposit by `uFade/0.35` to hold total-frame brightness invariant, which
+ * dimmed the actual lines to ~0.55x on a 60fps export = "terrain missing". The
+ * wireframe here is the primary content (thin moving lines), not a steady-state
+ * fill, so its lines must never dim with frame rate. Only the near-static
+ * accumulation glow (horizon, line crossings) scales with fps — a graceful,
+ * monotonic secondary effect that can never wash out (higher fps = brighter,
+ * and the user's live view already IS the highest fps).
+ *
+ * Determinism is unaffected: export and replay always step at a fixed
+ * `dt = 1/fps`, so those runs stay byte-reproducible; only the live view — which
+ * is never hashed — tracks the display rate. `frame.dt` also still drives the
+ * continuous beat-bob/onset envelopes, exactly as before.
  */
 
 const LINE_VS = `#version 300 es
@@ -72,7 +95,22 @@ const COL_SPACING = 0.12
 const ROW_SPACING = 1.0
 const CAM_HEIGHT = 3.0
 const NEAR_EPS = 0.05
-const FIXED_STEP = 1 / 30 // frame-clocked scroll tick (see class doc)
+// Reference timestep the dt-based scroll/fade formulas are calibrated to (see
+// class doc): the ~120Hz live refresh. At dt === REF_DT the formulas reproduce
+// the previous per-frame constants exactly, so the live view is byte-unchanged.
+const REF_DT = 1 / 120
+// Scroll advance per second at speed 1 = the old `1/30` per-call step taken at
+// the live refresh rate (1/30 ÷ REF_DT = 4 units/sec) — preserves the live
+// fly-through speed while making it frame-rate independent.
+const SCROLL_PER_SEC = (1 / 30) / REF_DT
+// Trail-fade darkening applied per REF_DT of elapsed time (the old constant
+// fade alpha). At other frame rates the shader alpha is rescaled so the decay
+// PER SECOND is invariant (see render()).
+const TRAIL_FADE_REF = 0.35
+// Live rAF dt can spike to seconds after a backgrounded tab / GC stall; clamp
+// so a stall can't teleport the scroll or black out the trails in one frame.
+// Never bites export/replay (dt = 1/fps ≤ 1/30 < MAX_DT) so goldens are safe.
+const MAX_DT = 0.1
 
 // Vertex layout: pos.xy + color.rgba, matching glyphlattice.ts's convention.
 const FLOATS_PER_VERTEX = 6
@@ -316,6 +354,13 @@ export class TerrainFlightScene implements SceneRuntime {
   }
 
   getParam(name: string): number {
+    // Reserved read-only introspection key (not a real param, so nothing
+    // enumerating `params` ever sees it): lets the frame-rate-independence spec
+    // read the accumulated scroll distance directly and assert it advances the
+    // same amount per wall-second at any fps — the cleanest probe of the
+    // dt-paced scroll, which pixel metrics miss because the terrain is
+    // self-similar as it scrolls.
+    if (name === '#scrollDistance') return this.scrollDistance
     return this.values.get(name) ?? 0
   }
 
@@ -328,10 +373,13 @@ export class TerrainFlightScene implements SceneRuntime {
     const beat = signals.get('beat')
     const onset = signals.get('onset')
 
-    // Frame-clocked scroll: a fixed per-call tick times `speed`, never
-    // `frame.dt` — see class doc. Spawn every row boundary crossed since the
-    // last update(), sampling the CURRENT signals at each spawn.
-    this.scrollDistance += this.getParam('speed') * FIXED_STEP
+    // Wall-clock scroll: advance by `speed * SCROLL_PER_SEC * elapsed seconds`
+    // (dt-paced, see class doc), so the fly-through covers the same ground per
+    // second at any frame rate. Clamped so a stalled rAF can't teleport it.
+    // Spawn every row boundary crossed since the last update(), sampling the
+    // CURRENT signals at each spawn. update() is skipped on frozen ticks, so
+    // dt here is always > 0.
+    this.scrollDistance += this.getParam('speed') * SCROLL_PER_SEC * Math.min(frame.dt, MAX_DT)
     const target = ROWS + Math.floor(this.scrollDistance)
     while (this.rowsSpawned < target) {
       const base = (this.rowsSpawned % ROWS) * COLS
@@ -347,9 +395,21 @@ export class TerrainFlightScene implements SceneRuntime {
     if (this.flashEnv > 1.5) this.flashEnv = 1.5
   }
 
-  render(_ctx: FrameContext, surface: RenderSurface): void {
+  render(ctx: FrameContext, surface: RenderSurface): void {
     const gl = this.gpu.gl
     surface.bind()
+
+    // Frame-rate-independent trail fade (see class doc). Decay a screen pixel
+    // by the same amount PER SECOND at any frame rate: uFade = 1-(1-ref)^(dt/REF_DT),
+    // so the trail LENGTH in wall-seconds is invariant. At dt === REF_DT (the
+    // ~120Hz live refresh) this is exactly the old constant 0.35, keeping the
+    // live view unchanged. Unlike the reverted attempt, the additive deposit
+    // (line `intensity` below) is NOT rescaled — the wireframe lines keep full
+    // brightness at every frame rate so export can never come out dim/missing.
+    // Frozen control ticks (dt === 0, update() skipped) fall back to one REF_DT
+    // of fade so repeated tweaks can't additively blow the held frame to white.
+    const fadeDt = ctx.frame.dt > 0 ? Math.min(ctx.frame.dt, MAX_DT) : REF_DT
+    const uFade = 1 - Math.pow(1 - TRAIL_FADE_REF, fadeDt / REF_DT)
 
     const relief = this.getParam('relief')
     const ridge = this.getParam('ridge')
@@ -471,10 +531,13 @@ export class TerrainFlightScene implements SceneRuntime {
     gl.enable(gl.BLEND)
 
     // Fade pass: translucent black quad — leaves the wireframe a faint motion
-    // wake, matching lissajous/glyphlattice's trail-persistence convention.
+    // wake, matching lissajous/glyphlattice's trail-persistence convention. The
+    // dt-paced uFade (computed at the top of render()) makes the decay-per-second
+    // — and thus the trail LENGTH in wall-seconds — invariant across frame rates,
+    // so a 30/60fps export holds the same trail as the 120Hz live view.
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
     gl.useProgram(this.fadeProgram)
-    gl.uniform1f(this.fadeLoc.uFade, 0.35)
+    gl.uniform1f(this.fadeLoc.uFade, uFade)
     gl.bindVertexArray(this.fadeVao)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
 
