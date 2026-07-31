@@ -188,12 +188,18 @@ export function bootTestMode(root: HTMLElement): void {
     ;(scene as { setGridSize: (n: number) => void }).setGridSize(Number(grid))
   }
 
+  // Fixed-timestep render fps (default 30, the golden baseline). `?fps=` lets a
+  // frame-rate-independence spec render the SAME scene at two rates and assert
+  // the wall-clock result matches (frameRateIndependence.spec.ts) — the whole
+  // point of the dt-paced scene timing (terrain scroll/fade, etc.).
+  const fps = Number(params.get('fps') ?? '30')
+
   const engine = new Engine(canvas, scene, {
     mode: 'render',
     seed,
     width,
     height,
-    fps: 30,
+    fps,
   })
 
   // Test-mode-only particle-count override (docs/PARTICLES.md §9): golden tests
