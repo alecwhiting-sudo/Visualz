@@ -3,30 +3,38 @@ import type { RenderSurface } from '../../gpu/targets'
 import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../types'
 
 /**
- * Terrain — a flat perspective grid ("the matrix floor"). A completely flat
- * wireframe plane recedes to a vanishing point on the screen's centre line and
- * scrolls toward the viewer, the lateral rungs spreading apart as they rush down
- * out of the horizon. First-built exemplar of the SCENE CONTRACT (see
+ * Terrain — a perspective grid ("the matrix floor"). A wireframe plane recedes
+ * to a vanishing point on the screen's centre line and scrolls toward the
+ * viewer, the lateral rungs spreading apart as they rush down out of the
+ * horizon. `relief` raises randomised bumps out of the plane; at relief 0 it is
+ * the completely flat matrix. First-built exemplar of the SCENE CONTRACT (see
  * docs/SCENE_CONTRACT.md + ARCHITECTURE.md §"Preview = export"); every rule the
  * old Terrain broke is designed out here rather than patched:
  *
  *  1. render() is PURE. It clears the surface and redraws the whole grid from
- *     `scrollPhase` every call — no fade quad, no framebuffer feedback, no scene
- *     state touched. Calling render() twice with no update() between produces
- *     byte-identical pixels (the frozen-control-tick case is free, not special).
- *     There are NO trails: a trail is history, and history that lives in the
- *     draw step is exactly what made the old scene render differently at
+ *     `scrollDistance` every call — no fade quad, no framebuffer feedback, no
+ *     scene state touched. Calling render() twice with no update() between
+ *     produces byte-identical pixels (the frozen-control-tick case is free, not
+ *     special). There are NO trails: a trail is history, and history that lives
+ *     in the draw step is exactly what made the old scene render differently at
  *     different frame rates.
  *
- *  2. All motion lives in update(), paced by ELAPSED SECONDS. `scrollPhase`
+ *  2. All motion lives in update(), paced by ELAPSED SECONDS. `scrollDistance`
  *     advances by `speed * SCROLL_PER_SEC * frame.dt`, so the floor covers the
  *     same ground per wall-second at 30, 60, or 120 fps — what you preview is
  *     what you export. (Determinism is intact: export/replay step a fixed dt.)
  *
- *  3. No real clock, no randomness. The grid is a pure function of integer
- *     row/column indices and `scrollPhase`; it needs no PRNG at all.
+ *  3. Randomness is a POSITIONAL HASH, not a stream. A bump's height is a pure
+ *     function `heightAt(worldRow, col)` — a seeded value-noise over the integer
+ *     terrain lattice (mulberry-adjacent hash, XORed with the scene seed). A
+ *     stream PRNG (mulberry32) would tie a row's height to how many draws
+ *     happened before it, which varies with frame rate and history — the same
+ *     hazard as a trail. A pure hash makes each row's shape depend only on WHICH
+ *     piece of world terrain it is (`floor(scrollDistance) + j`), so bumps flow
+ *     smoothly toward the camera as the field scrolls and any row regenerates
+ *     identically at any time. No Date.now / performance.now / Math.random.
  *
- * Deliberately flat and non-reactive for now: audio-driven relief and the
+ * Deliberately non-audio-reactive for now: coupling `bass`→relief and the
  * Tunnel composite come next, on top of this compliant base.
  */
 
@@ -55,6 +63,12 @@ const CAM_HEIGHT = 1.0 // camera height above the flat plane
 const FOCAL = 1.3 // pinhole focal length (vertical FOV)
 const NEAR_EPS = 0.08 // clip a point once its depth drops below this
 const SCROLL_PER_SEC = 3 // rungs crossed per second at speed 1 (wall-clock paced)
+// Value-noise sampling frequencies over the (worldRow, col) terrain lattice:
+// low frequency = broad rolling hills, the second octave adds finer detail.
+const ROW_FREQ = 0.16
+const COL_FREQ = 0.20
+const ROW_FREQ2 = 0.41
+const COL_FREQ2 = 0.53
 
 const FLOATS_PER_VERTEX = 6 // pos.xy + color.rgba
 // Worst case: every rung segment + every rail segment, all points unclipped.
@@ -62,6 +76,50 @@ const MAX_VERTS = (ROWS * (COLS - 1) + COLS * (ROWS - 1)) * 2
 
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v
+}
+
+// --- Positional hash noise (seeded, no PRNG stream — see class doc) ----------
+
+function hash32(x: number): number {
+  x = (x + 0x9e3779b9) >>> 0
+  x = x ^ (x >>> 16)
+  x = Math.imul(x, 0x7feb352d) >>> 0
+  x = x ^ (x >>> 15)
+  x = Math.imul(x, 0x846ca68b) >>> 0
+  x = x ^ (x >>> 16)
+  return x >>> 0
+}
+
+/** Deterministic lattice value in [-1,1] at integer (ix, iy), keyed by seed. */
+function lattice(ix: number, iy: number, seedXor: number): number {
+  const k = (hash32(ix >>> 0) ^ Math.imul(iy | 0, 0x9e3779b9) ^ seedXor) >>> 0
+  return (hash32(k) / 4294967296) * 2 - 1
+}
+
+function fadeCurve(t: number): number {
+  return t * t * (3 - 2 * t)
+}
+
+/** Bilinear value noise over the hashed integer lattice — smooth, deterministic. */
+function valueNoise2(x: number, y: number, seedXor: number): number {
+  const ix = Math.floor(x)
+  const iy = Math.floor(y)
+  const u = fadeCurve(x - ix)
+  const v = fadeCurve(y - iy)
+  const a = lattice(ix, iy, seedXor)
+  const b = lattice(ix + 1, iy, seedXor)
+  const c = lattice(ix, iy + 1, seedXor)
+  const d = lattice(ix + 1, iy + 1, seedXor)
+  return a + (b - a) * u + (c - a + (a - b - c + d) * u) * v
+}
+
+/** Two-octave terrain height at an integer world row/col — the bump field.
+ *  Pure function of (worldRow, col, seed): the same terrain regenerates
+ *  identically however the scroll got here (see class doc). */
+function heightAt(worldRow: number, col: number, seedXor: number): number {
+  const n1 = valueNoise2(worldRow * ROW_FREQ, col * COL_FREQ, seedXor)
+  const n2 = valueNoise2(worldRow * ROW_FREQ2 + 31.7, col * COL_FREQ2 + 11.3, seedXor ^ 0x2545f491)
+  return n1 * 0.72 + n2 * 0.28
 }
 
 function hsv2rgb(h: number, s: number, v: number): [number, number, number] {
@@ -86,6 +144,7 @@ export class TerrainScene implements SceneRuntime {
 
   params: ParamSchema[] = [
     { name: 'speed', label: 'Speed', min: 0.1, max: 3, default: 1 },
+    { name: 'relief', label: 'Relief', min: 0, max: 1.5, default: 0.7 },
     { name: 'spread', label: 'Spread', min: 0.6, max: 2, default: 1 },
     { name: 'fog', label: 'Fog', min: 0.2, max: 1.2, default: 0.6 },
     { name: 'glow', label: 'Glow', min: 0.3, max: 2, default: 1 },
@@ -94,11 +153,15 @@ export class TerrainScene implements SceneRuntime {
 
   private values = new Map<string, number>()
   private gpu!: Gpu
+  private seedXor = 0
 
-  // The one piece of scene state: fractional scroll position in [0,1), advanced
-  // ONLY in update(). render() reads it and nothing else. This is what keeps
-  // render() pure and the whole scene frame-rate independent.
-  private scrollPhase = 0
+  // The one piece of scene state: continuous scroll distance in ROWS, advanced
+  // ONLY in update(). render() reads it and nothing else. Its integer part picks
+  // which world terrain rows are on screen (so bumps flow toward the camera) and
+  // its fraction is the sub-row offset. Continuous (not wrapped) so `floor()`
+  // gives a stable, monotonic world-row index. This is what keeps render() pure
+  // and the whole scene frame-rate independent.
+  private scrollDistance = 0
 
   // Scratch grid buffers, sized once, reused every render() — no per-frame alloc.
   private gridX = new Float32Array(ROWS * COLS)
@@ -114,10 +177,11 @@ export class TerrainScene implements SceneRuntime {
   private lineVbo!: WebGLBuffer
   private lineSource = LINE_FS
 
-  init(gpu: Gpu, _seed: number): void {
+  init(gpu: Gpu, seed: number): void {
     this.gpu = gpu
+    this.seedXor = seed >>> 0
     for (const p of this.params) this.values.set(p.name, p.default)
-    this.scrollPhase = 0
+    this.scrollDistance = 0
     this.lineSource = LINE_FS
 
     const gl = gpu.gl
@@ -141,22 +205,19 @@ export class TerrainScene implements SceneRuntime {
 
   getParam(name: string): number {
     // Reserved read-only introspection key (never enumerated in `params`): lets
-    // the frame-rate-independence spec read the accumulated scroll position and
+    // the frame-rate-independence spec read the accumulated scroll distance and
     // assert it lands the same per wall-second at any fps — the direct probe of
-    // dt-paced scroll, which the flat grid's lit-pixel count is too phase-
-    // invariant to reveal.
-    if (name === '#scrollPhase') return this.scrollPhase
+    // dt-paced scroll, which pixel counts are too coarse to reveal.
+    if (name === '#scrollDistance') return this.scrollDistance
     return this.values.get(name) ?? 0
   }
 
   update(ctx: FrameContext): void {
     // The ONLY state change in the scene. Wall-clock paced (× frame.dt), so the
-    // floor advances the same distance per second at any frame rate. Wrapped to
-    // [0,1): because every row is identical on a flat grid, wrapping recycles the
-    // nearest rung seamlessly.
-    const step = this.getParam('speed') * SCROLL_PER_SEC * ctx.frame.dt
-    this.scrollPhase = (this.scrollPhase + step) % 1
-    if (this.scrollPhase < 0) this.scrollPhase += 1
+    // floor advances the same distance per second at any frame rate. Continuous
+    // (never wrapped) so floor(scrollDistance) is a stable world-row index for
+    // the bump field.
+    this.scrollDistance += this.getParam('speed') * SCROLL_PER_SEC * ctx.frame.dt
   }
 
   render(_ctx: FrameContext, surface: RenderSurface): void {
@@ -168,19 +229,25 @@ export class TerrainScene implements SceneRuntime {
     gl.clearColor(0, 0, 0, 1)
     gl.clear(gl.COLOR_BUFFER_BIT)
 
+    const relief = this.getParam('relief')
     const spread = this.getParam('spread')
     const fog = this.getParam('fog')
     const glow = this.getParam('glow')
     const hue = this.getParam('hue')
     const aspect = surface.width / surface.height
     const centerCol = (COLS - 1) / 2
-    const phase = this.scrollPhase
+    const frac = this.scrollDistance - Math.floor(this.scrollDistance)
+    const baseRow = Math.floor(this.scrollDistance)
 
-    // --- Pass 1: project every grid intersection of the flat plane. ---
+    // --- Pass 1: project every grid intersection, raised by the bump field. ---
     for (let j = 0; j < ROWS; j++) {
-      // Nearest rung at j=0; (1 - phase) slides the whole field toward the
-      // camera as phase grows, so rungs flow down out of the horizon.
-      const depth = (j + (1 - phase)) * ROW_SPACING
+      // Nearest rung at j=0; (1 - frac) slides the whole field toward the camera
+      // as the scroll grows, so rungs flow down out of the horizon. `worldRow`
+      // is the integer piece of terrain this screen rung shows — advancing
+      // baseRow by one as the scroll crosses a row boundary hands each bump to
+      // the next-nearer screen slot, so the field scrolls seamlessly.
+      const depth = (j + (1 - frac)) * ROW_SPACING
+      const worldRow = baseRow + j
       const fogFactor = Math.exp(-fog * 0.12 * depth)
       for (let c = 0; c < COLS; c++) {
         const idx = j * COLS + c
@@ -189,15 +256,19 @@ export class TerrainScene implements SceneRuntime {
           continue
         }
         const worldX = (c - centerCol) * COL_SPACING * spread
-        // Pinhole projection of the flat plane (worldY = -CAM_HEIGHT). As depth
-        // grows both axes collapse toward (0,0) — the vanishing point on the
-        // screen's centre line.
+        const height = heightAt(worldRow, c, this.seedXor) * relief
+        // Pinhole projection of the plane at worldY = height - CAM_HEIGHT. As
+        // depth grows both axes collapse toward (0,0) — the vanishing point on
+        // the screen's centre line.
         this.gridX[idx] = (FOCAL * (worldX / depth)) / aspect
-        this.gridY[idx] = FOCAL * (-CAM_HEIGHT / depth)
+        this.gridY[idx] = (FOCAL * ((height - CAM_HEIGHT) / depth))
         this.gridVisible[idx] = 1
 
-        const light = clamp01(0.25 + fogFactor * 0.75)
-        const [r, g, b] = hsv2rgb(hue, 0.75, light)
+        // Tint by height: peaks read hotter/brighter than valleys, a cheap depth
+        // cue that also makes the bumps legible in wireframe.
+        const heightNorm = clamp01(0.5 + height * 0.5)
+        const light = clamp01(0.22 + heightNorm * 0.3 + fogFactor * 0.5)
+        const [r, g, b] = hsv2rgb(hue + heightNorm * 0.06, 0.75, light)
         const intensity = glow * fogFactor
         this.gridR[idx] = r * intensity
         this.gridG[idx] = g * intensity

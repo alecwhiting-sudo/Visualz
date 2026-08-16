@@ -110,19 +110,19 @@ async function probeAtFps(page: import('@playwright/test').Page, fps: number, se
       for (let i = 0; i < px.length; i += 4) if (px[i] + px[i + 1] + px[i + 2] > 30) n++
       return n
     })(),
-    phase: (window.__viz as { getParam(n: string): number }).getParam('#scrollPhase'),
+    scroll: (window.__viz as { getParam(n: string): number }).getParam('#scrollDistance'),
   }))
 }
 
 test('terrain scroll is dt-paced: same position + look at 30/60/120fps at equal wall-clock time', async ({ page }) => {
-  // 3.5s × speed 1 × SCROLL_PER_SEC(3) = 10.5 → scrollPhase = 0.5 (mid-cell, NOT
-  // a whole number of cycles — so a per-call scroll would land somewhere else and
-  // this would catch it, unlike an integer-cycle time).
+  // 3.5s × speed 1 × SCROLL_PER_SEC(3) = 10.5 rows — a fraction of a row past a
+  // boundary, so a per-call scroll would land somewhere else and this would catch
+  // it. Same scrollDistance ⇒ same world rows ⇒ same bumps at every frame rate.
   const seconds = 3.5
   const a = await probeAtFps(page, 30, seconds)
   const b = await probeAtFps(page, 60, seconds)
   const c = await probeAtFps(page, 120, seconds)
-  for (const p of [a, b, c]) expect(p.phase).toBeCloseTo(0.5, 4) // dt-paced position invariant
+  for (const p of [a, b, c]) expect(p.scroll).toBeCloseTo(10.5, 4) // dt-paced position invariant
   for (const p of [a, b, c]) expect(p.lit).toBeGreaterThan(500) // non-blank, no wash-out
   const hi = Math.max(a.lit, b.lit, c.lit)
   const lo = Math.min(a.lit, b.lit, c.lit)
