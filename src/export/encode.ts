@@ -331,6 +331,31 @@ interface SinkResultMeta {
  * track's own chunks arrive in monotonically increasing timestamp order — which
  * holds here since the audio chunks are queued strictly in PCM order.
  */
+/**
+ * Correct the video's tagged transfer function to sRGB (`iec61966-2-1`).
+ *
+ * The scene canvas is full-range sRGB, but Chrome's `VideoEncoder` tags its
+ * output `{ transfer: 'bt709', fullRange: false }` (measured). Two facts from
+ * decoding real output back with `VideoDecoder`:
+ *  - the LIMITED-range roundtrip is brightness-accurate in a conformant decoder
+ *    (decoded mean luma ≈ source), so range is NOT the bug — and forcing
+ *    `fullRange: true` over-expands the (genuinely limited) samples ~5x;
+ *  - the TRANSFER is genuinely mis-tagged: the pixels carry sRGB, tagged BT.709.
+ * A color-managed player (e.g. macOS QuickTime) applies the tagged BT.709 EOTF,
+ * which is darker than sRGB — the "export looks ~15% dimmer than the canvas"
+ * report. Re-tag transfer to sRGB so those players apply the right curve;
+ * leave range/matrix/primaries as the encoder set them (consistent with the
+ * encoded samples, and a no-op for pass-through/non-color-managed players).
+ */
+function withSrgbTransfer(meta?: EncodedVideoChunkMetadata): EncodedVideoChunkMetadata | undefined {
+  const cs = meta?.decoderConfig?.colorSpace
+  if (!meta?.decoderConfig || !cs) return meta
+  return {
+    ...meta,
+    decoderConfig: { ...meta.decoderConfig, colorSpace: { ...cs, transfer: 'iec61966-2-1' } },
+  }
+}
+
 function buildSink(
   videoConfig: VideoEncoderConfig,
   audioConfig: AudioEncoderConfig | null,
@@ -344,7 +369,7 @@ function buildSink(
 
   const encoder = new VideoEncoder({
     output: (chunk, metadata) => {
-      muxer.addVideoChunk(chunk, metadata)
+      muxer.addVideoChunk(chunk, withSrgbTransfer(metadata))
     },
     error: (err) => {
       encoderError = err instanceof Error ? err : new Error(String(err))
