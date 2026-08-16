@@ -35,7 +35,7 @@ void main() {
 const RENDER_FS = `#version 300 es
 precision highp float;
 uniform vec2 uResolution;
-uniform float uAspect, uScale, uSharpness, uHue, uBrightness, uFlash;
+uniform float uAspect, uScale, uSharpness, uHue, uBrightness, uFlash, uRot;
 uniform vec2 uDrift;
 uniform float uN[${MODES}];
 uniform float uM[${MODES}];
@@ -53,6 +53,8 @@ void main(){
   vec2 uv = (gl_FragCoord.xy / uResolution) * 2.0 - 1.0;
   uv.x *= max(uAspect, 1.0);
   uv.y /= min(uAspect, 1.0);
+  float cs = cos(uRot), sn = sin(uRot);
+  uv = mat2(cs, -sn, sn, cs) * uv;      // Spin: slow plate rotation
   vec2 q = uv * uScale + uDrift;
 
   // Chladni superposition: each mode is the symmetric standing wave
@@ -91,6 +93,7 @@ interface RenderLocs {
   uHue: WebGLUniformLocation | null
   uBrightness: WebGLUniformLocation | null
   uFlash: WebGLUniformLocation | null
+  uRot: WebGLUniformLocation | null
   uDrift: WebGLUniformLocation | null
   uN: WebGLUniformLocation | null
   uM: WebGLUniformLocation | null
@@ -103,6 +106,12 @@ export class CymaticsScene implements SceneRuntime {
   params: ParamSchema[] = [
     { name: 'scale', label: 'Scale', min: 1.2, max: 8, default: 3.4 },
     { name: 'sharpness', label: 'Sharpness', min: 0.02, max: 0.3, default: 0.1 },
+    // Morph is the big evolution driver: it wobbles the plate's wavenumbers off
+    // their integer values over time, so the whole nodal figure continuously
+    // reshapes rather than just breathing in brightness.
+    { name: 'morph', label: 'Morph', min: 0, max: 1.2, default: 0.55 },
+    { name: 'evolve', label: 'Evolve', min: 0, max: 3, default: 1 }, // master tempo for morph/spin/breath/drift
+    { name: 'spin', label: 'Spin', min: 0, max: 1, default: 0.12 },
     { name: 'flow', label: 'Flow', min: 0, max: 1.2, default: 0.3 },
     { name: 'react', label: 'Audio', min: 0, max: 1.5, default: 0.7 },
     { name: 'hue', label: 'Hue', min: 0, max: 1, default: 0.55 },
@@ -120,10 +129,15 @@ export class CymaticsScene implements SceneRuntime {
   private modeM = new Float32Array(MODES)
   private baseAmp = new Float32Array(MODES)
   private lfoRate = new Float32Array(MODES)
+  private morphRate = new Float32Array(MODES)
 
   // CPU state (all advanced ONLY in update(), all in seconds).
   private lfoPhase = new Float32Array(MODES)
+  private morphPhase = new Float32Array(MODES)
   private amp = new Float32Array(MODES)
+  private effN = new Float32Array(MODES) // wavenumbers after Morph wobble (per frame)
+  private effM = new Float32Array(MODES)
+  private spinPhase = 0
   private driftX = 0
   private driftY = 0
   private driftVX = 0
@@ -149,10 +163,13 @@ export class CymaticsScene implements SceneRuntime {
       this.baseAmp[i] = 1 / (1 + i * 0.35) // higher modes contribute less
       this.lfoRate[i] = 0.15 + rng() * 0.5 // slow breathing, Hz-ish
       this.lfoPhase[i] = rng() * Math.PI * 2
+      this.morphRate[i] = 0.12 + rng() * 0.3 // wavenumber-wobble rate (the Morph clock)
+      this.morphPhase[i] = rng() * Math.PI * 2
     }
     const ang = rng() * Math.PI * 2
     this.driftVX = Math.cos(ang)
     this.driftVY = Math.sin(ang)
+    this.spinPhase = 0
     this.driftX = 0
     this.driftY = 0
     this.envBass = 0
@@ -193,18 +210,27 @@ export class CymaticsScene implements SceneRuntime {
     if (this.flash > FLASH_MAX) this.flash = FLASH_MAX
 
     const react = this.getParam('react')
+    const evolve = this.getParam('evolve')
+    const morph = this.getParam('morph')
+    const edt = evolve * dt // master tempo scales every internal clock
     for (let i = 0; i < MODES; i++) {
-      this.lfoPhase[i] += this.lfoRate[i] * dt
+      this.lfoPhase[i] += this.lfoRate[i] * edt
+      this.morphPhase[i] += this.morphRate[i] * edt
       const breath = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(this.lfoPhase[i]))
       // Split the audio bands across the mode set: low modes ride the bass, the
       // middle ones the mids, the top the highs.
       const band = i < 2 ? this.envBass : i < 4 ? this.envMid : this.envHigh
       this.amp[i] = this.baseAmp[i] * breath + react * band * 0.8
+      // Morph: wobble the wavenumbers off their integer values so the nodal
+      // figure continuously reshapes (the two axes out of phase for asymmetry).
+      this.effN[i] = this.modeN[i] + morph * Math.sin(this.morphPhase[i])
+      this.effM[i] = this.modeM[i] + morph * Math.cos(this.morphPhase[i] * 1.3 + 0.7)
     }
 
+    this.spinPhase += this.getParam('spin') * edt
     const flow = this.getParam('flow')
-    this.driftX += this.driftVX * flow * dt
-    this.driftY += this.driftVY * flow * dt
+    this.driftX += this.driftVX * flow * edt
+    this.driftY += this.driftVY * flow * edt
   }
 
   render(_ctx: FrameContext, surface: RenderSurface): void {
@@ -221,9 +247,10 @@ export class CymaticsScene implements SceneRuntime {
     gl.uniform1f(this.renderLoc.uHue, this.getParam('hue'))
     gl.uniform1f(this.renderLoc.uBrightness, this.getParam('brightness'))
     gl.uniform1f(this.renderLoc.uFlash, this.flash)
+    gl.uniform1f(this.renderLoc.uRot, this.spinPhase)
     gl.uniform2f(this.renderLoc.uDrift, this.driftX, this.driftY)
-    gl.uniform1fv(this.renderLoc.uN, this.modeN)
-    gl.uniform1fv(this.renderLoc.uM, this.modeM)
+    gl.uniform1fv(this.renderLoc.uN, this.effN)
+    gl.uniform1fv(this.renderLoc.uM, this.effM)
     gl.uniform1fv(this.renderLoc.uAmp, this.amp)
     this.fsPass.draw()
   }
@@ -250,6 +277,7 @@ export class CymaticsScene implements SceneRuntime {
       uHue: gl.getUniformLocation(program, 'uHue'),
       uBrightness: gl.getUniformLocation(program, 'uBrightness'),
       uFlash: gl.getUniformLocation(program, 'uFlash'),
+      uRot: gl.getUniformLocation(program, 'uRot'),
       uDrift: gl.getUniformLocation(program, 'uDrift'),
       uN: gl.getUniformLocation(program, 'uN'),
       uM: gl.getUniformLocation(program, 'uM'),
