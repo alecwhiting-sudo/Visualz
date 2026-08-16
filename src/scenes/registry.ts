@@ -20,6 +20,7 @@ import { OrreryScene } from './builtin/orrery'
 import { WhipStormScene } from './builtin/whipstorm'
 import { NeuralWebScene } from './builtin/neuralweb'
 import { StarFlightScene } from './builtin/starflight'
+import { CymaticsScene } from './builtin/cymatics'
 import { StrangeAttractorScene } from './builtin/attractor'
 import { CompositeScene, type CompositeChild } from './composite'
 import type { SceneRuntime } from './types'
@@ -74,6 +75,7 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
   neuralweb: { name: 'Neural Web', create: () => new NeuralWebScene() },
   starflight: { name: 'Star Flight', create: () => new StarFlightScene() },
   attractor: { name: 'Strange Attractor', create: () => new StrangeAttractorScene() },
+  cymatics: { name: 'Cymatics', create: () => new CymaticsScene() },
   'blend-julia-flow': {
     name: 'Julia × Flow field',
     create: () =>

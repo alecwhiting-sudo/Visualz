@@ -33,6 +33,29 @@ export interface ShaderDocEntry {
 
 /** sceneId -> stageKey -> doc. */
 export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
+  cymatics: {
+    'render-fs': {
+      summary:
+        'A Chladni resonance plate: the whole field is a superposition of standing-wave modes, and this shader lights up the nodal lines — where the plate is still and sand would collect — as glowing filigree, with the antinodes dark between them. The mode wavenumbers, breathing and drift are all computed CPU-side and arrive as uniforms; the shader just turns "how far is this pixel from a node" into colour.',
+      tryThis: [
+        {
+          target: '1.0 - smoothstep(0.0, uSharpness, an)',
+          effect:
+            'the nodal-line extraction: invert it (drop the `1.0 -`) to light the antinodes instead of the nodes — a negative of the plate.',
+        },
+        {
+          target: 'an * 0.10 * (1.0 - line)',
+          effect:
+            'how brightly the antinode fields glow between the lines; raise 0.10 to 0.4 for a lava-lamp fill, or 0.0 for pure hairline nodes on black.',
+        },
+        {
+          target: 'fract(uHue + (z > 0.0 ? 0.5 : 0.42))',
+          effect:
+            'the two-tone split across a node — widen the 0.5/0.42 gap for clashing complementary fields, or match them for a single-hue plate.',
+        },
+      ],
+    },
+  },
   whipline: {
     'line-fs': {
       summary:
