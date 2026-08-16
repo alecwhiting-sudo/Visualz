@@ -69,6 +69,11 @@ const ROW_FREQ = 0.16
 const COL_FREQ = 0.20
 const ROW_FREQ2 = 0.41
 const COL_FREQ2 = 0.53
+// Third octave — near per-cell frequency, so it decorrelates almost every grid
+// step: the `jagged` knob's roughness overlay. Its high spatial frequency is
+// what makes the ups/downs rush past far faster as the terrain scrolls.
+const ROW_FREQ3 = 0.9
+const COL_FREQ3 = 0.97
 
 const FLOATS_PER_VERTEX = 6 // pos.xy + color.rgba
 // Worst case: every rung segment + every rail segment, all points unclipped.
@@ -113,13 +118,17 @@ function valueNoise2(x: number, y: number, seedXor: number): number {
   return a + (b - a) * u + (c - a + (a - b - c + d) * u) * v
 }
 
-/** Two-octave terrain height at an integer world row/col — the bump field.
+/** Terrain height at an integer world row/col — the bump field. Two smooth
+ *  octaves plus a `rough`-scaled high-frequency third octave (the Jagged knob).
  *  Pure function of (worldRow, col, seed): the same terrain regenerates
  *  identically however the scroll got here (see class doc). */
-function heightAt(worldRow: number, col: number, seedXor: number): number {
+function heightAt(worldRow: number, col: number, seedXor: number, rough: number): number {
   const n1 = valueNoise2(worldRow * ROW_FREQ, col * COL_FREQ, seedXor)
   const n2 = valueNoise2(worldRow * ROW_FREQ2 + 31.7, col * COL_FREQ2 + 11.3, seedXor ^ 0x2545f491)
-  return n1 * 0.72 + n2 * 0.28
+  const smooth = n1 * 0.72 + n2 * 0.28
+  if (rough <= 0) return smooth
+  const n3 = valueNoise2(worldRow * ROW_FREQ3 + 7.1, col * COL_FREQ3 + 19.9, seedXor ^ 0x9e3779b1)
+  return smooth + n3 * rough
 }
 
 function hsv2rgb(h: number, s: number, v: number): [number, number, number] {
@@ -145,6 +154,10 @@ export class TerrainScene implements SceneRuntime {
   params: ParamSchema[] = [
     { name: 'speed', label: 'Speed', min: 0.1, max: 3, default: 1 },
     { name: 'relief', label: 'Relief', min: 0, max: 1.5, default: 0.7 },
+    // Jagged: amplitude of a near-per-cell high-frequency octave laid over the
+    // smooth hills. 0 = smooth contours; higher = rougher, spikier terrain whose
+    // rapid ups/downs sweep past faster as it scrolls.
+    { name: 'jagged', label: 'Jagged', min: 0, max: 1, default: 0 },
     // Flight height: camera altitude above the base plane. At ~0 you fly at sea
     // level and the contours rise above you and pass overhead; higher looks down
     // on the terrain. The camera never tilts, so the horizon stays on the centre
@@ -235,6 +248,7 @@ export class TerrainScene implements SceneRuntime {
     gl.clear(gl.COLOR_BUFFER_BIT)
 
     const relief = this.getParam('relief')
+    const jagged = this.getParam('jagged')
     const altitude = this.getParam('altitude')
     const spread = this.getParam('spread')
     const fog = this.getParam('fog')
@@ -262,7 +276,7 @@ export class TerrainScene implements SceneRuntime {
           continue
         }
         const worldX = (c - centerCol) * COL_SPACING * spread
-        const height = heightAt(worldRow, c, this.seedXor) * relief
+        const height = heightAt(worldRow, c, this.seedXor, jagged) * relief
         // Pinhole projection of the plane at worldY = height - altitude (camera
         // at y=0, base plane `altitude` below it). The optical axis is horizontal
         // (no pitch), so worldY=0 as depth→∞ projects to ndcY=0 — the horizon
