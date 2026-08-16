@@ -6,7 +6,6 @@ import { KaleidoScene } from './builtin/kaleido'
 import { GrayScottScene } from './builtin/grayscott'
 import { MorphogenScene } from './builtin/morphogen'
 import { TunnelScene } from './builtin/tunnel'
-import { FractalLabScene } from './builtin/fractallab'
 import { ResonanceScene } from './builtin/resonance'
 import { PhotoSwarmScene } from './builtin/photoswarm'
 import { GlyphLatticeScene } from './builtin/glyphlattice'
@@ -61,7 +60,6 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
   grayscott: { name: 'Reaction-Diffusion', create: () => new GrayScottScene() },
   morph: { name: 'Morphogen', create: () => new MorphogenScene() },
   tunnel: { name: 'Audio Tunnel', create: () => new TunnelScene() },
-  fractallab: { name: 'Fractal Lab', create: () => new FractalLabScene() },
   resonance: { name: 'Resonance', create: () => new ResonanceScene() },
   photoswarm: { name: 'Photo Swarm', create: () => new PhotoSwarmScene() },
   glyphlattice: { name: 'Glyph Lattice', create: () => new GlyphLatticeScene() },

@@ -1046,39 +1046,6 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
       ],
     },
   },
-  fractallab: {
-    'render-fs': {
-      summary:
-        'Every pixel becomes a complex number that gets folded through the same equation over and over: optionally mirrored into the positive quadrant (the abs-mix), raised to a power you control, then shifted by a constant. Points that stay bounded are inside the set and stay dark; points that flee to infinity are colored by how fast they escaped — the glowing filigree is the boundary between those two fates. Because the power and the mirror amount are knobs, this one scene contains the Mandelbrot, Julia, multibrot, and Burning-Ship families and everything between them.',
-      tryThis: [
-        {
-          target: 'const int ITER = 100;',
-          effect:
-            'iteration depth: lower to 40 for a softer, blobbier boundary; raising it sharpens the filigree but costs GPU time.',
-        },
-        {
-          target: 'const float HUE_SPREAD = 0.85;',
-          effect:
-            'how much of the color wheel the escape gradient walks — try 2.0 for wild rainbow banding, or 0.2 for a near-monochrome glow.',
-        },
-        {
-          target: 'float glow = 0.06 + pow(t, 0.85) * 1.6;',
-          effect:
-            'the 1.6 is edge brightness — try 3.0 for burning edges; the 0.85 exponent shifts where along the escape gradient the brightness ramps.',
-        },
-        {
-          target: 'vec2 w = mix(z, abs(z), uAbsMix);',
-          effect:
-            'the Burning-Ship fold — replace abs(z) with vec2(abs(z.x), z.y) to mirror only the real axis, a different (also classic) ship variant.',
-        },
-        {
-          target: 'vec2 z = p;',
-          effect:
-            'the starting point of every orbit — change to vec2(0.0) and the juliaMix knob then blends toward a true Mandelbrot-style rendering instead of a Julia-style one.',
-        },
-      ],
-    },
-  },
   glyphlattice: {
     'line-fs': {
       summary:

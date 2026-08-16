@@ -35,7 +35,7 @@ Missing: (a) the children are blind to each other (no A→B data path),
 
 ## 3. Genuinely-strong pairs, ranked (payoff ÷ effort)
 
-Perf rule: fractal scenes (julia, mandeldive, fractallab, resonance, morph)
+Perf rule: fractal scenes (julia, mandeldive, resonance, morph)
 are cheap single-pass shaders; GPGPU/feedback scenes (photoswarm, flowfield,
 grayscott, kaleido, tunnel) are expensive. The iPhone-safe deck is **one
 cheap field + one heavy consumer** — which the ranked pairs naturally are.
