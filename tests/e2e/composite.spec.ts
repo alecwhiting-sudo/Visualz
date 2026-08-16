@@ -238,7 +238,7 @@ test('shader stages are prefixed and blend-fs is editable', async ({ page }) => 
 // reuses the same frame 60 convention — eyeballed non-blank, colorful mandala
 // blend of the tunnel's rings and the kaleidoscope's feedback fold. -------
 
-for (const combo of ['blend-rd-flow', 'blend-tunnel-kaleido'] as const) {
+for (const combo of ['blend-rd-flow', 'blend-tunnel-kaleido', 'blend-tunnel-terrain'] as const) {
   test(`${combo} renders deterministically at frame 60`, async ({ page }) => {
     await page.goto(`/?test=1&seed=42&scene=${combo}&count=16384`)
     await page.waitForFunction(() => window.__viz !== undefined)
@@ -266,3 +266,22 @@ for (const combo of ['blend-rd-flow', 'blend-tunnel-kaleido'] as const) {
     expect(b).toBe(a)
   })
 }
+
+// Scene Contract (docs/SCENE_CONTRACT.md): Tunnel × Terrain is a composite of two
+// render-pure children, so the composite must itself be render-pure — re-drawing
+// the same frame with no update() between is byte-identical. Guards against a
+// future child (or blend change) sneaking in framebuffer accumulation.
+test('blend-tunnel-terrain render() is pure: re-rendering the same frame is byte-identical', async ({ page }) => {
+  await page.goto('/?test=1&seed=42&scene=blend-tunnel-terrain')
+  await page.waitForFunction(() => window.__viz !== undefined)
+  await page.evaluate(() => window.__viz!.renderFrames(60))
+  const a = await page.evaluate(() => {
+    window.__viz!.rerender()
+    return window.__viz!.pixelHash()
+  })
+  const b = await page.evaluate(() => {
+    window.__viz!.rerender()
+    return window.__viz!.pixelHash()
+  })
+  expect(b).toBe(a)
+})
