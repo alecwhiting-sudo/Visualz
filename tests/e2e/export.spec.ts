@@ -65,6 +65,27 @@ test('export produces a valid deterministic WebM', async ({ page }) => {
   expect(run1.frameHashes).toEqual(replayHashes)
 })
 
+test('export encodes a 1080p high-bitrate video (High/Max quality presets)', async ({ page }) => {
+  // Guards the export-quality presets: the app now exports 1080p at a generous
+  // bitrate (the grain fix), and H.264 picks Main level 4.2 for >720p. Prove the
+  // encoder actually accepts a 1080p/20Mbps config and produces a real file.
+  await boot(page, 42)
+  const doc = await recordSession(page)
+
+  const hi = await page.evaluate(async (sessionDoc) => {
+    return window.__viz!.exportSession(sessionDoc, {
+      width: 1920,
+      height: 1080,
+      fps: 30,
+      bitrate: 20_000_000,
+      collectHashes: true,
+    })
+  }, doc)
+
+  expect(hi.size).toBeGreaterThan(10_000)
+  expect(hi.frameHashes?.length).toBe(60)
+})
+
 test('export renders aspect-aware 9:16', async ({ page }) => {
   await boot(page, 42)
   const doc = await recordSession(page)

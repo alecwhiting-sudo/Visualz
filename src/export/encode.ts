@@ -76,15 +76,16 @@ const AUDIO_CHUNK_SECONDS = 0.05
  *  - `avc1.42001f` — Constrained Baseline, level 3.1. Covers this app's default
  *    export spec (1280x720@30) and anything at or under that resolution×fps
  *    envelope, per the H.264 spec's per-level macroblock-processing-rate table.
- *  - `avc1.4d0028` — Main profile, level 4.0. Used once either dimension grows
- *    past 720p or the frame rate climbs past 30 — level 3.1's macroblock rate
- *    can't carry 1080p or 60fps.
+ *  - `avc1.4d002a` — Main profile, level 4.2. Used once either dimension grows
+ *    past 720p or the frame rate climbs past 30. Level 4.2 (not 4.0) so it
+ *    safely carries 1080p at up to 60fps — the High/Max export presets — where
+ *    level 4.0's macroblock RATE would fall short at 1080p60.
  * The threshold below is deliberately simple (area vs. 1280x720, fps vs. 30)
  * rather than an exact macroblocks/sec computation: it's conservative in the
  * one direction that matters (never picks a level too low for the request).
  */
 const H264_BASELINE_720P30 = 'avc1.42001f'
-const H264_MAIN_HIGHER = 'avc1.4d0028'
+const H264_MAIN_HIGHER = 'avc1.4d002a'
 
 function pickH264CodecString(width: number, height: number, fps: number): string {
   const withinBaselineEnvelope = width * height <= 1280 * 720 && fps <= 30

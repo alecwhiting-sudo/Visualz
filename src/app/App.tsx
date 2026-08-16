@@ -186,6 +186,24 @@ function resolveExportCodec(choice: ExportFormatChoice): ExportCodec | undefined
   return undefined
 }
 
+/** Export quality presets: resolution + target bitrate. The old export was
+ * hardwired to 720p @ the 4 Mbps default, which on this app's thin-bright-lines-
+ * on-black look reads as grainy/soft next to the live canvas — high-contrast
+ * edges are exactly what a low H.264/VP9 bitrate mangles. 'high' (1080p, generous
+ * bitrate) is the default; 'max' is near-lossless for archival; 'standard' keeps
+ * the smaller/faster 720p for quick clips. All 16:9 (the current export
+ * orientation). */
+type ExportQualityChoice = 'standard' | 'high' | 'max'
+
+const EXPORT_QUALITIES: Record<
+  ExportQualityChoice,
+  { label: string; width: number; height: number; bitrate: number }
+> = {
+  standard: { label: 'Standard — 720p', width: 1280, height: 720, bitrate: 8_000_000 },
+  high: { label: 'High — 1080p', width: 1920, height: 1080, bitrate: 20_000_000 },
+  max: { label: 'Max — 1080p, pristine', width: 1920, height: 1080, bitrate: 44_000_000 },
+}
+
 /** mm:ss, floored to whole seconds — used by the transport row's scrub readout. */
 function formatTime(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds))
@@ -513,6 +531,7 @@ export function App() {
   // 'mp4'/'webm' pin the codec explicitly (e.g. forcing MP4 on a browser that
   // can't encode AAC, accepting a video-only export to add sound in post).
   const [exportFormat, setExportFormat] = useState<ExportFormatChoice>('auto')
+  const [exportQuality, setExportQuality] = useState<ExportQualityChoice>('high')
   // Transport row (play/pause/stop/seek): polled the same way as the signal
   // meters below, not driven by its own rAF — see attachLiveEngine.
   const [playback, setPlayback] = useState({ time: 0, duration: 0, playing: false, hasFile: false })
@@ -1595,9 +1614,10 @@ export function App() {
       // 'auto' passes `codec: undefined`, so createVideoSink auto-detects
       // (VP9/WebM preferred where supported, H.264/MP4 fallback for iOS/macOS
       // Safari); 'mp4'/'webm' pin the codec explicitly (export/encode.ts).
+      const q = EXPORT_QUALITIES[exportQuality]
       const result = await exportSession(
         doc,
-        { width: 1280, height: 720, fps: doc.fps, codec: resolveExportCodec(exportFormat) },
+        { width: q.width, height: q.height, fps: doc.fps, bitrate: q.bitrate, codec: resolveExportCodec(exportFormat) },
         (p: ExportProgress) => setExporting({ frame: p.frame, total: p.total }),
         audio,
       )
@@ -1775,6 +1795,20 @@ export function App() {
                   <option value="auto">Auto</option>
                   <option value="mp4">MP4 (H.264)</option>
                   <option value="webm">WebM (VP9)</option>
+                </select>
+              </label>
+              <label className="scene-select">
+                Export quality
+                <select
+                  value={exportQuality}
+                  disabled={replay !== null || exporting !== null}
+                  onChange={(ev) => setExportQuality(ev.target.value as ExportQualityChoice)}
+                >
+                  {(Object.keys(EXPORT_QUALITIES) as ExportQualityChoice[]).map((k) => (
+                    <option key={k} value={k}>
+                      {EXPORT_QUALITIES[k].label}
+                    </option>
+                  ))}
                 </select>
               </label>
 
