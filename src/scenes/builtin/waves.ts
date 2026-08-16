@@ -222,8 +222,10 @@ float Hat(vec2 st) {
 
 void main() {
   vec2 ndc = (gl_FragCoord.xy / uRes) * 2.0 - 1.0;
-  ndc.x *= max(uAspect, 1.0);         // invert the min-axis fit -> square sim space
-  ndc.y /= min(uAspect, 1.0);
+  // Aspect-FILL (cover): fill the whole canvas, crop the long axis rather than
+  // letterboxing it (was a min-axis fit). st stays within [0,1] at every aspect.
+  ndc.x /= max(1.0 / uAspect, 1.0);
+  ndc.y /= max(uAspect, 1.0);
   vec2 st = ndc * 0.5 + 0.5;
 
   vec3 deep = vec3(0.012, 0.02, 0.05);

@@ -199,8 +199,8 @@ void main(){
 
 // Final display pass (editable, task spec §2): tone-mapped glow + two-tone
 // palette (deep body / hot core) driven by `hue`, subtle exposure gamma.
-// Aspect-fit like grayscott.ts's Vat/RENDER_FS (min-axis spans [-1,1],
-// background shown outside the unit square).
+// Aspect-FILL (cover): the square sim covers the whole canvas, cropping the
+// long axis (see main()'s ndc mapping) — no letterbox on 16:9 / 9:16.
 const RENDER_FS = `#version 300 es
 precision highp float;
 uniform sampler2D uTrail;
@@ -226,8 +226,11 @@ float trailAt(vec2 st){
 
 void main(){
   vec2 ndc = (gl_FragCoord.xy/uRes)*2.0 - 1.0;
-  ndc.x *= max(uAspect,1.0);
-  ndc.y /= min(uAspect,1.0);
+  // Aspect-FILL (cover): the square sim fills the whole canvas, cropping the
+  // long axis rather than letterboxing it — st stays within [0,1] at every
+  // aspect, so the bg-outside branch below never fires on a non-square canvas.
+  ndc.x /= max(1.0/uAspect, 1.0);
+  ndc.y /= max(uAspect, 1.0);
   vec2 st = ndc*0.5 + 0.5;
   vec3 bg = vec3(0.01, 0.012, 0.02);
   if (any(lessThan(st, vec2(0.0))) || any(greaterThan(st, vec2(1.0)))) { outColor = vec4(bg, 1.0); return; }
