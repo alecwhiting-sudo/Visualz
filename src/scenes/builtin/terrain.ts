@@ -59,7 +59,7 @@ const ROWS = 28 // lateral rungs, near → far
 const COLS = 28 // longitudinal rails, left → right
 const ROW_SPACING = 0.9 // world depth between rungs
 const COL_SPACING = 0.22 // world width between rails
-const CAM_HEIGHT = 1.0 // camera height above the flat plane
+const DEFAULT_ALTITUDE = 1.0 // default camera height above the base plane (the `altitude` param)
 const FOCAL = 1.3 // pinhole focal length (vertical FOV)
 const NEAR_EPS = 0.08 // clip a point once its depth drops below this
 const SCROLL_PER_SEC = 3 // rungs crossed per second at speed 1 (wall-clock paced)
@@ -145,6 +145,11 @@ export class TerrainScene implements SceneRuntime {
   params: ParamSchema[] = [
     { name: 'speed', label: 'Speed', min: 0.1, max: 3, default: 1 },
     { name: 'relief', label: 'Relief', min: 0, max: 1.5, default: 0.7 },
+    // Flight height: camera altitude above the base plane. At ~0 you fly at sea
+    // level and the contours rise above you and pass overhead; higher looks down
+    // on the terrain. The camera never tilts, so the horizon stays on the centre
+    // line at every altitude.
+    { name: 'altitude', label: 'Flight height', min: 0, max: 3, default: DEFAULT_ALTITUDE },
     { name: 'spread', label: 'Spread', min: 0.6, max: 2, default: 1 },
     { name: 'fog', label: 'Fog', min: 0.2, max: 1.2, default: 0.6 },
     { name: 'glow', label: 'Glow', min: 0.3, max: 2, default: 1 },
@@ -230,6 +235,7 @@ export class TerrainScene implements SceneRuntime {
     gl.clear(gl.COLOR_BUFFER_BIT)
 
     const relief = this.getParam('relief')
+    const altitude = this.getParam('altitude')
     const spread = this.getParam('spread')
     const fog = this.getParam('fog')
     const glow = this.getParam('glow')
@@ -257,11 +263,14 @@ export class TerrainScene implements SceneRuntime {
         }
         const worldX = (c - centerCol) * COL_SPACING * spread
         const height = heightAt(worldRow, c, this.seedXor) * relief
-        // Pinhole projection of the plane at worldY = height - CAM_HEIGHT. As
-        // depth grows both axes collapse toward (0,0) — the vanishing point on
-        // the screen's centre line.
+        // Pinhole projection of the plane at worldY = height - altitude (camera
+        // at y=0, base plane `altitude` below it). The optical axis is horizontal
+        // (no pitch), so worldY=0 as depth→∞ projects to ndcY=0 — the horizon
+        // sits on the screen's centre line at every altitude. At altitude→0
+        // (sea level) a bump's positive height projects to positive ndcY (above
+        // the camera) and rushes off the top as it nears — the contour flies over.
         this.gridX[idx] = (FOCAL * (worldX / depth)) / aspect
-        this.gridY[idx] = (FOCAL * ((height - CAM_HEIGHT) / depth))
+        this.gridY[idx] = (FOCAL * ((height - altitude) / depth))
         this.gridVisible[idx] = 1
 
         // Tint by height: peaks read hotter/brighter than valleys, a cheap depth
