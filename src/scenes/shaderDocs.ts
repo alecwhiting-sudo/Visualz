@@ -658,50 +658,6 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
     },
   },
 
-  glyphgeometry: {
-    'glyph-fs': {
-      summary:
-        "Everything on screen is text — there are no line primitives in this scene at all. Nested rings of glyphs trace closed curves that morph between an epitrochoid rosette, a spirograph, and a star-rose as the Figure knob turns, each character rotated to the curve's local direction. This shader stamps each glyph: it reads the baked 5×7 bitmap font atlas as an on/off ink mask and multiplies it by the ring's color and trail alpha.",
-      tryThis: [
-        {
-          target: 'float mask = texture(uAtlas, vUV).r;',
-          effect:
-            'invert with float mask = 1.0 - texture(uAtlas, vUV).r; to punch every character out as a hole in a solid block — negative-space calligraphy.',
-        },
-        {
-          target: 'vColor.a * mask',
-          effect:
-            "try pow(mask, 2.0) * vColor.a to thin the strokes toward each glyph's center, so dense inner rings read as fine linework instead of blooming together.",
-        },
-        {
-          target: 'outColor = vec4(vColor.rgb, vColor.a * mask);',
-          effect:
-            'try vec4(vColor.rgb * (1.0 + mask), vColor.a * mask) to give every character a hot core a step brighter than its ring color.',
-        },
-      ],
-    },
-    'fade-fs': {
-      summary:
-        "This pass never draws the geometry — it lays one nearly-transparent dark rectangle over the whole canvas each frame, which is what leaves the rotating text rings' motion echoes behind them instead of a hard wipe. The Trail knob feeds its opacity.",
-      tryThis: [
-        {
-          target: 'vec4(0.0, 0.0, 0.0, uFade)',
-          effect:
-            'tint the fade color, e.g. vec4(0.05, 0.0, 0.08, uFade), so trails decay into a violet afterglow instead of pure black.',
-        },
-        {
-          target: 'uFade',
-          effect:
-            "multiply it, e.g. uFade * 0.5, to halve the fade rate independently of the Trail knob's own range — extremely long ghosting.",
-        },
-        {
-          target: 'void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }',
-          effect:
-            'swap the body for outColor = vec4(0.0, 0.0, 0.0, 1.0); to kill trails entirely — every frame a clean slate, pure crisp text geometry.',
-        },
-      ],
-    },
-  },
   waves: {
     'update-fs': {
       summary:

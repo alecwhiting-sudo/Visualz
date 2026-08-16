@@ -10,7 +10,6 @@ import { ResonanceScene } from './builtin/resonance'
 import { PhotoSwarmScene } from './builtin/photoswarm'
 import { GlyphLatticeScene } from './builtin/glyphlattice'
 import { WaveChamberScene } from './builtin/waves'
-import { GlyphGeometryScene } from './builtin/glyphgeometry'
 import { GlyphRainScene } from './builtin/glyphrain'
 import { PhysarumScene } from './builtin/physarum'
 import { OrbitDiveScene } from './builtin/orbitdive'
@@ -64,7 +63,6 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
   photoswarm: { name: 'Photo Swarm', create: () => new PhotoSwarmScene() },
   glyphlattice: { name: 'Glyph Lattice', create: () => new GlyphLatticeScene() },
   waves: { name: 'Wave Chamber', create: () => new WaveChamberScene() },
-  glyphgeometry: { name: 'Glyph Geometry', create: () => new GlyphGeometryScene() },
   glyphrain: { name: 'Glyph Rain', create: () => new GlyphRainScene() },
   physarum: { name: 'Physarum', create: () => new PhysarumScene() },
   orbitdive: { name: 'Orbit Dive', create: () => new OrbitDiveScene() },
