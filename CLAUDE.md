@@ -18,7 +18,17 @@ Realtime maths-driven music visualizer. Read @REQUIREMENTS.md (what/why) and
   never devices.
 - Scenes implement `SceneRuntime` (`src/scenes/types.ts`) and must render correctly at
   16:9, 9:16, and 1:1.
-- New scenes need a golden-image test in `tests/e2e/` (seeded, fixed frame).
+- **Preview = export (the Scene Contract — [docs/SCENE_CONTRACT.md](docs/SCENE_CONTRACT.md)).**
+  `render()` must be pure (rendering the same frame twice with no `update()` between is
+  byte-identical — no trail/fade pass or framebuffer feedback in `render()`). All history
+  lives in `update()` and is paced by `frame.dt` (seconds), never a fixed amount per call;
+  stiff sims fixed-sub-step. The live view runs at display refresh, the export at fixed
+  fps — a scene that depends on *how often* it's drawn (not *how much time passed*) exports
+  wrong. `src/scenes/builtin/terrain.ts` is the reference implementation.
+- New scenes need, in `tests/e2e/` (seeded): a golden image, non-blank at all 3 aspects,
+  a **render-purity** check (`rerender()` twice = identical `pixelHash`), a
+  **frame-rate-independence** check (30/60/120 fps to equal wall-clock match), and a
+  byte-identical `loadSession` replay. No green contract tests → not done, don't merge.
 - `@playwright/test` stays pinned at 1.56.x — goldens are tied to Chromium build 1194.
   Bumping it means regenerating every golden.
 

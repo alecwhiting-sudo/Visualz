@@ -32,6 +32,29 @@ day one and nearly impossible to retrofit. Two rules therefore govern every modu
                              └────────────────────────────┘
 ```
 
+### 1a. Preview = export (the scene timing contract)
+
+Rule 1 above (deterministic **replay**) is necessary but not sufficient. The live
+preview runs `update()`+`render()` once per display frame (the monitor's refresh,
+often ~120Hz), while an export steps at a fixed output fps (30/60). So a scene can
+replay deterministically yet still look different live vs exported — which is
+exactly what happened to the first Terrain scenes (removed for it). The additional
+governing rule:
+
+- **`render()` is pure; the simulation owns all history and advances in seconds.**
+  `render()` must be a pure function of scene state + output size (rendering the
+  same frame twice with no `update()` between is byte-identical — no trail/fade
+  pass, no framebuffer feedback in `render()`). Everything that carries between
+  frames lives in `update()` and is paced by `frame.dt` (elapsed seconds), never
+  by a fixed amount per call. Stiff numerics sub-step at a fixed virtual `dt`.
+
+This makes the picture a function of *elapsed time*, not *frame count*, so live and
+export agree. The full checklist and required tests are in
+[docs/SCENE_CONTRACT.md](./docs/SCENE_CONTRACT.md). The intended durable
+reinforcement is to advance the simulation at a fixed step per second in live mode
+too (the `framesToCatchUp` helper in `core/transport.ts` exists for this, currently
+unwired); until then each scene must hold the contract itself, gated by its tests.
+
 ## 2. Decisions
 
 | Fork | Decision | Rationale |

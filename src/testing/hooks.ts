@@ -19,6 +19,9 @@ import { decodeImageBase64 } from '../engine/imageCodec'
 
 export interface VizTestApi {
   renderFrames(n: number): void
+  /** Re-render the current frame without advancing (SCENE_CONTRACT render-purity
+   *  probe): two calls must yield the same pixelHash for a conformant scene. */
+  rerender(): void
   setParam(name: string, value: number): void
   /** Current value of scene param `name` (`engine.scene.getParam` — docs/MACROS.md
    * §6: lets a spec assert a macro-driven/positional value directly instead of
@@ -189,9 +192,9 @@ export function bootTestMode(root: HTMLElement): void {
   }
 
   // Fixed-timestep render fps (default 30, the golden baseline). `?fps=` lets a
-  // frame-rate-independence spec render the SAME scene at two rates and assert
-  // the wall-clock result matches (frameRateIndependence.spec.ts) — the whole
-  // point of the dt-paced scene timing (terrain scroll/fade, etc.).
+  // frame-rate-independence spec (e.g. terrain.spec.ts) render the SAME scene at
+  // two rates and assert the wall-clock result matches — the Scene Contract's
+  // "preview = export" check (docs/SCENE_CONTRACT.md).
   const fps = Number(params.get('fps') ?? '30')
 
   const engine = new Engine(canvas, scene, {
@@ -212,6 +215,7 @@ export function bootTestMode(root: HTMLElement): void {
 
   window.__viz = {
     renderFrames: (n) => engine.renderFrames(n),
+    rerender: () => engine.rerender(),
     setParam: (name, value) => engine.setParam(name, value),
     getParam: (name) => engine.scene.getParam(name),
     setBinding: (param, src) => engine.setBinding(param, src),

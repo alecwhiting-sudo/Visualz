@@ -80,43 +80,22 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
   terrain: {
     'line-fs': {
       summary:
-        "The app's first true 3D scene: a wireframe landscape scrolls toward a pinhole camera, one new row spawning at the horizon each time the scroll crosses a boundary, its ridges carved live from the bass massif, mid side-ridges and treble sparkle. All the projection, depth fog and height tint happen CPU-side; this shader just paints the interpolated per-vertex color the grid arrives with.",
+        'A flat perspective grid — the "matrix floor" — receding to a vanishing point on the screen\'s centre line and scrolling toward you. Projection, depth fog and colour are all computed CPU-side; this shader just paints the interpolated per-vertex colour each wire arrives with. There is no trail pass on purpose: the scene redraws cleanly every frame so the preview and the export are identical (see docs/SCENE_CONTRACT.md).',
       tryThis: [
         {
           target: 'outColor = vColor;',
           effect:
-            'the whole body — replace with outColor = vec4(vColor.rgb * 1.6, 1.0); to push the wireframe past 1.0 for a blown-out neon glow under the trail fade.',
+            'the whole body — replace with outColor = vec4(vColor.rgb * 1.6, 1.0); to push the wires past 1.0 for a blown-out neon floor.',
         },
         {
           target: 'vColor',
           effect:
-            'the interpolated line color (height tint × depth fog, both computed CPU-side); use vColor.gbra in the output to rotate the whole palette toward cyan/magenta without touching the maths.',
+            'the interpolated line colour (hue × depth fog, computed CPU-side); use vColor.gbra in the output to rotate the palette toward cyan/magenta without touching the maths.',
         },
         {
           target: 'out vec4 outColor;',
           effect:
-            'the stage\'s single output; add a `uniform float uBoost;` line above it and multiply the result to wire in a live brightness knob (needs a matching setUniform in render()).',
-        },
-      ],
-    },
-    'fade-fs': {
-      summary:
-        'The persistence pass: one nearly-transparent dark rectangle drawn every frame, leaving the receding wireframe a faint motion wake so the terrain reads as continuous flight rather than a flicker of disconnected grids. The Fog/Trail feel comes from its opacity.',
-      tryThis: [
-        {
-          target: 'vec4(0.0, 0.0, 0.0, uFade)',
-          effect:
-            'the fade color; try 0.0, 0.01, 0.04 for a wake that settles into deep blue instead of pure black, matching the synthwave grid.',
-        },
-        {
-          target: 'uFade',
-          effect:
-            'multiply it (uFade * 0.5) for much longer wakes — the ridges smear into light-trails as they rush past the camera.',
-        },
-        {
-          target: 'void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }',
-          effect:
-            'replace the body with a full wipe (alpha 1.0) to kill the wake entirely — only the crisp current grid remains, a harder Tron look.',
+            "the stage's single output; add a `uniform float uBoost;` line above it and multiply the result to wire in a live brightness knob (needs a matching setUniform in render()).",
         },
       ],
     },
@@ -291,50 +270,6 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
           target: 'void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }',
           effect:
             'replace the body with a full wipe (alpha 1.0) to remove the afterglow — only the crisp current point cloud shows.',
-        },
-      ],
-    },
-  },
-  terrainmirror: {
-    'line-fs': {
-      summary:
-        'Terrain Flight with a horizon mirror: the same 3D wireframe flythrough, but every line is also drawn reflected across the horizon into the upper half of the screen, so the landscape meets its own reflection like hills over still water. The Reflection knob dims the mirrored copy. This shader paints the interpolated per-vertex color both the real grid and its reflection arrive with (the reflection is pre-dimmed CPU-side).',
-      tryThis: [
-        {
-          target: 'outColor = vColor;',
-          effect:
-            'the whole body — replace with outColor = vec4(vColor.rgb * 1.6, 1.0); to push both terrain and reflection past 1.0 for a blown-out neon glow under the trail fade.',
-        },
-        {
-          target: 'vColor',
-          effect:
-            'the interpolated line color (height tint × depth fog, and for the mirror also the Reflection dimming, all computed CPU-side); use vColor.gbra in the output to rotate the whole palette toward cyan/magenta.',
-        },
-        {
-          target: 'out vec4 outColor;',
-          effect:
-            'the stage\'s single output; add a `uniform float uBoost;` line above it and multiply the result to wire in a live brightness knob (needs a matching setUniform in render()).',
-        },
-      ],
-    },
-    'fade-fs': {
-      summary:
-        'The persistence pass: one nearly-transparent dark rectangle drawn every frame, leaving both the terrain and its mirror image a faint motion wake so the flight reads as continuous rather than a flicker of grids.',
-      tryThis: [
-        {
-          target: 'vec4(0.0, 0.0, 0.0, uFade)',
-          effect:
-            'the fade color; try 0.0, 0.01, 0.04 for a wake that settles into deep blue instead of pure black, matching the synthwave grid and its reflection.',
-        },
-        {
-          target: 'uFade',
-          effect:
-            'multiply it (uFade * 0.5) for much longer wakes — the ridges and their reflections smear into light-trails as they rush past.',
-        },
-        {
-          target: 'void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }',
-          effect:
-            'replace the body with a full wipe (alpha 1.0) to kill the wake entirely — only the crisp current grid and its mirror remain, a harder Tron look.',
         },
       ],
     },

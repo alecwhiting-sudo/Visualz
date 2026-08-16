@@ -138,6 +138,21 @@ shader fields & fractals; simulations (reaction–diffusion, fluids, flocking, C
 - Scenes render aspect-aware (composition adapts, not letterboxes).
 - Fallback: a "quick capture" MediaRecorder path is nice-to-have for instant rough clips.
 
+### 5.3 Preview fidelity **[decided]**
+- **What you see in the live preview is what the export produces.** A hard
+  requirement, not an aspiration: the live view (running at the monitor's refresh
+  rate) and the export (a fixed 30/60 fps) must be perceptually identical for the
+  same performance.
+- This was implicit and untested for the first wave of scenes, which let several
+  drift (a low-fps export washed out or ran slow versus the live view). It is now
+  explicit and enforced **for every new scene**: each must satisfy the **Scene
+  Contract** ([docs/SCENE_CONTRACT.md](./docs/SCENE_CONTRACT.md)) and ship the tests
+  it lists — render-purity and a 30/60/120 fps equivalence check — or it does not
+  ship. Existing scenes are being audited against the contract one at a time;
+  several still carry the old per-frame trail passes and are being migrated or
+  removed as they're checked (Terrain Flight / Terrain Mirror / Tunnel × Terrain
+  were the first removed rather than kept as traps).
+
 ---
 
 ## 6. Persistence & sharing **[decided: local-only, zero backend]**

@@ -321,6 +321,20 @@ export class Engine {
   }
 
   /**
+   * Contract hook (SCENE_CONTRACT.md): re-run render() for the CURRENT frame
+   * without advancing the transport or the scene sim — the frozen-control-tick
+   * path (dt=0, skipSceneUpdate). A conformant scene's render() is pure, so
+   * calling this repeatedly must leave the pixels byte-identical; a scene that
+   * accumulates in render() (a trail/fade pass) drifts and fails the check.
+   */
+  rerender(): void {
+    this.updateAndRender(
+      { time: this.transport.time, dt: 0, frame: this.transport.frame },
+      { skipSceneUpdate: true },
+    )
+  }
+
+  /**
    * Transport controls (play/pause/stop/seek), gated on recording: the session
    * model assumes a monotonically advancing transport (recordInput/Param/etc.
    * are keyed by `transport.frame`), so pausing, seeking, or stopping mid-

@@ -17,7 +17,7 @@ import { PhysarumScene } from './builtin/physarum'
 import { OrbitDiveScene } from './builtin/orbitdive'
 import { WhipLineScene } from './builtin/whipline'
 import { GuillocheScene } from './builtin/guilloche'
-import { TerrainFlightScene, TerrainMirrorScene } from './builtin/terrain'
+import { TerrainScene } from './builtin/terrain'
 import { OrreryScene } from './builtin/orrery'
 import { WhipStormScene } from './builtin/whipstorm'
 import { NeuralWebScene } from './builtin/neuralweb'
@@ -37,7 +37,6 @@ const mandelDiveChild: CompositeChild = { id: 'mandeldive', label: 'Mandel Dive'
 const kaleidoChild: CompositeChild = { id: 'kaleido', label: 'Kaleidoscope', create: () => new KaleidoScene() }
 const tunnelChild: CompositeChild = { id: 'tunnel', label: 'Audio Tunnel', create: () => new TunnelScene() }
 const morphChild: CompositeChild = { id: 'morph', label: 'Morphogen', create: () => new MorphogenScene() }
-const terrainMirrorChild: CompositeChild = { id: 'terrainmirror', label: 'Terrain Mirror', create: () => new TerrainMirrorScene() }
 
 /**
  * The scene registry: every scene id a session/URL/UI can reference, and how to
@@ -72,8 +71,7 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
   orbitdive: { name: 'Orbit Dive', create: () => new OrbitDiveScene() },
   whipline: { name: 'Whip Line', create: () => new WhipLineScene() },
   guilloche: { name: 'Guilloché', create: () => new GuillocheScene() },
-  terrain: { name: 'Terrain Flight', create: () => new TerrainFlightScene() },
-  terrainmirror: { name: 'Terrain Mirror', create: () => new TerrainMirrorScene() },
+  terrain: { name: 'Terrain', create: () => new TerrainScene() },
   orrery: { name: 'Orrery', create: () => new OrreryScene() },
   whipstorm: { name: 'Whip Storm', create: () => new WhipStormScene() },
   neuralweb: { name: 'Neural Web', create: () => new NeuralWebScene() },
@@ -122,15 +120,6 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
         { id: 'blend-tunnel-kaleido', name: 'Tunnel × Kaleido', family: 'geometry' },
         tunnelChild,
         kaleidoChild,
-      ),
-  },
-  'blend-tunnel-terrainmirror': {
-    name: 'Tunnel × Terrain Mirror',
-    create: () =>
-      new CompositeScene(
-        { id: 'blend-tunnel-terrainmirror', name: 'Tunnel × Terrain Mirror', family: 'geometry' },
-        tunnelChild,
-        terrainMirrorChild,
       ),
   },
 }
