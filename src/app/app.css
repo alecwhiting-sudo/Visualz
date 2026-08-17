@@ -988,6 +988,50 @@ body {
   .panel-footer {
     flex: 0 0 auto;
   }
+
+  /* Bigger, thumb-friendly slider handles (~50% larger) for touch. The native
+     accent-color thumb can't be resized, so on mobile only we custom-style the
+     track + thumb; the box-shadow trick (webkit) / ::-moz-range-progress
+     (Firefox) preserves the orange filled-track look. Desktop keeps the native
+     accent-color sliders untouched. */
+  .knob input[type='range'] {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 28px;
+    background: transparent;
+  }
+  .knob input[type='range']::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 3px;
+    background: #4a4a55;
+  }
+  .knob input[type='range']::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-top: -9px; /* centre the 24px thumb on the 6px track */
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  }
+  .knob input[type='range']::-moz-range-track {
+    height: 6px;
+    border-radius: 3px;
+    background: #4a4a55;
+  }
+  .knob input[type='range']::-moz-range-progress {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--accent);
+  }
+  .knob input[type='range']::-moz-range-thumb {
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  }
 }
 
 .transport-row {
