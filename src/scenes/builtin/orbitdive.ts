@@ -10,11 +10,8 @@ import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../ty
  * every pixel's escape orbit is tested each iteration against a geometric
  * trap shape, and the minimum distance the orbit ever comes to that trap
  * paints luminous filigree veins through the fractal's interior and
- * near-escape fringes — the classic orbit-trap look. A second knob (`family`)
- * continuously morphs the iteration map itself between Mandelbrot, Burning
- * Ship, and Tricorn, so the trap's veins get woven through genuinely
- * different (and, at intermediate `family` values, genuinely novel hybrid)
- * fractal geometry. GPU-stateless like mandeldive.ts/fractallab.ts: one
+ * near-escape fringes — the classic orbit-trap look. The iteration map is the
+ * Mandelbrot set (z -> z² + c). GPU-stateless like mandeldive.ts: one
  * fullscreen fragment pass, pure function of uniforms every frame; all
  * persistent state (dive phase, trap spin phase, bass/onset envelopes, hue
  * drift) lives on the CPU in update(), fed to the shader in render().
@@ -32,7 +29,6 @@ uniform vec2 uResolution;
 uniform float uAspect;
 uniform vec2 uDiveC;
 uniform float uScale;
-uniform float uFamily;
 uniform float uTrapShape, uTrapSize, uTrapMix, uTrapTheta;
 uniform float uHue, uContrast, uFlash;
 out vec4 outColor;
@@ -79,23 +75,14 @@ void main(){
   uv.y /= min(uAspect, 1.0);
   vec2 c = uDiveC + uv * (BASE_EXTENT / uScale);
 
-  // Continuous family morph (0=Mandelbrot, 1=Burning Ship, 2=Tricorn): fold z
-  // toward its component-wise abs as family rises past 0, then fold the
-  // result toward its conjugate as family rises past 1 — so family=0.5 is a
-  // genuine half-abs hybrid, not either endpoint, and family=1.5 is a
-  // half-conjugated Burning Ship, not a jump-cut to Tricorn.
-  float absMix = clamp(uFamily, 0.0, 1.0);
-  float conjMix = clamp(uFamily - 1.0, 0.0, 1.0);
-
   vec2 z = vec2(0.0);
   float smoothN = float(ITER);
   bool escaped = false;
   float minDist = 1e9;
   for (int i = 0; i < ITER; i++) {
     minDist = min(minDist, trapDistance(z, uTrapShape, uTrapSize, uTrapTheta));
-    vec2 w = mix(z, abs(z), absMix);
-    w = mix(w, vec2(w.x, -w.y), conjMix);
-    z = cmul(w, w) + c;
+    z = cmul(z, z) + c; // Mandelbrot iteration
+
     float m2 = dot(z, z);
     if (m2 > ESCAPE_R2) {
       smoothN = float(i) + 1.0 - log2(log(sqrt(m2)));
@@ -171,7 +158,6 @@ interface RenderLocs {
   uAspect: WebGLUniformLocation | null
   uDiveC: WebGLUniformLocation | null
   uScale: WebGLUniformLocation | null
-  uFamily: WebGLUniformLocation | null
   uTrapShape: WebGLUniformLocation | null
   uTrapSize: WebGLUniformLocation | null
   uTrapMix: WebGLUniformLocation | null
@@ -186,7 +172,6 @@ export class OrbitDiveScene implements SceneRuntime {
 
   // Exactly 8 params, in the order the task spec fixes.
   params: ParamSchema[] = [
-    { name: 'family', label: 'Family', min: 0, max: 2, default: 0 },
     { name: 'trapShape', label: 'Trap shape', min: 0, max: 3, default: 1.2 },
     { name: 'trapSize', label: 'Trap size', min: 0.05, max: 2, default: 0.6 },
     { name: 'trapMix', label: 'Trap mix', min: 0, max: 1, default: 0.7 },
@@ -297,7 +282,6 @@ export class OrbitDiveScene implements SceneRuntime {
     gl.uniform1f(this.renderLoc.uAspect, surface.width / surface.height)
     gl.uniform2f(this.renderLoc.uDiveC, this.diveC.x, this.diveC.y)
     gl.uniform1f(this.renderLoc.uScale, scale)
-    gl.uniform1f(this.renderLoc.uFamily, this.getParam('family'))
     gl.uniform1f(this.renderLoc.uTrapShape, this.getParam('trapShape'))
     gl.uniform1f(this.renderLoc.uTrapSize, trapSize)
     gl.uniform1f(this.renderLoc.uTrapMix, this.getParam('trapMix'))
@@ -327,7 +311,6 @@ export class OrbitDiveScene implements SceneRuntime {
       uAspect: gl.getUniformLocation(program, 'uAspect'),
       uDiveC: gl.getUniformLocation(program, 'uDiveC'),
       uScale: gl.getUniformLocation(program, 'uScale'),
-      uFamily: gl.getUniformLocation(program, 'uFamily'),
       uTrapShape: gl.getUniformLocation(program, 'uTrapShape'),
       uTrapSize: gl.getUniformLocation(program, 'uTrapSize'),
       uTrapMix: gl.getUniformLocation(program, 'uTrapMix'),

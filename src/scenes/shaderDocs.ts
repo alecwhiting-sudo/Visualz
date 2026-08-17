@@ -761,7 +761,7 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
   orbitdive: {
     'render-fs': {
       summary:
-        "A Mandelbrot-family dive where the maths is steered by ORBIT TRAPS: while each pixel's orbit iterates, its closest approach to a geometric trap shape (point → cross → circle → rotating line, morphed by the Trap shape knob) is tracked, and that minimum distance becomes luminous filigree woven through the fractal — structure plain escape-counting can't show. The Family knob continuously morphs the iteration itself from Mandelbrot through Burning Ship toward Tricorn, passing through genuine hybrid fractals on the way.",
+        "A Mandelbrot-family dive where the maths is steered by ORBIT TRAPS: while each pixel's orbit iterates, its closest approach to a geometric trap shape (point → cross → circle → rotating line, morphed by the Trap shape knob) is tracked, and that minimum distance becomes luminous filigree woven through the fractal — structure plain escape-counting can't show. The iteration is the Mandelbrot map (z → z² + c).",
       tryThis: [
         {
           target: 'const float TRAP_SHARPNESS = 9.0;',
