@@ -1686,7 +1686,30 @@ export function App() {
       {viewMode === 'studio' && (
       <aside className="panel">
         <div className="panel-header">
-          <h1>Visualz</h1>
+          <div className="brand">
+            <h1>Visualz</h1>
+            {/* Logo → divurj.com. The image lives in public/RatMode-icon.png;
+               referenced base-aware (import.meta.env.BASE_URL) so it resolves on
+               both GitHub Pages (/Visualz/) and Vercel (/). */}
+            <a
+              href="https://divurj.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="brand-logo-link"
+              title="divurj.com"
+            >
+              <img
+                src={`${import.meta.env.BASE_URL}RatMode-icon.png`}
+                alt="divurj"
+                className="brand-logo"
+                // Hide cleanly until public/RatMode-icon.png is pushed (no
+                // broken-image icon in the meantime).
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none'
+                }}
+              />
+            </a>
+          </div>
           {/* Full-screen entry point (the removed 'perform' strip mode's only
              surviving affordance): jumps straight into true Fullscreen-API
              fullscreen on the stage. Hidden where the API is unavailable

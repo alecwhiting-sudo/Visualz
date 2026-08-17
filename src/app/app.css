@@ -100,6 +100,27 @@ body {
   flex: 0 0 auto;
 }
 
+/* Title + logo group, kept together on the left of the header (the header's
+   space-between then pushes the Full screen button to the right). */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.brand-logo-link {
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
+}
+
+.brand-logo {
+  height: 26px;
+  width: auto;
+  display: block;
+}
+
 /* SampleArk-style tab row: SCENE | SESSION | INPUTS | CODE, reusing the
    existing .tab-button look (originally introduced for the MIDI disclosure
    toggle). Exactly one is active at a time (App's `activeTab` state). */
