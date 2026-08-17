@@ -975,14 +975,11 @@ body {
      controls get that reclaimed space. */
   .app-studio .panel {
     overflow-y: auto;
-    padding-top: 0; /* tabs stick flush to the top; no gap for content to peek through */
+    padding-top: 14px;
   }
+  /* Tabs scroll off with the rest of the content (user request) — not pinned. */
   .panel-tabs {
-    position: sticky;
-    top: 0;
-    z-index: 3;
-    background: var(--bg-panel);
-    padding: 14px 0 8px; /* the removed panel top-padding, now behind the opaque sticky row */
+    padding-bottom: 8px;
   }
   .panel-content {
     overflow: visible;
