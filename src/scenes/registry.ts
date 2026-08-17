@@ -37,6 +37,8 @@ const kaleidoChild: CompositeChild = { id: 'kaleido', label: 'Kaleidoscope', cre
 const tunnelChild: CompositeChild = { id: 'tunnel', label: 'Audio Tunnel', create: () => new TunnelScene() }
 const morphChild: CompositeChild = { id: 'morph', label: 'Morphogen', create: () => new MorphogenScene() }
 const terrainChild: CompositeChild = { id: 'terrain', label: 'Terrain', create: () => new TerrainScene() }
+const cymaticsChild: CompositeChild = { id: 'cymatics', label: 'Cymatics', create: () => new CymaticsScene() }
+const starflightChild: CompositeChild = { id: 'starflight', label: 'Star Flight', create: () => new StarFlightScene() }
 
 /**
  * The scene registry: every scene id a session/URL/UI can reference, and how to
@@ -128,6 +130,15 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
         { id: 'blend-tunnel-terrain', name: 'Tunnel × Terrain', family: 'geometry' },
         tunnelChild,
         terrainChild,
+      ),
+  },
+  'blend-cymatics-starflight': {
+    name: 'Cymatics × Star Flight',
+    create: () =>
+      new CompositeScene(
+        { id: 'blend-cymatics-starflight', name: 'Cymatics × Star Flight', family: 'geometry' },
+        cymaticsChild,
+        starflightChild,
       ),
   },
 }
