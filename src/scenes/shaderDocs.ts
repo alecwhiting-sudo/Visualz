@@ -231,27 +231,6 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
         },
       ],
     },
-    'fade-fs': {
-      summary:
-        'The persistence pass: a near-transparent dark rectangle each frame. It is what smears fast-moving stars into motion trails — the Streak knob feeds its opacity, so a longer trail = more of that liquid hyperspace blur behind every star.',
-      tryThis: [
-        {
-          target: 'vec4(0.0, 0.0, 0.0, uFade)',
-          effect:
-            'the fade colour; try 0.0, 0.0, 0.03 so the warp trails cool into deep-space blue rather than pure black.',
-        },
-        {
-          target: 'uFade',
-          effect:
-            'multiply it (uFade * 0.4) for very long light-trails — the stars melt into continuous rivers of light at speed.',
-        },
-        {
-          target: 'void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }',
-          effect:
-            'replace the body with a full wipe (alpha 1.0) to kill the trails — crisp individual stars and streaks only.',
-        },
-      ],
-    },
   },
   attractor: {
     'point-fs': {

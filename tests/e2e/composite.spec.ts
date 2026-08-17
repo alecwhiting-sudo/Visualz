@@ -285,3 +285,14 @@ test('blend-tunnel-terrain render() is pure: re-rendering the same frame is byte
   })
   expect(b).toBe(a)
 })
+
+// Both children are now render-pure (Star Flight was migrated off its fade
+// pass), so the composite is too — the combo is fully preview=export.
+test('blend-cymatics-starflight render() is pure: re-rendering the same frame is byte-identical', async ({ page }) => {
+  await page.goto('/?test=1&seed=42&scene=blend-cymatics-starflight')
+  await page.waitForFunction(() => window.__viz !== undefined)
+  await page.evaluate(() => window.__viz!.renderFrames(60))
+  const a = await page.evaluate(() => { window.__viz!.rerender(); return window.__viz!.pixelHash() })
+  const b = await page.evaluate(() => { window.__viz!.rerender(); return window.__viz!.pixelHash() })
+  expect(b).toBe(a)
+})

@@ -101,3 +101,33 @@ test('starflight replays byte-identically via loadSession across a long flight',
   }, doc)
   expect(hash2).toBe(hash1)
 })
+
+// --- Scene Contract (docs/SCENE_CONTRACT.md), migrated from the old fade pass ---
+
+test('starflight render() is pure: re-rendering the same frame is byte-identical', async ({ page }) => {
+  await boot(page)
+  await page.evaluate((n) => window.__viz!.renderFrames(n), GOLDEN_FRAME)
+  const a = await page.evaluate(() => { window.__viz!.rerender(); return window.__viz!.pixelHash() })
+  const b = await page.evaluate(() => { window.__viz!.rerender(); return window.__viz!.pixelHash() })
+  expect(b).toBe(a)
+})
+
+test('starflight travel is dt-paced: same distance per wall-second at 30/60/120fps', async ({ page }) => {
+  // warpPulse=0 makes instSpeed constant (= speed), so travel = speed*TRAVEL_PER_SEC*t
+  // exactly — a per-CALL advance would run 120fps ~4x as far as 30fps and this catches it.
+  const seconds = 4
+  const travelAt = async (fps: number) => {
+    await boot(page, `&fps=${fps}`)
+    await page.evaluate((n) => {
+      window.__viz!.setParam('warpPulse', 0)
+      window.__viz!.renderFrames(n)
+    }, Math.round(seconds * fps))
+    return page.evaluate(() => (window.__viz as { getParam(n: string): number }).getParam('#travel'))
+  }
+  const a = await travelAt(30)
+  const b = await travelAt(60)
+  const c = await travelAt(120)
+  expect(a).toBeGreaterThan(0) // guard: the equality below is vacuous if travel never advanced
+  expect(b).toBeCloseTo(a, 3)
+  expect(c).toBeCloseTo(a, 3)
+})

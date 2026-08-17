@@ -28,25 +28,34 @@ import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../ty
  * mutable per-star state at all, which is what makes "frozen control ticks"
  * (render() called without a preceding update()) and session replay safe.
  *
- * Frame-clocked travel (CLAUDE.md/terrain.ts/whipline.ts convention):
- * `travel` advances in update() by `instSpeed * FIXED_STEP`, a fixed per-call
- * step — never `frame.dt` — so the wrap cadence depends only on the *count* of
- * update() calls, matching replay exactly regardless of timing jitter.
- * `instSpeed` (base `speed` plus a bass-driven `warpPulse` boost) is stored so
- * render() can also grow the streak length/brightness with the same
- * instantaneous speed that just advanced the camera — "bass hits give warp
- * bursts" reads as both a longer streak and a faster flythrough in the same
- * frame. Twinkle shimmer is the one continuous (non-frame-clocked) term: it is
- * plain trig over `ctx.frame.time` (glyphlattice.ts/lissajous.ts's "plain
- * maths over ctx.frame.time" convention), safe because it depends only on the
- * Transport's own time value, not on any call-count state this scene owns.
+ * Scene Contract compliance (docs/SCENE_CONTRACT.md) — migrated from the old
+ * per-frame trail:
+ *  - render() is PURE. It clears the surface and redraws every star head + streak
+ *    from `travel` each call — no fade quad, no framebuffer feedback. The streaks
+ *    are LITERAL geometry (a short line per star between two nearby depths), so
+ *    the warp motion survives without any persistence pass; re-rendering a frame
+ *    is byte-identical.
+ *  - `travel` advances in update() in SECONDS: `instSpeed * TRAVEL_PER_SEC *
+ *    frame.dt`, so the flythrough covers the same distance per wall-second at
+ *    30/60/120fps — preview matches export. (Determinism is intact: export/replay
+ *    step a fixed dt.) `TRAVEL_PER_SEC` reproduces the old per-call step taken at
+ *    the ~120Hz live refresh, keeping the live flythrough speed.
+ * `instSpeed` (base `speed` plus a bass-driven `warpPulse` boost) is stored in
+ * update() so render() grows the streak length/brightness with the same
+ * instantaneous speed that advanced the camera — "bass hits give warp bursts"
+ * reads as both a longer streak and a faster flythrough. Twinkle shimmer is plain
+ * trig over `ctx.frame.time` (a pure function of Transport time, so it holds
+ * render purity and replay determinism).
  */
 
 const NUM_STARS = 1200
 const Z_NEAR = 0.06
 const Z_FAR = 3.0
 const Z_RANGE = Z_FAR - Z_NEAR
-const FIXED_STEP = 1 / 60 // frame-clocked travel tick (see class doc)
+// Travel distance per second per unit instSpeed. Reproduces the old per-call
+// step (1/60) taken at the ~120Hz live refresh (1/60 ÷ 1/120 = 2), so the live
+// flythrough speed is preserved while the motion becomes frame-rate independent.
+const TRAVEL_PER_SEC = (1 / 60) / (1 / 120)
 
 const BRIGHT_K = 0.16 // brightness = clamp(BRIGHT_K / effZ, 0, BRIGHT_MAX)
 const BRIGHT_MAX = 3.2
@@ -98,16 +107,6 @@ void main() {
   float falloff = smoothstep(1.0, 0.0, r);
   outColor = vec4(vColor.rgb * falloff, vColor.a * falloff);
 }`
-
-const FADE_VS = `#version 300 es
-layout(location = 0) in vec2 aPos;
-void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`
-
-const FADE_FS = `#version 300 es
-precision highp float;
-uniform float uFade;
-out vec4 outColor;
-void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }`
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v
@@ -198,19 +197,15 @@ export class StarFlightScene implements SceneRuntime {
 
   private lineProgram!: WebGLProgram
   private pointProgram!: WebGLProgram
-  private fadeProgram!: WebGLProgram
   private lineVao!: WebGLVertexArrayObject
   private lineVbo!: WebGLBuffer
   private pointVao!: WebGLVertexArrayObject
   private pointVbo!: WebGLBuffer
-  private fadeVao!: WebGLVertexArrayObject
-  private fadeLoc!: { uFade: WebGLUniformLocation | null }
 
   // Code layer (ARCHITECTURE.md §3.3): current source per editable stage,
   // reset to stock every init() so loadSession's dispose+init starts clean.
   private lineSource = LINE_FS
   private pointSource = POINT_FS
-  private fadeSource = FADE_FS
 
   // Scratch vertex buffers, sized once, reused every render() — no per-frame
   // allocation in the hot loop.
@@ -234,13 +229,10 @@ export class StarFlightScene implements SceneRuntime {
 
     this.lineSource = LINE_FS
     this.pointSource = POINT_FS
-    this.fadeSource = FADE_FS
 
     const gl = gpu.gl
     this.lineProgram = gpu.compileProgram(LINE_VS, this.lineSource)
     this.pointProgram = gpu.compileProgram(POINT_VS, this.pointSource)
-    this.fadeProgram = gpu.compileProgram(FADE_VS, this.fadeSource)
-    this.fadeLoc = { uFade: gl.getUniformLocation(this.fadeProgram, 'uFade') }
 
     this.lineVao = gl.createVertexArray()!
     this.lineVbo = gl.createBuffer()!
@@ -265,14 +257,6 @@ export class StarFlightScene implements SceneRuntime {
     gl.vertexAttribPointer(1, 4, gl.FLOAT, false, pointStride, 2 * 4)
     gl.enableVertexAttribArray(2)
     gl.vertexAttribPointer(2, 1, gl.FLOAT, false, pointStride, 6 * 4)
-
-    this.fadeVao = gl.createVertexArray()!
-    const quad = gl.createBuffer()!
-    gl.bindVertexArray(this.fadeVao)
-    gl.bindBuffer(gl.ARRAY_BUFFER, quad)
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW)
-    gl.enableVertexAttribArray(0)
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0)
     gl.bindVertexArray(null)
 
     gl.clearColor(0, 0, 0, 1)
@@ -284,6 +268,10 @@ export class StarFlightScene implements SceneRuntime {
   }
 
   getParam(name: string): number {
+    // Read-only introspection (never enumerated in `params`): lets the
+    // frame-rate-independence spec assert the flythrough covers the same
+    // distance per wall-second at any fps — the direct probe of dt-paced travel.
+    if (name === '#travel') return this.travel
     return this.values.get(name) ?? 0
   }
 
@@ -298,14 +286,19 @@ export class StarFlightScene implements SceneRuntime {
     // camera this tick (see class doc).
     this.instSpeed = Math.max(0, speed + warpPulse * bass)
 
-    // Frame-clocked travel: a fixed per-call tick times instSpeed, never
-    // `frame.dt` — see class doc.
-    this.travel += this.instSpeed * FIXED_STEP
+    // Wall-clock travel: advance by distance per second (dt-paced), so the
+    // flythrough covers the same ground per wall-second at any frame rate.
+    this.travel += this.instSpeed * TRAVEL_PER_SEC * ctx.frame.dt
   }
 
   render(ctx: FrameContext, surface: RenderSurface): void {
     const gl = this.gpu.gl
     surface.bind()
+
+    // Pure clear-and-draw: the frame is fully determined by `travel` + params +
+    // size, with no dependence on what was on the surface before (no trail pass).
+    gl.clearColor(0, 0, 0, 1)
+    gl.clear(gl.COLOR_BUFFER_BIT)
 
     const aspect = surface.width / surface.height
     const ax = 1 / Math.max(aspect, 1)
@@ -392,15 +385,6 @@ export class StarFlightScene implements SceneRuntime {
 
     gl.enable(gl.BLEND)
 
-    // Fade pass: translucent black quad, more persistence (smaller uFade) as
-    // `streak` rises — "streak also feeds its persistence" (spec).
-    const uFade = clamp(0.5 - streak * 0.42, 0.08, 0.5)
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-    gl.useProgram(this.fadeProgram)
-    gl.uniform1f(this.fadeLoc.uFade, uFade)
-    gl.bindVertexArray(this.fadeVao)
-    gl.drawArrays(gl.TRIANGLES, 0, 3)
-
     // Star passes: additive, so overlapping streaks/heads brighten (neon look).
     gl.blendFunc(gl.ONE, gl.ONE)
 
@@ -433,19 +417,16 @@ export class StarFlightScene implements SceneRuntime {
     const gl = this.gpu.gl
     gl.deleteProgram(this.lineProgram)
     gl.deleteProgram(this.pointProgram)
-    gl.deleteProgram(this.fadeProgram)
     gl.deleteVertexArray(this.lineVao)
     gl.deleteBuffer(this.lineVbo)
     gl.deleteVertexArray(this.pointVao)
     gl.deleteBuffer(this.pointVbo)
-    gl.deleteVertexArray(this.fadeVao)
   }
 
   getShaderSources(): ShaderStage[] {
     return [
       { key: 'line-fs', label: 'Streak color (line-fs)', source: this.lineSource },
       { key: 'point-fs', label: 'Star head color (point-fs)', source: this.pointSource },
-      { key: 'fade-fs', label: 'Trail fade (fade-fs)', source: this.fadeSource },
     ]
   }
 
@@ -464,13 +445,6 @@ export class StarFlightScene implements SceneRuntime {
         gl.deleteProgram(this.pointProgram)
         this.pointProgram = program
         this.pointSource = source
-        return
-      }
-      case 'fade-fs': {
-        const program = this.gpu.compileProgram(FADE_VS, source)
-        gl.deleteProgram(this.fadeProgram)
-        this.fadeProgram = program
-        this.fadeSource = source
         return
       }
       default:
