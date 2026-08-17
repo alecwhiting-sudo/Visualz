@@ -60,3 +60,26 @@ describe('parseDeviceActiveMap', () => {
     expect(parseDeviceActiveMap(raw)).toEqual({ 'device-1': true, 'device-3': false })
   })
 })
+
+import { isLaunchkeyMini, LAUNCHKEY_MACRO_CC } from '../../src/app/midiPersistence'
+import { MACRO_SLOT_COUNT } from '../../src/engine/macroRouter'
+
+describe('isLaunchkeyMini', () => {
+  it('matches Launchkey Mini port name variants', () => {
+    for (const n of ['Launchkey Mini MK3 MIDI', 'launchkey mini mk3 daw', 'MIDIIN2 (Launchkey Mini MK3 MIDI)', 'Launchkey  Mini']) {
+      expect(isLaunchkeyMini(n)).toBe(true)
+    }
+  })
+  it('does not match a full-size Launchkey or unrelated devices', () => {
+    for (const n of ['Launchkey 49 MK3', 'Launchpad Mini', 'Faderfox EC4', 'MPK Mini', '']) {
+      expect(isLaunchkeyMini(n)).toBe(false)
+    }
+  })
+})
+
+describe('LAUNCHKEY_MACRO_CC', () => {
+  it('maps Controls 1..8 to CC 21..28', () => {
+    expect(LAUNCHKEY_MACRO_CC).toEqual([21, 22, 23, 24, 25, 26, 27, 28])
+    expect(LAUNCHKEY_MACRO_CC.length).toBe(MACRO_SLOT_COUNT)
+  })
+})

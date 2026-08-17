@@ -23,6 +23,8 @@ import { TransitionSpeedKnob } from './TransitionSpeedKnob'
 import {
   blankMacroCcBySlot,
   DEVICE_ACTIVE_STORAGE_KEY,
+  isLaunchkeyMini,
+  LAUNCHKEY_MACRO_CC,
   MACRO_CC_STORAGE_KEY,
   parseDeviceActiveMap,
   parseMacroCcBySlot,
@@ -240,6 +242,27 @@ function saveMacroCcBySlot(v: (number | null)[]): void {
     // Ignore — a failed save just means the mapping won't survive a reload.
   }
 }
+
+// Launchkey Mini auto-map (user request): on first launch with the controller
+// present, offer to map Controls 1-8 to its 8 knobs (CC 21-28). The one-time
+// "asked" flag stops it nagging on every reload once the user has answered
+// either way; declining leaves all mapping to them. `isLaunchkeyMini` /
+// `LAUNCHKEY_MACRO_CC` live in midiPersistence.ts (pure, unit-tested).
+const LAUNCHKEY_ASKED_STORAGE_KEY = 'visualz.midi.launchkeyAsked.v1'
+function loadLaunchkeyAsked(): boolean {
+  try {
+    return localStorage.getItem(LAUNCHKEY_ASKED_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+function saveLaunchkeyAsked(): void {
+  try {
+    localStorage.setItem(LAUNCHKEY_ASKED_STORAGE_KEY, '1')
+  } catch {
+    // Ignore — worst case it asks again next launch.
+  }
+}
 function loadDeviceActiveMap(): Record<string, boolean> {
   try {
     return parseDeviceActiveMap(localStorage.getItem(DEVICE_ACTIVE_STORAGE_KEY))
@@ -361,6 +384,11 @@ export function App() {
   // task).
   const [midiSupported, setMidiSupported] = useState(false)
   const [midiDevices, setMidiDevices] = useState<MidiDevice[]>([])
+  // Launchkey Mini auto-map offer (user request): shown once, on first launch
+  // with the controller detected. `launchkeyAskedRef` (persisted) suppresses
+  // re-asking once the user has answered either way.
+  const [launchkeyPrompt, setLaunchkeyPrompt] = useState(false)
+  const launchkeyAskedRef = useRef(loadLaunchkeyAsked())
   // Collapsed by default (task: MIDI settings behind a button) — the tab
   // button itself is the only chrome shown until opened.
   const [midiOpen, setMidiOpen] = useState(false)
@@ -395,6 +423,24 @@ export function App() {
     macroCcBySlotRef.current = macroCcBySlot
     saveMacroCcBySlot(macroCcBySlot)
   }, [macroCcBySlot])
+  // Offer the Launchkey Mini auto-map the first time the device is seen (until
+  // the user has answered once). Runs whenever the device list changes, so it
+  // also fires on a hot-plug during a session, not only at cold boot.
+  useEffect(() => {
+    if (launchkeyAskedRef.current) return
+    if (midiDevices.some((d) => isLaunchkeyMini(d.name))) setLaunchkeyPrompt(true)
+  }, [midiDevices])
+  const acceptLaunchkeyMap = () => {
+    setMacroCcBySlot(LAUNCHKEY_MACRO_CC.slice()) // Controls 1-8 <- CC 21-28
+    launchkeyAskedRef.current = true
+    saveLaunchkeyAsked()
+    setLaunchkeyPrompt(false)
+  }
+  const declineLaunchkeyMap = () => {
+    launchkeyAskedRef.current = true
+    saveLaunchkeyAsked()
+    setLaunchkeyPrompt(false)
+  }
   // Per-device active flags (task: same persistence story as the CC table) —
   // a map of Web MIDI port id -> active, seeded from localStorage at mount.
   // `restoredDeviceIdsRef` tracks which device ids have already had their
@@ -1651,6 +1697,18 @@ export function App() {
             </button>
           )}
         </div>
+
+        {launchkeyPrompt && (
+          <div className="restore-banner">
+            <span>Launchkey Mini detected — map Controls 1–8 to its knobs (CC 21–28)?</span>
+            <button type="button" className="session-button session-button-primary" onClick={acceptLaunchkeyMap}>
+              Yes, map it
+            </button>
+            <button type="button" className="session-button" onClick={declineLaunchkeyMap}>
+              No
+            </button>
+          </div>
+        )}
 
         <div className="panel-tabs" role="tablist">
           {STUDIO_TABS.map(([tab, label]) => (

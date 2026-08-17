@@ -64,3 +64,17 @@ export function parseDeviceActiveMap(raw: string | null): Record<string, boolean
     return {}
   }
 }
+
+// --- Launchkey Mini auto-map (user request) ----------------------------------
+
+/** Whether a MIDI input port belongs to a Launchkey Mini. Ports report names
+ * like "Launchkey Mini MK3 MIDI" / "Launchkey Mini MK3 DAW" — match both
+ * "launchkey" and "mini" (case-insensitive) so it's specific to the Mini and
+ * not, say, a full-size Launchkey. */
+export function isLaunchkeyMini(name: string): boolean {
+  return /launchkey/i.test(name) && /mini/i.test(name)
+}
+
+/** CC->slot table mapping Controls 1..8 to the Launchkey Mini's knobs CC21..28
+ * (slot i, 0-based, <- CC 21+i). Length is MACRO_SLOT_COUNT. */
+export const LAUNCHKEY_MACRO_CC: number[] = Array.from({ length: MACRO_SLOT_COUNT }, (_, i) => 21 + i)
