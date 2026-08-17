@@ -130,6 +130,13 @@ body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* Reserve the scrollbar's width so it never sits over the content (the
+     right-edge `ctl N` labels were being clipped by it). Reserving the gutter
+     up front also keeps the content width stable, which stops the scrollbar
+     squeeze from overflowing a child and spawning a spurious horizontal
+     scrollbar. A little right padding lifts the labels off the gutter. */
+  scrollbar-gutter: stable;
+  padding-right: 6px;
 }
 
 /* Each tab's content stays mounted at all times — visibility is toggled via
