@@ -121,6 +121,106 @@ body {
   display: block;
 }
 
+/* "?" help button after the logo. */
+.help-button {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.help-button:hover,
+.help-button-active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Help popover — fixed over the visual, to the LEFT of the 320px panel so the
+   controls stay visible and usable while reading (non-blocking: no backdrop).
+   The width cap keeps it clear of the panel at any desktop width. */
+.help-popover {
+  position: fixed;
+  top: 54px;
+  left: 16px;
+  width: min(400px, calc(100vw - 360px));
+  max-height: calc(100vh - 90px);
+  overflow-y: auto;
+  z-index: 50;
+  padding: 12px 16px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(16, 16, 20, 0.92);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.help-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.help-popover-head span {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 12px;
+  color: var(--accent);
+}
+.help-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.help-close:hover {
+  color: var(--text);
+}
+.help-popover-body p {
+  margin: 0 0 8px;
+}
+.help-popover-body ul {
+  margin: 0 0 4px;
+  padding-left: 18px;
+}
+.help-popover-body li {
+  margin-bottom: 6px;
+}
+.help-popover-body code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+/* On phones the visual is the top strip, so anchor the popover there and let it
+   span the width (the panel is below, not beside). */
+@media (max-width: 720px) {
+  .help-popover {
+    left: 12px;
+    right: 12px;
+    width: auto;
+    top: 12px;
+    max-height: 48vh;
+  }
+}
+
 /* SampleArk-style tab row: SCENE | SESSION | INPUTS | CODE, reusing the
    existing .tab-button look (originally introduced for the MIDI disclosure
    toggle). Exactly one is active at a time (App's `activeTab` state). */

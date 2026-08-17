@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Engine } from '../engine/engine'
 import { SCENES } from '../scenes/registry'
 import { attachKeyboard } from '../mapping/keyboard'
@@ -320,6 +320,111 @@ const STUDIO_TABS: Array<[StudioTab, string]> = [
   ['session', 'SESSION'],
   ['code', 'CODE'],
 ]
+
+/** Per-tab help shown in the "?" popover — what each page does, not every knob. */
+const TAB_HELP: Record<StudioTab, { title: string; body: ReactNode }> = {
+  inputs: {
+    title: 'Inputs',
+    body: (
+      <>
+        <p>Bring sound and media in, and wire up hardware.</p>
+        <ul>
+          <li>
+            <b>Load audio file</b> — the track is analysed (beat, tempo, frequency bands) so the visuals
+            react and the export stays perfectly in sync. <b>Load image</b> feeds the Photo Swarm scene.
+          </li>
+          <li>
+            <b>MIDI</b> — turn on Web MIDI (Chrome/Edge only) and tick the controllers you want to use. A
+            Launchkey Mini offers to auto-map itself.
+          </li>
+          <li>
+            <b>Controls 1–8</b> — the eight macro knobs that drive scene parameters. Press{' '}
+            <b>Map controls…</b> then turn a hardware knob to bind each in turn (or <b>Learn</b> a single
+            row); each shows its CC and a live level. <b>Clear mapping</b> resets them.
+          </li>
+          <li>
+            <b>Signals</b> — live meters for the audio features (<code>rms</code>, <code>bass</code>,{' '}
+            <code>mid</code>, <code>high</code>, <code>beat</code>, <code>onset</code>) your formulas can use.
+          </li>
+        </ul>
+      </>
+    ),
+  },
+  scene: {
+    title: 'Perform',
+    body: (
+      <>
+        <p>Pick a visual and play it.</p>
+        <ul>
+          <li>
+            <b>Scene</b> — choose the visual. <b>Hand off to</b> + <b>Switch</b> crossfades into another
+            scene; the knob sets the glide time (<i>cut</i> = instant).
+          </li>
+          <li>
+            <b>Controls 1–8 &amp; the ƒx bar</b> — the scene's main parameters. Drag a slider, or type a
+            formula in its <b>ƒx</b> box to drive it live from audio or time — e.g.{' '}
+            <code>0.2 + bass * 0.6</code> or <code>1 + beatPhase * 2</code>. The <b>ctl 1–8</b> tag shows
+            which macro knob (and any mapped MIDI/keys) also moves it. The <b>ƒ</b> menu lists the signals
+            and functions you can use.
+          </li>
+          <li>
+            <b>Pads &amp; XY</b> — tap the trigger pads or drag the XY pad for hands-on hits (works on touch).
+          </li>
+          <li>
+            <b>Frames</b> — store the current knob positions to <b>F1–F8</b>, then jump or <b>Glide</b> back
+            to them (<b>Transition</b> sets the glide time).
+          </li>
+          <li>
+            <b>Blended scenes</b> also add <b>Mix</b>, <b>Blend mode</b>, and A / B / Fader knob views.
+          </li>
+        </ul>
+      </>
+    ),
+  },
+  session: {
+    title: 'Session',
+    body: (
+      <>
+        <p>Record, save, and export your performance.</p>
+        <ul>
+          <li>
+            <b>Export format / quality</b> — MP4 or WebM, up to 1080p (<b>Max</b> = highest bitrate, least
+            grain).
+          </li>
+          <li>
+            <b>Last take</b> — your most recent recorded performance: <b>Export video</b>, <b>Replay</b>, or{' '}
+            <b>Save</b> the take / session / both into this browser.
+          </li>
+          <li>
+            <b>Load a saved take</b> — reopen a saved session, or <b>Export from file</b> for an offline render.
+          </li>
+          <li>Everything is stored locally in your browser — nothing uploads anywhere.</li>
+        </ul>
+        <p>
+          To record: <b>Arm</b> (bottom bar), then press ▶ — the track plays and the take records together.
+        </p>
+      </>
+    ),
+  },
+  code: {
+    title: 'Code',
+    body: (
+      <>
+        <p>Edit the visual's actual shader — the deepest layer.</p>
+        <ul>
+          <li>
+            <b>Stage</b> — pick which shader (or the blend) to edit.
+          </li>
+          <li>
+            Change the GLSL and press <b>Apply</b> to hot-recompile — you see it live. A compile error shows
+            inline and the last working version keeps running, so you can't crash the visual.
+          </li>
+          <li>Each stage includes "things to try" hints pointing at safe tweaks.</li>
+        </ul>
+      </>
+    ),
+  },
+}
 
 /** Same convention as mapping/keyboard.ts's isEditableTarget, plus `select` —
  * this is a UI-level shortcut (not a mapping-table binding) and the panel has
@@ -938,6 +1043,16 @@ export function App() {
   // tabs never resets in-progress state (an unsaved shader edit, the MIDI
   // disclosure's open/closed state, learn mode).
   const [activeTab, setActiveTab] = useState<StudioTab>('scene')
+  // Help popover ("?" by the logo): explains the features of the current tab.
+  const [helpOpen, setHelpOpen] = useState(false)
+  useEffect(() => {
+    if (!helpOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setHelpOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [helpOpen])
 
   /** studio <-> full. A no-op where the Fullscreen API is unavailable (e.g.
    * iPhone Safari) — there is no other mode left to toggle into. */
@@ -1683,6 +1798,24 @@ export function App() {
       <div className="stage" ref={stageRef}>
         <canvas ref={canvasRef} />
       </div>
+      {/* Help popover: fixed over the visual (left of the panel) so the controls
+         stay visible/usable while reading. Non-blocking — no backdrop. */}
+      {helpOpen && viewMode === 'studio' && (
+        <div className="help-popover" role="dialog" aria-label={`${TAB_HELP[activeTab].title} help`}>
+          <div className="help-popover-head">
+            <span>{TAB_HELP[activeTab].title}</span>
+            <button
+              type="button"
+              className="help-close"
+              aria-label="Close help"
+              onClick={() => setHelpOpen(false)}
+            >
+              ✕
+            </button>
+          </div>
+          <div className="help-popover-body">{TAB_HELP[activeTab].body}</div>
+        </div>
+      )}
       {viewMode === 'studio' && (
       <aside className="panel">
         <div className="panel-header">
@@ -1709,6 +1842,18 @@ export function App() {
                 }}
               />
             </a>
+            {/* Contextual help: explains the current tab in a popover placed over
+               the visual (not the controls) so both stay readable. */}
+            <button
+              type="button"
+              className={`help-button${helpOpen ? ' help-button-active' : ''}`}
+              aria-label="Help — what's on this page"
+              aria-expanded={helpOpen}
+              title="What's on this page?"
+              onClick={() => setHelpOpen((v) => !v)}
+            >
+              ?
+            </button>
           </div>
           {/* Full-screen entry point (the removed 'perform' strip mode's only
              surviving affordance): jumps straight into true Fullscreen-API
