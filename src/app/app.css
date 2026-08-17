@@ -948,6 +948,49 @@ body {
     border-left: none;
     border-top: 1px solid var(--border);
   }
+
+  /* --- Mobile declutter (touch, small control area). Desktop is unaffected:
+     every rule here is inside this max-width media query. --- */
+
+  /* Hide the "Visualz" title + logo header so the tab row rises to the top. */
+  .panel-header {
+    display: none;
+  }
+
+  /* Hide the CODE tab (no in-browser code editing on a phone) so the remaining
+     three tabs fit the row comfortably. */
+  .tab-button.tab-code {
+    display: none;
+  }
+
+  /* Hide the hand-off section entirely (target-scene dropdown + Switch button +
+     the Handoff transition-time knob) — the main Scene picker is enough. */
+  .switch-control {
+    display: none;
+  }
+
+  /* Un-clamp the footer: instead of a fixed ARM/record bar pinned at the bottom,
+     the panel itself scrolls, the tab row sticks to the top, and the footer
+     flows at the end of the content — so you scroll down to reach ARM and the
+     controls get that reclaimed space. */
+  .app-studio .panel {
+    overflow-y: auto;
+    padding-top: 0; /* tabs stick flush to the top; no gap for content to peek through */
+  }
+  .panel-tabs {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--bg-panel);
+    padding: 14px 0 8px; /* the removed panel top-padding, now behind the opaque sticky row */
+  }
+  .panel-content {
+    overflow: visible;
+    flex: 0 0 auto;
+  }
+  .panel-footer {
+    flex: 0 0 auto;
+  }
 }
 
 .transport-row {

@@ -1740,7 +1740,7 @@ export function App() {
               type="button"
               role="tab"
               aria-selected={activeTab === tab}
-              className={`tab-button${activeTab === tab ? ' tab-button-active' : ''}`}
+              className={`tab-button${activeTab === tab ? ' tab-button-active' : ''}${tab === 'code' ? ' tab-code' : ''}`}
               onClick={() => setActiveTab(tab)}
             >
               {label}
