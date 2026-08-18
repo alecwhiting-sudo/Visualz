@@ -151,7 +151,7 @@ body {
 .help-popover {
   position: fixed;
   top: 54px;
-  left: 16px;
+  right: 336px; /* just left of the 320px panel (+16px gap): beside the controls, still over the canvas */
   width: min(400px, calc(100vw - 360px));
   max-height: calc(100vh - 90px);
   overflow-y: auto;
