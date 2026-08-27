@@ -70,7 +70,12 @@ describe('formatForSize', () => {
   })
 
   it('falls back to 16:9 for a size that matches none of the three liveSize entries', () => {
+    // Ratio-matched, not exact-dims-matched: scaled backing stores of a
+    // format's ratio classify as that format; only alien ratios fall back.
     expect(formatForSize(1920, 1080)).toBe('16:9')
-    expect(formatForSize(100, 100)).toBe('16:9')
+    expect(formatForSize(1080, 1920)).toBe('9:16')
+    expect(formatForSize(360, 640)).toBe('9:16')
+    expect(formatForSize(100, 100)).toBe('1:1')
+    expect(formatForSize(123, 456)).toBe('16:9')
   })
 })

@@ -37,9 +37,14 @@ export function liveSize(format: CanvasFormat): { width: number; height: number 
  * separately — see `session/types.ts`'s `SessionDoc.format`.
  */
 export function formatForSize(width: number, height: number): CanvasFormat {
+  // Match by aspect RATIO, not exact dims (review hardening): a future
+  // DPR-scaled or supersampled backing store (e.g. 1080x1920 for the 9:16
+  // view), or a test-harness engine at &w=360&h=640, must still stamp the
+  // format it actually renders at. Exact-ratio comparison is safe because
+  // every real backing size is an integer multiple of the format's ratio.
   for (const format of CANVAS_FORMATS) {
     const size = liveSize(format)
-    if (size.width === width && size.height === height) return format
+    if (width * size.height === height * size.width) return format
   }
   return '16:9'
 }
