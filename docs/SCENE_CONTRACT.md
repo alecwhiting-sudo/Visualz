@@ -106,7 +106,9 @@ or `'bounded'` (content is a composed object — a curve, an orrery — where
 full-bleed is meaningless and portrait composition is a per-scene design
 decision). `'field'` scenes must pass the portrait band-coverage check (every
 horizontal band of a 9:16 frame carries ink); `'bounded'` scenes must still be
-non-blank and artefact-free at every aspect.
+non-blank and artefact-free at every aspect. The band-coverage check itself
+lives in `tests/e2e/framing.spec.ts`, driven by the `bandCoverage` harness
+hook (`window.__viz`, `src/gpu/readback.ts`).
 
 ## Definition of done for a new scene
 
