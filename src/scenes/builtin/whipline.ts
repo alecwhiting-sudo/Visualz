@@ -206,6 +206,14 @@ export class WhipLineScene implements SceneRuntime {
   private baseRestLen = 0 // fixed at init: per-segment rest length at `length`=1.0
   private restLen = 0 // this frame's effective rest length (baseRestLen * length), see update()
 
+  // Cached aspect: types.ts requires aspect come from the render surface, not
+  // gpu.canvas — a child of a composite renders into a differently-shaped
+  // target. Seeded at init() from gpu.width/height (the pre-first-render
+  // default) and refreshed at the top of render() from surface.width/height,
+  // which SCENE_CONTRACT.md's Framing section guarantees is constant for the
+  // instance's whole life — so update() reading the cached value is safe.
+  private aspect = 1
+
   // --- Ribbon-builder scratch (reused across head + every echo draw) ------
   private ndcX = new Float32Array(N)
   private ndcY = new Float32Array(N)
@@ -234,10 +242,11 @@ export class WhipLineScene implements SceneRuntime {
     this.lineSource = LINE_FS
     this.fadeSource = FADE_FS
 
+    this.aspect = gpu.width / gpu.height
+
     // Straight vertical line, center -> top of screen (logical space; see
     // class doc for why (0,Wy) is "the top" at any aspect).
-    const aspect = gpu.width / gpu.height
-    const Wy = Math.max(1 / aspect, 1)
+    const Wy = Math.max(1 / this.aspect, 1)
     for (let i = 0; i < N; i++) {
       const t = i / (N - 1)
       this.posX[i] = 0
@@ -326,9 +335,10 @@ export class WhipLineScene implements SceneRuntime {
     // see class doc for why the default of 1.15 is deliberate).
     this.restLen = this.baseRestLen * clamp(this.getParam('length'), 0.3, 1.6)
 
-    // Aspect read fresh every update() (gpu dims track canvas/resize()), so
-    // wall bounds track the real screen edges even if the surface resizes.
-    const aspect = this.gpu.width / this.gpu.height
+    // Cached aspect (refreshed from the surface at the top of render(), see
+    // field doc) — construction-time constant per SCENE_CONTRACT.md's Framing
+    // section, so wall bounds track the real frame without reading gpu here.
+    const aspect = this.aspect
     const Wx = Math.max(aspect, 1)
     const Wy = Math.max(1 / aspect, 1)
 
@@ -521,7 +531,9 @@ export class WhipLineScene implements SceneRuntime {
     void ctx
     const gl = this.gpu.gl
     surface.bind()
-    const aspect = surface.width / surface.height
+    // Refresh from the surface being rendered into (types.ts: never gpu.canvas).
+    this.aspect = surface.width / surface.height
+    const aspect = this.aspect
 
     gl.enable(gl.BLEND)
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)

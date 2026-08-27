@@ -246,6 +246,15 @@ export class OrreryScene implements SceneRuntime {
   private gpu!: Gpu
   private random: Prng = mulberry32(1)
 
+  // Cached aspect: types.ts requires aspect come from the render surface, not
+  // gpu.canvas (a child of a composite renders into a differently-shaped
+  // target). Seeded at init() from gpu.width/height (init's own pre-first-
+  // render default) and refreshed at the top of render() from
+  // surface.width/height, which SCENE_CONTRACT.md's Framing section
+  // guarantees is the same aspect for the instance's whole life — so caching
+  // it here for computeJoints (called from update()) is contract-legal.
+  private aspect = 1
+
   // CPU-only state (ARCHITECTURE.md §1). `slots` is a fixed-size MAX_ARMS
   // pool generated at init; only `ratio` on one slot is ever redrawn again
   // (on a phrase event — see class doc). `beatCount` and `phraseCounter` are
@@ -298,6 +307,7 @@ export class OrreryScene implements SceneRuntime {
 
   init(gpu: Gpu, seed: number): void {
     this.gpu = gpu
+    this.aspect = gpu.width / gpu.height
     this.random = mulberry32(seed)
     for (const p of this.params) this.values.set(p.name, p.default)
 
@@ -421,7 +431,7 @@ export class OrreryScene implements SceneRuntime {
    *  (state advance) without violating render()'s "draws only" contract,
    *  since render() never calls this itself. */
   private computeJoints(machineTime: number, gearing: number, scaleTotal: number): void {
-    const aspect = this.gpu.canvas.width / this.gpu.canvas.height
+    const aspect = this.aspect
     const M = this.activeArms
 
     let weightSum = 0
@@ -453,6 +463,11 @@ export class OrreryScene implements SceneRuntime {
   render(_ctx: FrameContext, surface: RenderSurface): void {
     const gl = this.gpu.gl
     surface.bind()
+
+    // Refresh from the surface being rendered into (types.ts: never gpu.canvas)
+    // — a no-op numerically today since composite child targets match the
+    // canvas, but this is the truth computeJoints (called from update()) reads.
+    this.aspect = surface.width / surface.height
 
     const trail = this.getParam('trail')
     const inkFlow = this.getParam('inkFlow')

@@ -271,6 +271,14 @@ export class WhipStormScene implements SceneRuntime {
 
   private currentTime = 0 // this frame's frame.time, cached for spawnSpark()/render()
 
+  // Cached aspect: types.ts requires aspect come from the render surface, not
+  // gpu.canvas — a child of a composite renders into a differently-shaped
+  // target. Seeded at init() from gpu.width/height (the pre-first-render
+  // default) and refreshed at the top of render() from surface.width/height,
+  // which SCENE_CONTRACT.md's Framing section guarantees is constant for the
+  // instance's whole life — so update() reading the cached value is safe.
+  private aspect = 1
+
   init(gpu: Gpu, seed: number): void {
     this.gpu = gpu
     for (const p of this.params) this.values.set(p.name, p.default)
@@ -280,8 +288,8 @@ export class WhipStormScene implements SceneRuntime {
 
     const prng = mulberry32(seed)
 
-    const aspect = gpu.width / gpu.height
-    const Wy = Math.max(1 / aspect, 1)
+    this.aspect = gpu.width / gpu.height
+    const Wy = Math.max(1 / this.aspect, 1)
 
     // Seed all WHIPS_MAX chains, always — only the live `whips` count is
     // simulated/rendered each frame, but every slot must hold valid state so
@@ -417,7 +425,10 @@ export class WhipStormScene implements SceneRuntime {
 
     for (let w = 0; w < WHIPS_MAX; w++) this.restLen[w] = this.baseRestLen[w] * lengthParam
 
-    const aspect = this.gpu.width / this.gpu.height
+    // Cached aspect (refreshed from the surface at the top of render(), see
+    // field doc) — construction-time constant per SCENE_CONTRACT.md's Framing
+    // section, so wall bounds track the real frame without reading gpu here.
+    const aspect = this.aspect
     const Wx = Math.max(aspect, 1)
     const Wy = Math.max(1 / aspect, 1)
 
@@ -656,7 +667,9 @@ export class WhipStormScene implements SceneRuntime {
     void ctx
     const gl = this.gpu.gl
     surface.bind()
-    const aspect = surface.width / surface.height
+    // Refresh from the surface being rendered into (types.ts: never gpu.canvas).
+    this.aspect = surface.width / surface.height
+    const aspect = this.aspect
 
     gl.enable(gl.BLEND)
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
