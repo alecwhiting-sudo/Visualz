@@ -783,6 +783,20 @@ body {
   box-shadow: 0 0 4px var(--accent);
 }
 
+/* Canvas-format switch (INPUTS tab, top of panel): a segmented row of three
+   .tab-button toggles, same active/disabled treatment as the rest of the
+   panel — wraps at the panel's narrow width rather than overflowing it. */
+.format-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.format-switch .tab-button {
+  flex: 1 1 auto;
+}
+
 .midi-section {
   display: flex;
   flex-direction: column;

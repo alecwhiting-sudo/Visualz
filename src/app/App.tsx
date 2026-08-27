@@ -15,6 +15,7 @@ import { placeholderFor, suggestionsFor } from './exprSuggest'
 import { applySceneEntry, captureSceneEntry } from './sceneMemory'
 import { classifyFile, parseRig, serializeRig, type SceneRigEntry, type SessionRig } from '../session/rig'
 import type { ParamSchema } from '../scenes/types'
+import { CANVAS_FORMATS, liveSize, type CanvasFormat } from '../core/format'
 import { framesToRenderForAudioSync } from './replayPacing'
 import { snapToStep } from '../scenes/paramStep'
 import { SHADER_DOCS } from '../scenes/shaderDocs'
@@ -50,6 +51,13 @@ const MACRO_VIEWS = [
   { value: 2, label: 'Fader' },
   { value: 3, label: 'Both' },
 ]
+
+/** Canvas-format switch (INPUTS tab): button labels per `CanvasFormat`. */
+const FORMAT_LABELS: Record<CanvasFormat, string> = {
+  '16:9': 'Landscape 16:9',
+  '9:16': 'Portrait 9:16',
+  '1:1': 'Square 1:1',
+}
 
 const SIGNAL_NAMES = ['rms', 'bass', 'mid', 'high', 'beat', 'onset']
 const KEYBOARD_HINT = '1-6 freqX · q/w/e freqY · space pulse drift · f/g flash/fade trail'
@@ -144,14 +152,20 @@ async function loadAndDownscaleImage(file: File): Promise<{ width: number; heigh
 /** Creates and starts the normal live-mode engine on a canvas (factored out so
  * it can be re-invoked after a session replay finishes, or after switching
  * scenes from the panel dropdown). */
-function createLiveEngine(canvas: HTMLCanvasElement, sceneId: string, audio?: Engine['audio']): Engine {
+function createLiveEngine(
+  canvas: HTMLCanvasElement,
+  sceneId: string,
+  format: CanvasFormat,
+  audio?: Engine['audio'],
+): Engine {
   const entry = SCENES[sceneId]
   if (!entry) throw new Error(`unknown scene ${sceneId}`)
+  const { width, height } = liveSize(format)
   const e = new Engine(canvas, entry.create(), {
     mode: 'live',
     seed: 42,
-    width: 960,
-    height: 540,
+    width,
+    height,
     // Scene switches hand the previous engine's AudioEngine through so the
     // loaded track (and the transport row) survives the rebuild.
     audio,
@@ -278,6 +292,33 @@ function saveDeviceActiveMap(v: Record<string, boolean>): void {
   }
 }
 
+// --- Canvas format persistence (localStorage) --------------------------------
+// The chosen output aspect (src/core/format.ts) is a construction-time
+// constant (docs/SCENE_CONTRACT.md's Framing section) — switching it rebuilds
+// the live engine, same shape as a scene switch. It's app state, not scene
+// state, so it lives here rather than in the session rig, and persists across
+// reloads the same way the MIDI setup above does.
+const CANVAS_FORMAT_STORAGE_KEY = 'viz.canvasFormat'
+function isCanvasFormat(v: string): v is CanvasFormat {
+  return (CANVAS_FORMATS as readonly string[]).includes(v)
+}
+function loadCanvasFormat(): CanvasFormat {
+  try {
+    const raw = localStorage.getItem(CANVAS_FORMAT_STORAGE_KEY)
+    if (raw && isCanvasFormat(raw)) return raw
+  } catch {
+    // Ignore — falls through to the default below.
+  }
+  return '16:9'
+}
+function saveCanvasFormat(v: CanvasFormat): void {
+  try {
+    localStorage.setItem(CANVAS_FORMAT_STORAGE_KEY, v)
+  } catch {
+    // Ignore — a failed save just means the choice won't survive a reload.
+  }
+}
+
 // --- Performance model (rehearsal / armed / performing) ---------------------
 // User-reported problem: record/play/export read as "a confusing mess", and
 // takes came out LONGER than the actual performance because the transport ⏹
@@ -329,6 +370,11 @@ const TAB_HELP: Record<StudioTab, { title: string; body: ReactNode }> = {
       <>
         <p>Bring sound and media in, and wire up hardware.</p>
         <ul>
+          <li>
+            <b>Canvas format</b> — Landscape 16:9, Portrait 9:16, or Square 1:1. Rebuilds the visual at the
+            new shape immediately; locked while a take exists or a recording/replay/export is in progress,
+            since the format is fixed for the life of a take.
+          </li>
           <li>
             <b>Load audio file</b> — the track is analysed (beat, tempo, frequency bands) so the visuals
             react and the export stays perfectly in sync. <b>Load image</b> feeds the Photo Swarm scene.
@@ -586,6 +632,17 @@ export function App() {
   }, [macroLearn])
 
   const [sceneId, setSceneId] = useState(DEFAULT_SCENE_ID)
+  // Canvas format (16:9 / 9:16 / 1:1, src/core/format.ts): construction-time
+  // constant for the live engine's backing store (Scene Contract Framing
+  // section) — switching it rebuilds the engine, same shape as a scene
+  // switch. Seeded from localStorage so the choice survives a reload;
+  // persisted below whenever it changes. Hard-locked (see the INPUTS panel)
+  // while a take exists or anything is mid-flight, so it can never change
+  // out from under a recording/replay/export in progress.
+  const [canvasFormat, setCanvasFormat] = useState<CanvasFormat>(() => loadCanvasFormat())
+  useEffect(() => {
+    saveCanvasFormat(canvasFormat)
+  }, [canvasFormat])
   // Scene handoff (docs/HANDOFF.md §6): `switchTargetId` is the currently
   // selected hand-off target (a registry id, independent of the cold-swap
   // scene dropdown above); `sceneVersion` bumps on every successful switch so
@@ -1316,14 +1373,14 @@ export function App() {
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || engineRef.current) return
-    attachLiveEngine(createLiveEngine(canvas, sceneId))
+    attachLiveEngine(createLiveEngine(canvas, sceneId, canvasFormat))
     return () => {
       cancelGlide()
       detachLiveEngine()
       engineRef.current?.dispose()
       engineRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only; scene switches go through onSceneChange
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only; scene/format switches go through onSceneChange/onFormatChange
   }, [])
 
   /** Scene dropdown handler: tears down the live engine and rebuilds it against
@@ -1359,7 +1416,7 @@ export function App() {
     setArmed(false)
     recordingStartFrameRef.current = null
     setSceneId(id)
-    const newEngine = createLiveEngine(canvas, id, audio)
+    const newEngine = createLiveEngine(canvas, id, canvasFormat, audio)
     // Reapply the last-picked image to the new scene, if it accepts one — the
     // new scene is a fresh instance (createLiveEngine builds a whole new
     // Engine) so it starts with no image of its own.
@@ -1407,6 +1464,45 @@ export function App() {
       // surface the error, the engine already kept a working scene.
       setSessionError(err instanceof Error ? err.message : String(err))
     }
+  }
+
+  // INPUTS tab's canvas-format switch (16:9 / 9:16 / 1:1): hard-locked while a
+  // take exists or anything is mid-flight — Scene Contract's Framing section
+  // makes format a construction-time constant (docs/SCENE_CONTRACT.md), so
+  // changing it out from under a live recording/replay/export would either
+  // corrupt that in-flight state or silently disagree with it.
+  // `takeLocksFormat` isolates the specific "a take is sitting there ready to
+  // export" case so the panel can explain THAT one with its own hint — the
+  // other lock reasons already have their own status lines elsewhere in the
+  // panel (perf-mode line, replay progress, export progress).
+  const takeLocksFormat = lastSession !== null && takeReady
+  const formatLocked = recording || armed || takeLocksFormat || replay !== null || exporting !== null
+
+  /** Rebuilds the live engine at the new backing-store size — the same
+   * dispose/recreate shape as restoreLive's live-engine rebuild above: the
+   * loaded AudioEngine is handed through so a loaded track survives, the
+   * picked image is reapplied if the scene accepts one, and the scene's rig
+   * is restored so the knob positions don't reset. */
+  const onFormatChange = (format: CanvasFormat) => {
+    if (formatLocked || format === canvasFormat) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    setCanvasFormat(format)
+    // Same as onSceneChange: snapshot the current knob rig BEFORE the
+    // teardown, or applyMemoryFor below restores a stale entry and the
+    // user's positions since the last capture silently reset.
+    captureCurrentScene()
+    const audio = engineRef.current?.audio
+    detachLiveEngine()
+    engineRef.current?.dispose({ keepAudio: true })
+    engineRef.current = null
+    setEngine(null)
+    const newEngine = createLiveEngine(canvas, sceneId, format, audio)
+    if (imageRef.current && newEngine.sceneAcceptsImage()) {
+      newEngine.setSceneImage(imageRef.current)
+    }
+    attachLiveEngine(newEngine)
+    applyMemoryFor(sceneId)
   }
 
   // Hotkey (docs/HANDOFF.md §6): "x", handled directly in App (not through the
@@ -1654,7 +1750,7 @@ export function App() {
       // survives the whole replay round trip — createLiveEngine/Engine.start
       // already resets the transport to an adopted engine's audio position,
       // the same path a scene switch's audio handoff uses.
-      const newEngine = createLiveEngine(liveCanvas, restoreSceneId, liveAudio)
+      const newEngine = createLiveEngine(liveCanvas, restoreSceneId, canvasFormat, liveAudio)
       if (imageRef.current && newEngine.sceneAcceptsImage()) {
         newEngine.setSceneImage(imageRef.current)
       }
@@ -1672,11 +1768,15 @@ export function App() {
     try {
       const entry = SCENES[doc.scene.id]
       if (!entry) throw new Error(`unknown scene ${doc.scene.id}`)
+      // Sized off the CURRENT live canvasFormat, not the doc (session-doc-
+      // driven format is a later stage) — keeps the replay consistent with
+      // the live canvas the user is looking at.
+      const { width, height } = liveSize(canvasFormat)
       replayEngine = new Engine(canvas, entry.create(), {
         mode: 'render',
         seed: doc.seed,
-        width: 960,
-        height: 540,
+        width,
+        height,
         fps: doc.fps,
       })
       engineRef.current = replayEngine
@@ -2170,6 +2270,24 @@ export function App() {
              signal meters. (Pads/PERFORM batch: the trigger pads + XY pad
              moved to the PERFORM tab, below the param list — see below.) */}
           <div className="panel-tab-content" role="tabpanel" hidden={activeTab !== 'inputs'}>
+            <div className="format-switch" role="radiogroup" aria-label="Canvas format">
+              {CANVAS_FORMATS.map((format) => (
+                <button
+                  key={format}
+                  type="button"
+                  role="radio"
+                  aria-checked={format === canvasFormat}
+                  className={`tab-button${format === canvasFormat ? ' tab-button-active' : ''}`}
+                  disabled={formatLocked}
+                  onClick={() => onFormatChange(format)}
+                >
+                  {FORMAT_LABELS[format]}
+                </button>
+              ))}
+            </div>
+            {takeLocksFormat && (
+              <p className="session-status">Locked while a take exists — discard the take to change format.</p>
+            )}
             <label className="file">
               <input
                 type="file"
