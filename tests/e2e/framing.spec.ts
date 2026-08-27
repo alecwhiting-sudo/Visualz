@@ -14,9 +14,10 @@ import { expect, test } from '@playwright/test'
  * Scene list mirrors docs/FRAMING_AUDIT.md section A ("Conformant today —
  * declaration-only"), the `framing: 'field'` subset: cymatics, morph
  * (Morphogen — registry id is 'morph', not 'morphogen'), resonance,
- * mandeldive, orbitdive, physarum, waves, glyphrain. The `'bounded'` scenes
- * from that same section (guilloche/whipline/whipstorm) are NOT covered
- * here — F4 only *requires* band coverage for `'field'`.
+ * mandeldive, orbitdive, physarum, waves, glyphrain — plus flowfield, added
+ * by its section B.1 F1/F2/F3 migration (docs/FRAMING_AUDIT.md). The
+ * `'bounded'` scenes from that same section (guilloche/whipline/whipstorm)
+ * are NOT covered here — F4 only *requires* band coverage for `'field'`.
  *
  * Settle-frame counts and any test-mode query flags (`&count=`/`&grid=`) are
  * copied from each scene's own golden spec — same seed=42, same frame — so
@@ -35,7 +36,8 @@ interface FieldScene {
   slow?: boolean // mirrors the source spec's test.slow() for scenes with expensive first-readback cost
 }
 
-// Keep in sync with docs/FRAMING_AUDIT.md section A's `framing: 'field'` list.
+// Keep in sync with docs/FRAMING_AUDIT.md section A's `framing: 'field'` list
+// (plus flowfield, migrated per section B.1).
 const FIELD_SCENES: FieldScene[] = [
   { id: 'cymatics', settleFrames: 150 },
   { id: 'morph', settleFrames: 90 },
@@ -45,6 +47,7 @@ const FIELD_SCENES: FieldScene[] = [
   { id: 'physarum', extraQuery: '&count=16384', settleFrames: 200, slow: true },
   { id: 'waves', extraQuery: '&grid=128', settleFrames: 150 },
   { id: 'glyphrain', settleFrames: 90 },
+  { id: 'flowfield', extraQuery: '&count=16384', settleFrames: 90 },
 ]
 
 const ASPECTS = [

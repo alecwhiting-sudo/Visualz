@@ -33,6 +33,12 @@ precision highp float;
 uniform sampler2D uState;
 uniform int   uTexSize, uFrame;
 uniform float uDt, uTime, uFieldScale, uDrift, uFlowSpeed, uResponse, uPulse;
+// Domain half-extents (Scene Contract F1/F2, docs/FRAMING_AUDIT.md section B.1):
+// hx = max(aspect,1), hy = max(1/aspect,1), cached at init() — the respawn box
+// and respawn position scale with these instead of the old fixed 1.5 square, so
+// the domain covers the frame exactly at every aspect (the render map already
+// divides by the same hx/hy, so this is the only thing that needed to change).
+uniform float uHx, uHy;
 out vec4 outState;
 
 uint hash32(uint x){ x=x+0x9e3779b9u; x^=x>>16u; x*=0x7feb352du; x^=x>>15u; x*=0x846ca68bu; x^=x>>16u; return x; }
@@ -64,9 +70,9 @@ void main(){
   float a = 1.0 - exp(-uResponse*uDt);         // unconditionally stable
   v += (target - v) * a;
   p += v * uDt;
-  if(abs(p.x)>1.5 || abs(p.y)>1.5){            // deterministic respawn keyed (idx, frame)
+  if(abs(p.x)>1.5*uHx || abs(p.y)>1.5*uHy){    // deterministic respawn keyed (idx, frame)
     uint fs = uint(idx)*2u ^ (uint(uFrame)*0x9e3779b9u);
-    p = vec2(float(hash32(fs)), float(hash32(fs+1u)))/4294967296.0 * 2.8 - 1.4;
+    p = (vec2(float(hash32(fs)), float(hash32(fs+1u)))/4294967296.0 * 2.8 - 1.4) * vec2(uHx, uHy);
     v = vec2(0.0);
   }
   outState = vec4(p, v);
@@ -76,7 +82,7 @@ const RENDER_VS = `#version 300 es
 precision highp float;
 uniform sampler2D uState;
 uniform int uTexSize;
-uniform float uAspect, uPointSize, uResHeight;
+uniform float uAspect, uPointSize, uResShort;
 out float vSpeed;
 void main(){
   int i = gl_VertexID;
@@ -86,7 +92,10 @@ void main(){
   p.x /= max(uAspect,1.0);
   p.y *= min(uAspect,1.0);
   gl_Position = vec4(p, 0.0, 1.0);
-  gl_PointSize = uPointSize * max(uResHeight/360.0, 1.0);
+  // F3: keyed off the short axis (min(width,height)), not raw height — the
+  // three live formats are equal-pixel-count, so a height key renders ~1.8x
+  // chunkier in portrait (docs/SCENE_CONTRACT.md F3).
+  gl_PointSize = uPointSize * max(uResShort/360.0, 1.0);
 }`
 
 const RENDER_FS = `#version 300 es
@@ -106,13 +115,19 @@ void main(){
 
 const FALLOFF = 4.0
 
-/** CPU seed (docs/PARTICLES.md §5): p uniform in [-1.5,1.5]², v = 0. */
-export function seedFlowState(seed: number, n: number): Float32Array {
+/**
+ * CPU seed (docs/PARTICLES.md §5, extended by docs/SCENE_CONTRACT.md F1/F2):
+ * p uniform in `[-1.5*hx, 1.5*hx] x [-1.5*hy, 1.5*hy]`, v = 0. `hx`/`hy`
+ * default to 1 (the original unit-square semantics) so callers that don't
+ * care about framing are unaffected; the scene itself passes its real
+ * `init()`-time extents.
+ */
+export function seedFlowState(seed: number, n: number, hx = 1, hy = 1): Float32Array {
   const rng = mulberry32(seed)
   const out = new Float32Array(n * 4)
   for (let i = 0; i < n; i++) {
-    out[i * 4 + 0] = rng() * 3 - 1.5
-    out[i * 4 + 1] = rng() * 3 - 1.5
+    out[i * 4 + 0] = (rng() * 3 - 1.5) * hx
+    out[i * 4 + 1] = (rng() * 3 - 1.5) * hy
     out[i * 4 + 2] = 0
     out[i * 4 + 3] = 0
   }
@@ -130,6 +145,8 @@ interface UpdateLocs {
   uFlowSpeed: WebGLUniformLocation | null
   uResponse: WebGLUniformLocation | null
   uPulse: WebGLUniformLocation | null
+  uHx: WebGLUniformLocation | null
+  uHy: WebGLUniformLocation | null
 }
 
 interface RenderLocs {
@@ -137,13 +154,13 @@ interface RenderLocs {
   uTexSize: WebGLUniformLocation | null
   uAspect: WebGLUniformLocation | null
   uPointSize: WebGLUniformLocation | null
-  uResHeight: WebGLUniformLocation | null
+  uResShort: WebGLUniformLocation | null
   uHueShift: WebGLUniformLocation | null
   uFalloff: WebGLUniformLocation | null
 }
 
 export class FlowFieldScene implements SceneRuntime {
-  meta = { id: 'flowfield', name: 'Flow Field', family: 'particles' as const }
+  meta = { id: 'flowfield', name: 'Flow Field', family: 'particles' as const, framing: 'field' as const }
 
   params: ParamSchema[] = [
     { name: 'count', label: 'Particle count', min: 4096, max: 262144, default: DEFAULT_COUNT, step: 1024 },
@@ -162,6 +179,13 @@ export class FlowFieldScene implements SceneRuntime {
   private side = DEFAULT_SIDE
   private pendingSide: number | null = null
   private pulse = 0
+  // Domain half-extents (Scene Contract F1/F2): derived from the aspect seen
+  // at init() and constant for the life of the instance (docs/SCENE_CONTRACT.md
+  // "Framing" — aspect is a construction-time constant, same pattern as
+  // orrery/whipline/whipstorm). Default 1/1 keeps field declarations valid
+  // before init() runs.
+  private hx = 1
+  private hy = 1
 
   private pp!: PingPong
   private fsPass!: FullscreenPass
@@ -189,13 +213,16 @@ export class FlowFieldScene implements SceneRuntime {
     this.side = DEFAULT_SIDE
     this.pendingSide = null
     this.pulse = 0
+    const aspect = gpu.width / gpu.height
+    this.hx = Math.max(aspect, 1)
+    this.hy = Math.max(1 / aspect, 1)
     for (const p of this.params) this.values.set(p.name, p.default)
 
     this.updateSource = UPDATE_FS
     this.renderSource = RENDER_FS
 
     const gl = gpu.gl
-    this.pp = new PingPong(gpu, this.side, seedFlowState(seed, this.side * this.side))
+    this.pp = new PingPong(gpu, this.side, seedFlowState(seed, this.side * this.side, this.hx, this.hy))
     this.fsPass = new FullscreenPass(gpu)
 
     this.updateProgram = gpu.compileProgram(FULLSCREEN_VS, this.updateSource)
@@ -221,6 +248,9 @@ export class FlowFieldScene implements SceneRuntime {
    * (`imageSample.ts`). Colors are speed-derived in this scene's own render
    * pass, so there's no color to ingest. Resets the onset-pulse envelope so a
    * stale shockwave doesn't immediately scatter the freshly-seeded swarm.
+   * Deliberately still square-assuming (docs/FRAMING_AUDIT.md section D last
+   * bullet): an image keeps its own aspect in the inscribed square here, and
+   * respawn (F2) redistributes into the full hx/hy domain over time anyway.
    */
   ingest(snap: SceneSnapshot): void {
     this.pp.resize(this.side, importanceSampleState(snap, this.seed, this.side * this.side))
@@ -250,7 +280,7 @@ export class FlowFieldScene implements SceneRuntime {
     if (this.pendingSide !== null) {
       this.side = this.pendingSide
       this.pendingSide = null
-      this.pp.resize(this.side, seedFlowState(this.seed, this.side * this.side))
+      this.pp.resize(this.side, seedFlowState(this.seed, this.side * this.side, this.hx, this.hy))
     }
 
     const bass = signals.get('bass')
@@ -277,6 +307,8 @@ export class FlowFieldScene implements SceneRuntime {
     gl.uniform1f(this.updateLoc.uFlowSpeed, flowSpeed)
     gl.uniform1f(this.updateLoc.uResponse, this.getParam('response'))
     gl.uniform1f(this.updateLoc.uPulse, this.pulse)
+    gl.uniform1f(this.updateLoc.uHx, this.hx)
+    gl.uniform1f(this.updateLoc.uHy, this.hy)
     this.fsPass.draw()
     this.pp.swap()
   }
@@ -301,7 +333,7 @@ export class FlowFieldScene implements SceneRuntime {
     gl.uniform1i(this.renderLoc.uTexSize, this.side)
     gl.uniform1f(this.renderLoc.uAspect, surface.width / surface.height)
     gl.uniform1f(this.renderLoc.uPointSize, this.getParam('pointSize'))
-    gl.uniform1f(this.renderLoc.uResHeight, surface.height)
+    gl.uniform1f(this.renderLoc.uResShort, Math.min(surface.width, surface.height))
     gl.uniform1f(this.renderLoc.uHueShift, this.getParam('hueShift'))
     gl.uniform1f(this.renderLoc.uFalloff, FALLOFF)
     gl.bindVertexArray(this.pointsVao)
@@ -338,6 +370,8 @@ export class FlowFieldScene implements SceneRuntime {
       uFlowSpeed: gl.getUniformLocation(program, 'uFlowSpeed'),
       uResponse: gl.getUniformLocation(program, 'uResponse'),
       uPulse: gl.getUniformLocation(program, 'uPulse'),
+      uHx: gl.getUniformLocation(program, 'uHx'),
+      uHy: gl.getUniformLocation(program, 'uHy'),
     }
   }
 
@@ -348,7 +382,7 @@ export class FlowFieldScene implements SceneRuntime {
       uTexSize: gl.getUniformLocation(program, 'uTexSize'),
       uAspect: gl.getUniformLocation(program, 'uAspect'),
       uPointSize: gl.getUniformLocation(program, 'uPointSize'),
-      uResHeight: gl.getUniformLocation(program, 'uResHeight'),
+      uResShort: gl.getUniformLocation(program, 'uResShort'),
       uHueShift: gl.getUniformLocation(program, 'uHueShift'),
       uFalloff: gl.getUniformLocation(program, 'uFalloff'),
     }

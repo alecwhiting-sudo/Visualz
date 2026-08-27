@@ -91,6 +91,35 @@ describe('seedFlowState (docs/PARTICLES.md §5 CPU init)', () => {
       expect(vy).toBe(0)
     }
   })
+
+  // Scene Contract F1/F2 (docs/SCENE_CONTRACT.md, docs/FRAMING_AUDIT.md section
+  // B.1): the optional hx/hy extend the domain to the frame's half-extents
+  // instead of the fixed unit square — the scene's init() passes its real
+  // aspect-derived extents; other callers get the old unit-square default.
+  it('places positions in [-1.5*hx, 1.5*hx] x [-1.5*hy, 1.5*hy] for extended extents', () => {
+    const n = 4096
+    const hx = 16 / 9 // landscape-shaped extents, not 1:1
+    const hy = 1
+    const s = seedFlowState(7, n, hx, hy)
+    for (let i = 0; i < n; i++) {
+      const px = s[i * 4 + 0]
+      const py = s[i * 4 + 1]
+      const vx = s[i * 4 + 2]
+      const vy = s[i * 4 + 3]
+      expect(px).toBeGreaterThanOrEqual(-1.5 * hx)
+      expect(px).toBeLessThanOrEqual(1.5 * hx)
+      expect(py).toBeGreaterThanOrEqual(-1.5 * hy)
+      expect(py).toBeLessThanOrEqual(1.5 * hy)
+      expect(vx).toBe(0)
+      expect(vy).toBe(0)
+    }
+  })
+
+  it('is byte-identical for the same seed with extended extents', () => {
+    const a = seedFlowState(42, 4096, 16 / 9, 1)
+    const b = seedFlowState(42, 4096, 16 / 9, 1)
+    expect(a).toEqual(b)
+  })
 })
 
 // --- Scene handoff ingest helpers (docs/HANDOFF.md §2/§8/§10) ---------------
@@ -181,4 +210,3 @@ describe('importanceSampleState (docs/HANDOFF.md §2 ingest helper — grayscott
     }
   })
 })
-

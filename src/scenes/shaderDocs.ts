@@ -425,14 +425,14 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
             'this pulls every particle straight toward the center on an audio onset; delete the leading "-" to make onsets push particles AWAY from center instead — an explosion instead of an implosion.',
         },
         {
-          target: 'if(abs(p.x)>1.5 || abs(p.y)>1.5){',
+          target: 'if(abs(p.x)>1.5*uHx || abs(p.y)>1.5*uHy){',
           effect:
-            'particles that wander past ±1.5 in flow-space respawn at a random spot; shrink 1.5 to 0.8 to keep the swarm tighter to the visible frame, or grow it to 3.0 to let particles roam further off-screen first.',
+            'particles that wander past ±1.5 times the frame\'s half-extent respawn at a random spot; shrink both 1.5s to 0.8 to keep the swarm tighter to the visible frame, or grow them to 3.0 to let particles roam further off-screen first.',
         },
         {
-          target: 'p = vec2(float(hash32(fs)), float(hash32(fs+1u)))/4294967296.0 * 2.8 - 1.4;',
+          target: 'p = (vec2(float(hash32(fs)), float(hash32(fs+1u)))/4294967296.0 * 2.8 - 1.4) * vec2(uHx, uHy);',
           effect:
-            'respawn positions are drawn uniformly over a 2.8-wide square centered on the origin; shrink both the 2.8 and 1.4 (keeping 1.4 = half of 2.8) to respawn particles closer to the middle of the screen.',
+            'respawn positions are drawn uniformly over a 2.8-wide square (scaled to the frame\'s half-extents); shrink both the 2.8 and 1.4 (keeping 1.4 = half of 2.8) to respawn particles closer to the middle of the screen.',
         },
         {
           target: 'float a = 1.0 - exp(-uResponse*uDt);',
