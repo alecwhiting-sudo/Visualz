@@ -165,7 +165,7 @@ function hsl(h: number, s: number, l: number): [number, number, number] {
 }
 
 export class WhipLineScene implements SceneRuntime {
-  meta = { id: 'whipline', name: 'Whip Line', family: 'geometry' as const }
+  meta = { id: 'whipline', name: 'Whip Line', family: 'geometry' as const, framing: 'bounded' as const }
 
   // Order is a contract (task #46c): the first 8 are the hardware macro
   // slots. `tension` dropped out of the macro-8 (still a UI knob, just past

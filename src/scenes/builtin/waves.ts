@@ -337,7 +337,7 @@ interface RenderLocs {
 }
 
 export class WaveChamberScene implements SceneRuntime {
-  meta = { id: 'waves', name: 'Wave Chamber', family: 'simulation' as const }
+  meta = { id: 'waves', name: 'Wave Chamber', family: 'simulation' as const, framing: 'field' as const }
 
   params: ParamSchema[] = [
     { name: 'speed', label: 'Propagation speed', min: 0.2, max: 2, default: 1 },

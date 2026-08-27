@@ -272,7 +272,7 @@ interface LineLocs {
 }
 
 export class GuillocheScene implements SceneRuntime {
-  meta = { id: 'guilloche', name: 'Guilloché', family: 'geometry' as const }
+  meta = { id: 'guilloche', name: 'Guilloché', family: 'geometry' as const, framing: 'bounded' as const }
 
   // Schema order matters (fractallab.ts's own note applies here too): the
   // first 8 entries are the hardware macro slots, positional — this is the

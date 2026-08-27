@@ -331,7 +331,7 @@ interface RenderLocs {
 }
 
 export class PhotoSwarmScene implements SceneRuntime {
-  meta = { id: 'photoswarm', name: 'Photo Swarm', family: 'particles' as const }
+  meta = { id: 'photoswarm', name: 'Photo Swarm', family: 'particles' as const, framing: 'bounded' as const }
 
   // Defaults set per the user's spec (screenshot, 2026-07-17): max particle
   // density, gentle spring, and NO audio agitation by default — the photo

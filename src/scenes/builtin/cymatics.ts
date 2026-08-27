@@ -101,7 +101,7 @@ interface RenderLocs {
 }
 
 export class CymaticsScene implements SceneRuntime {
-  meta = { id: 'cymatics', name: 'Cymatics', family: 'geometry' as const }
+  meta = { id: 'cymatics', name: 'Cymatics', family: 'geometry' as const, framing: 'field' as const }
 
   params: ParamSchema[] = [
     { name: 'scale', label: 'Scale', min: 1.2, max: 8, default: 3.4 },

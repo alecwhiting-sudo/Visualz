@@ -313,7 +313,7 @@ interface RenderLocs {
 }
 
 export class PhysarumScene implements SceneRuntime {
-  meta = { id: 'physarum', name: 'Physarum', family: 'simulation' as const }
+  meta = { id: 'physarum', name: 'Physarum', family: 'simulation' as const, framing: 'field' as const }
 
   params: ParamSchema[] = [
     { name: 'sensorAngle', label: 'Sensor angle', min: 0.1, max: 1.2, default: 0.45 },

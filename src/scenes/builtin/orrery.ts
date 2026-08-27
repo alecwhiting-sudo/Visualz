@@ -227,7 +227,7 @@ interface QuadRange {
 }
 
 export class OrreryScene implements SceneRuntime {
-  meta = { id: 'orrery', name: 'Orrery', family: 'geometry' as const }
+  meta = { id: 'orrery', name: 'Orrery', family: 'geometry' as const, framing: 'bounded' as const }
 
   // Schema order matters (fractallab.ts's/guilloche.ts's own note applies
   // here too): this is the exact 8-param order the task specified.

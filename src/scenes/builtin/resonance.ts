@@ -104,7 +104,7 @@ interface RenderLocs {
 }
 
 export class ResonanceScene implements SceneRuntime {
-  meta = { id: 'resonance', name: 'Resonance', family: 'geometry' as const }
+  meta = { id: 'resonance', name: 'Resonance', family: 'geometry' as const, framing: 'field' as const }
 
   params: ParamSchema[] = [
     { name: 'modeBias', label: 'Mode bias', min: 0, max: 2, default: 1 },

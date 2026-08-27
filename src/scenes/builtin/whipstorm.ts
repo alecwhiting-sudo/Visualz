@@ -201,7 +201,7 @@ out vec4 outColor;
 void main() { outColor = vec4(0.0, 0.0, 0.0, uFade); }`
 
 export class WhipStormScene implements SceneRuntime {
-  meta = { id: 'whipstorm', name: 'Whip Storm', family: 'geometry' as const }
+  meta = { id: 'whipstorm', name: 'Whip Storm', family: 'geometry' as const, framing: 'bounded' as const }
 
   // Order is a contract: exactly 8 params, this order (task spec).
   params: ParamSchema[] = [

@@ -242,7 +242,7 @@ interface GlyphLocs {
 }
 
 export class GlyphRainScene implements SceneRuntime {
-  meta = { id: 'glyphrain', name: 'Glyph Rain', family: 'geometry' as const }
+  meta = { id: 'glyphrain', name: 'Glyph Rain', family: 'geometry' as const, framing: 'field' as const }
 
   params: ParamSchema[] = [
     { name: 'columns', label: 'Columns', min: 10, max: 60, default: 28, step: 1 },

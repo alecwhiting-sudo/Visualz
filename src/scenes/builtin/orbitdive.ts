@@ -168,7 +168,7 @@ interface RenderLocs {
 }
 
 export class OrbitDiveScene implements SceneRuntime {
-  meta = { id: 'orbitdive', name: 'Orbit Dive', family: 'geometry' as const }
+  meta = { id: 'orbitdive', name: 'Orbit Dive', family: 'geometry' as const, framing: 'field' as const }
 
   // Exactly 8 params, in the order the task spec fixes.
   params: ParamSchema[] = [

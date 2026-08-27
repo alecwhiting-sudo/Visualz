@@ -2,7 +2,7 @@ import { Engine } from '../engine/engine'
 import { SCENES } from '../scenes/registry'
 import type { SourceEvent } from '../mapping/types'
 import type { SessionDoc } from '../session/types'
-import { pixelHash } from '../gpu/readback'
+import { pixelHash, bandCoverage } from '../gpu/readback'
 import { exportSession } from '../export/client'
 import type { ExportVideoOpts } from '../export/render'
 import type { ExportAudio } from '../export/encode'
@@ -45,6 +45,16 @@ export interface VizTestApi {
    * tolerates a one-frame event offset.
    */
   pixelHash(): string
+  /**
+   * Portrait "band coverage" probe (docs/SCENE_CONTRACT.md F4,
+   * tests/e2e/framing.spec.ts): splits the current drawing buffer into
+   * `bands` equal-height horizontal strips (index 0 = top of frame) and
+   * returns each strip's mean of `max(r,g,b)` per pixel (0-255). A `'field'`
+   * scene's content should reach every band at 9:16, not just a centred
+   * strip. Pure read (same `gl.readPixels` plumbing as `pixelHash`); no GL
+   * state a subsequent render depends on is touched.
+   */
+  bandCoverage(bands: number): number[]
   /**
    * Drives the export worker pipeline (ARCHITECTURE.md §3.6) end-to-end from a
    * session doc and returns just enough of the result for Playwright to assert
@@ -231,6 +241,11 @@ export function bootTestMode(root: HTMLElement): void {
       const { gl } = engine.gpu
       const { width, height } = engine.gpu
       return pixelHash(gl, width, height)
+    },
+    bandCoverage: (bands) => {
+      const { gl } = engine.gpu
+      const { width, height } = engine.gpu
+      return bandCoverage(gl, width, height, bands)
     },
     exportSession: async (doc, opts) => {
       // `audioSeconds` is test-harness-only sugar: Playwright specs can't hand us

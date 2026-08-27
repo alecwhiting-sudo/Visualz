@@ -141,7 +141,7 @@ interface RenderLocs {
 }
 
 export class MorphogenScene implements SceneRuntime {
-  meta = { id: 'morph', name: 'Morphogen', family: 'geometry' as const }
+  meta = { id: 'morph', name: 'Morphogen', family: 'geometry' as const, framing: 'field' as const }
 
   params: ParamSchema[] = [
     { name: 'journeySpeed', label: 'Journey speed', min: 0, max: 0.2, default: 0.04 },

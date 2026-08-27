@@ -107,7 +107,7 @@ interface RenderLocs {
 }
 
 export class JuliaScene implements SceneRuntime {
-  meta = { id: 'julia', name: 'Julia Warp', family: 'geometry' as const }
+  meta = { id: 'julia', name: 'Julia Warp', family: 'geometry' as const, framing: 'bounded' as const }
 
   params: ParamSchema[] = [
     { name: 'orbitSpeed', label: 'Orbit speed', min: 0, max: 0.5, default: 0.08 },

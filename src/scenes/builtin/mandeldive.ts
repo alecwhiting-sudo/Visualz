@@ -122,7 +122,7 @@ interface RenderLocs {
 }
 
 export class MandelDiveScene implements SceneRuntime {
-  meta = { id: 'mandeldive', name: 'Mandel Dive', family: 'geometry' as const }
+  meta = { id: 'mandeldive', name: 'Mandel Dive', family: 'geometry' as const, framing: 'field' as const }
 
   params: ParamSchema[] = [
     { name: 'diveSpeed', label: 'Dive speed', min: 0.02, max: 0.4, default: 0.09 },

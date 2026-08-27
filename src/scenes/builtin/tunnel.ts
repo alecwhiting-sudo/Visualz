@@ -85,7 +85,7 @@ interface RenderLocs {
 }
 
 export class TunnelScene implements SceneRuntime {
-  meta = { id: 'tunnel', name: 'Audio Tunnel', family: 'geometry' as const }
+  meta = { id: 'tunnel', name: 'Audio Tunnel', family: 'geometry' as const, framing: 'bounded' as const }
 
   params: ParamSchema[] = [
     { name: 'speed', label: 'Speed', min: 0.2, max: 3, default: 1.0 },
