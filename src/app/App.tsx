@@ -1475,7 +1475,12 @@ export function App() {
   // export" case so the panel can explain THAT one with its own hint — the
   // other lock reasons already have their own status lines elsewhere in the
   // panel (perf-mode line, replay progress, export progress).
-  const takeLocksFormat = lastSession !== null && takeReady
+  // `lastSession !== null` alone (NOT && takeReady): Export clears takeReady
+  // before the export runs, but the take card's Replay/Export buttons stay
+  // live until Discard — the lock must hold for the take's whole life
+  // (review finding: locking on takeReady let the format change between an
+  // export and a replay of the same 16:9 take).
+  const takeLocksFormat = lastSession !== null
   const formatLocked = recording || armed || takeLocksFormat || replay !== null || exporting !== null
 
   /** Rebuilds the live engine at the new backing-store size — the same
@@ -1485,6 +1490,9 @@ export function App() {
    * is restored so the knob positions don't reset. */
   const onFormatChange = (format: CanvasFormat) => {
     if (formatLocked || format === canvasFormat) return
+    // Same engine-reality check as onSceneChange (the chopped-take lesson):
+    // React state can lag the engine, so never tear down mid-recording.
+    if (engineRef.current?.isRecording) return
     const canvas = canvasRef.current
     if (!canvas) return
     setCanvasFormat(format)
