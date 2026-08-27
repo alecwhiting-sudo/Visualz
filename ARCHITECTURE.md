@@ -105,6 +105,12 @@ interface SceneRuntime {
 - Hot-recompile: editing shader source recompiles; on GLSL error the last good program keeps
   rendering and the error surfaces inline.
 - Composition must be **aspect-aware** (render target may be 16:9, 9:16, or 1:1).
+  The canvas format is a construction-time constant — switching it rebuilds the
+  engine + scene, so aspect-derived constants may be cached at `init()` and used
+  in `update()` (required for edge rules). Framing rules F1–F4 — extend the sim
+  domain along the long axis, derive edge behaviour from those extents, key
+  resolution scaling off a format-neutral measure, declare `meta.framing` —
+  live in [docs/SCENE_CONTRACT.md](./docs/SCENE_CONTRACT.md#framing--how-a-scene-fills-a-non-169-frame).
 
 ### 3.4 `mapping/` — one table, four frontends
 `Mapping { source, target, transform }` where source ∈ {key, touch pad, MIDI CC/note,

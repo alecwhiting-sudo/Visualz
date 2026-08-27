@@ -22,6 +22,15 @@ export interface SceneMeta {
   id: string
   name: string
   family: 'geometry' | 'particles' | 'simulation'
+  /**
+   * Framing class (docs/SCENE_CONTRACT.md F4): 'field' = content is a
+   * simulation domain that full-bleeds at every aspect (F1/F2 apply, and the
+   * portrait band-coverage e2e check is required); 'bounded' = content is a
+   * composed object (curve, orrery) whose portrait composition is a per-scene
+   * design decision. Optional while existing scenes are audited — absent means
+   * "not yet classified", not 'bounded'.
+   */
+  framing?: 'field' | 'bounded'
 }
 
 /**
