@@ -6,7 +6,7 @@ description: >
   numerical/maths correctness questions. Use when the approach itself is unknown or
   a bug resists a first-pass fix — the deliverable is an analysis or a worked
   algorithm, which the architect then routes to implementation.
-model: claude-opus-4-8
+model: claude-fable-5
 effort: high
 color: purple
 ---

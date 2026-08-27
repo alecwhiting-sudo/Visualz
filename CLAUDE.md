@@ -38,17 +38,21 @@ A change without a runnable check is not done. Golden tests run twice locally if
 determinism is in doubt — the second run must match byte-for-byte.
 
 ## Delegation hierarchy
-The main session (Opus 4.8) is the architect: it owns interface design, cross-module
-changes, ARCHITECTURE.md/REQUIREMENTS.md edits, and final review before push.
-Delegate the rest:
+Model policy: the strongest available model (currently Fable) does the thinking —
+architecture, planning, hard reasoning, review; a cheaper model (currently Sonnet)
+does well-specified execution. Model IDs live only in `.claude/agents/*.md`
+frontmatter — update them there, not here.
 
-- **viz-builder** (Sonnet) — well-scoped implementation against an existing interface:
-  a new scene, a module with a written spec, tests, mechanical refactors. Give it the
-  exact files, the interface to implement, and the check to run.
-- **viz-reasoner** (Opus 4.8) — hard problems: algorithm design (beat detection, DSL
-  parsing, GPGPU techniques), gnarly debugging, numerical/maths correctness. Use when
-  the answer matters more than the diff.
-- **viz-reviewer** (Opus 4.8, read-only) — adversarial diff review before every
+The main session is the architect: it owns interface design, cross-module changes,
+ARCHITECTURE.md/REQUIREMENTS.md edits, and final review before push. Delegate the rest:
+
+- **viz-builder** (execution tier) — well-scoped implementation against an existing
+  interface: a new scene, a module with a written spec, tests, mechanical refactors.
+  Give it the exact files, the interface to implement, and the check to run.
+- **viz-reasoner** (thinking tier) — hard problems: algorithm design (beat detection,
+  DSL parsing, GPGPU techniques), gnarly debugging, numerical/maths correctness. Use
+  when the answer matters more than the diff.
+- **viz-reviewer** (thinking tier, read-only) — adversarial diff review before every
   non-trivial commit. It cannot edit; findings come back to the architect to route.
 - Built-in **Explore** agent for codebase searches; don't burn main context on file dumps.
 

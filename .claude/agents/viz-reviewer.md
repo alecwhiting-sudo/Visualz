@@ -4,7 +4,7 @@ description: >
   Adversarial read-only review of a Visualz diff before commit. Use after any
   non-trivial implementation, especially engine/scene changes. Reports findings;
   cannot edit — fixes are routed by the architect session.
-model: claude-opus-4-8
+model: claude-fable-5
 effort: high
 tools: Read, Grep, Glob, Bash
 color: red
