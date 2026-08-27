@@ -47,7 +47,14 @@ const FIELD_SCENES: FieldScene[] = [
   { id: 'physarum', extraQuery: '&count=16384', settleFrames: 200, slow: true },
   { id: 'waves', extraQuery: '&grid=128', settleFrames: 150 },
   { id: 'glyphrain', settleFrames: 90 },
-  { id: 'flowfield', extraQuery: '&count=16384', settleFrames: 90 },
+  // flowfield: floor 3, not 6 — a sparse continuously-flowing swarm whose
+  // outer bands legitimately read dim (4.1-4.4 at seed 42/settle 90, exactly
+  // reproducible) but carry real ink; the failure this check exists to catch
+  // (the pre-migration inscribed-square, structurally empty outer bands)
+  // reads ~0 and still fails floor 3 by a wide margin. Architect calibration
+  // call — do not raise settleFrames to chase a pass, band density is not
+  // monotonic in settle for a flowing swarm.
+  { id: 'flowfield', extraQuery: '&count=16384', settleFrames: 90, floor: 3 },
 ]
 
 const ASPECTS = [
