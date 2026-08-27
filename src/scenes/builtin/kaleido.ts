@@ -74,9 +74,14 @@ void main(){
   outColor = vec4(prev + inject, 1.0);
 }`
 
-// Blit pass: min-axis-fit the square sim onto the (possibly non-square)
-// output surface — same aspect convention as julia.ts's complex-plane fit.
-// CLAMP_TO_EDGE on the sim texture handles the overflow on the longer axis.
+// Blit pass: Aspect-FILL (cover, docs/SCENE_CONTRACT.md F1, physarum.ts's
+// RENDER_FS is the reference) the square sim onto the (possibly non-square)
+// output surface — the radial feedback field crops naturally on the short
+// screen axis instead of the old min-axis-fit + CLAMP_TO_EDGE smear on the
+// long one (docs/FRAMING_AUDIT.md section B.3; smear was never a designed
+// look). CLAMP_TO_EDGE stays on the sim texture as a defensive clamp, but the
+// cover mapping keeps suv within [0,1] at every aspect so it no longer does
+// any visible work.
 const BLIT_FS = `#version 300 es
 precision highp float;
 uniform sampler2D uSrc;
@@ -85,8 +90,8 @@ uniform float uAspect;
 out vec4 outColor;
 void main(){
   vec2 uv = (gl_FragCoord.xy / uResolution) * 2.0 - 1.0;
-  uv.x *= max(uAspect, 1.0);
-  uv.y /= min(uAspect, 1.0);
+  uv.x /= max(1.0 / uAspect, 1.0);
+  uv.y /= max(uAspect, 1.0);
   vec2 suv = uv * 0.5 + 0.5;
   vec3 col = texture(uSrc, suv).rgb;
   col = pow(clamp(col, 0.0, 1.0), vec3(0.85)); // slight brightness curve
@@ -117,7 +122,7 @@ interface BlitLocs {
 }
 
 export class KaleidoScene implements SceneRuntime {
-  meta = { id: 'kaleido', name: 'Kaleidoscope', family: 'geometry' as const }
+  meta = { id: 'kaleido', name: 'Kaleidoscope', family: 'geometry' as const, framing: 'field' as const }
 
   params: ParamSchema[] = [
     { name: 'segments', label: 'Segments', min: 3, max: 16, default: 6, step: 1 },

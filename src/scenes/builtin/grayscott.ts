@@ -85,8 +85,16 @@ float Vat(vec2 st){                   // manual bilinear from NEAREST float text
 }
 void main(){
   vec2 ndc = (gl_FragCoord.xy/uRes)*2.0 - 1.0;
-  ndc.x *= max(uAspect,1.0);          // invert the min-axis fit -> square sim space
-  ndc.y /= min(uAspect,1.0);
+  // Aspect-FILL (cover, docs/SCENE_CONTRACT.md F1, physarum.ts's RENDER_FS is
+  // the reference): the square sim fills the whole canvas, cropping the short
+  // screen axis instead of letterboxing dead space on the long one — st stays
+  // within [0,1] at every aspect for the un-warped mapping, so the bg-outside
+  // branch below is only reachable via uWarp's small per-pixel displacement
+  // pushing a near-edge st just past 0 or 1 (verified: WARP=0.004 vs edge
+  // pixels landing a fraction of a texel inside the boundary — see
+  // docs/FRAMING_AUDIT.md section B.2).
+  ndc.x /= max(1.0/uAspect, 1.0);
+  ndc.y /= max(uAspect, 1.0);
   vec2 st = ndc*0.5 + 0.5;
   st += uWarp * vec2(sin((st.y+uWarpPhase)*6.2831), cos((st.x+uWarpPhase)*6.2831));
   if (any(lessThan(st, vec2(0.0))) || any(greaterThan(st, vec2(1.0)))) { outColor = vec4(0.02,0.02,0.03,1.0); return; }
@@ -171,7 +179,7 @@ interface RenderLocs {
 }
 
 export class GrayScottScene implements SceneRuntime {
-  meta = { id: 'grayscott', name: 'Reaction-Diffusion', family: 'simulation' as const }
+  meta = { id: 'grayscott', name: 'Reaction-Diffusion', family: 'simulation' as const, framing: 'field' as const }
 
   params: ParamSchema[] = [
     { name: 'feed', label: 'Feed rate (F)', min: 0.02, max: 0.06, default: 0.0545 },

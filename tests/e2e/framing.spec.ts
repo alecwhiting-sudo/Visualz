@@ -14,10 +14,11 @@ import { expect, test } from '@playwright/test'
  * Scene list mirrors docs/FRAMING_AUDIT.md section A ("Conformant today —
  * declaration-only"), the `framing: 'field'` subset: cymatics, morph
  * (Morphogen — registry id is 'morph', not 'morphogen'), resonance,
- * mandeldive, orbitdive, physarum, waves, glyphrain — plus flowfield, added
- * by its section B.1 F1/F2/F3 migration (docs/FRAMING_AUDIT.md). The
- * `'bounded'` scenes from that same section (guilloche/whipline/whipstorm)
- * are NOT covered here — F4 only *requires* band coverage for `'field'`.
+ * mandeldive, orbitdive, physarum, waves, glyphrain — plus flowfield,
+ * grayscott, and kaleido, added by their section B.1/B.2/B.3 F1/F2/F3
+ * migrations (docs/FRAMING_AUDIT.md). The `'bounded'` scenes from that same
+ * section (guilloche/whipline/whipstorm) are NOT covered here — F4 only
+ * *requires* band coverage for `'field'`.
  *
  * Settle-frame counts and any test-mode query flags (`&count=`/`&grid=`) are
  * copied from each scene's own golden spec — same seed=42, same frame — so
@@ -37,7 +38,7 @@ interface FieldScene {
 }
 
 // Keep in sync with docs/FRAMING_AUDIT.md section A's `framing: 'field'` list
-// (plus flowfield, migrated per section B.1).
+// (plus flowfield/grayscott/kaleido, migrated per section B.1/B.2/B.3).
 const FIELD_SCENES: FieldScene[] = [
   { id: 'cymatics', settleFrames: 150 },
   { id: 'morph', settleFrames: 90 },
@@ -55,6 +56,11 @@ const FIELD_SCENES: FieldScene[] = [
   // call — do not raise settleFrames to chase a pass, band density is not
   // monotonic in settle for a flowing swarm.
   { id: 'flowfield', extraQuery: '&count=16384', settleFrames: 90, floor: 3 },
+  // grayscott/kaleido: COVER migration (docs/FRAMING_AUDIT.md section B.2/B.3).
+  // Settle/query copied from each scene's own golden spec (tests/e2e/grayscott.spec.ts,
+  // tests/e2e/newscenes.spec.ts).
+  { id: 'grayscott', extraQuery: '&grid=128', settleFrames: 96 },
+  { id: 'kaleido', settleFrames: 90 },
 ]
 
 const ASPECTS = [
