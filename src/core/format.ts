@@ -29,6 +29,21 @@ export function liveSize(format: CanvasFormat): { width: number; height: number 
   }
 }
 
+/**
+ * Inverse of `liveSize`: exact match against the three `liveSize` entries,
+ * falling back to `'16:9'` for anything else. Lets the engine stamp a
+ * session doc's `format` from its own gpu backing-store dims (which it
+ * already has) rather than App plumbing a `CanvasFormat` value down
+ * separately — see `session/types.ts`'s `SessionDoc.format`.
+ */
+export function formatForSize(width: number, height: number): CanvasFormat {
+  for (const format of CANVAS_FORMATS) {
+    const size = liveSize(format)
+    if (size.width === width && size.height === height) return format
+  }
+  return '16:9'
+}
+
 export type ExportTier = 'standard' | 'high' | 'max'
 
 /** Export dimensions per format and quality tier. 'high' and 'max' share a resolution — 'max' differs only in bitrate (owned by the caller, see module doc). */

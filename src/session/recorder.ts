@@ -1,3 +1,4 @@
+import type { CanvasFormat } from '../core/format'
 import type { SourceEvent } from '../mapping/types'
 import type { SessionAudio, SessionDoc, SessionEvent } from './types'
 
@@ -10,6 +11,12 @@ export interface SessionSnapshot {
   bindings: Record<string, string>
   /** Defaults to `{ kind: 'demo' }` when omitted (existing callers/tests). */
   audio?: SessionAudio
+  /** Canvas format the take is being recorded at (`session/types.ts`'s
+   * `SessionDoc.format` doc comment). Optional here only so existing
+   * callers/tests that predate the format field keep compiling — `finish()`
+   * defaults it to `'16:9'` so the PRODUCED doc always stamps it explicitly.
+   * The live engine (the only real caller) always passes it. */
+  format?: CanvasFormat
   /** Current shader-stage sources (code layer), keyed by stage key. Omitted
    * entirely — not even `{}` — from `SessionDoc.scene` when this is undefined,
    * so existing snapshots/tests that don't pass it are unaffected. */
@@ -110,6 +117,7 @@ export class SessionRecorder {
       audio: this.snapshot.audio ?? { kind: 'demo' },
       durationFrames,
       events: this.events.slice(),
+      format: this.snapshot.format ?? '16:9',
     }
   }
 }

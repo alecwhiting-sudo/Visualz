@@ -1,5 +1,6 @@
 import { Transport, type TransportMode } from '../core/transport'
 import { SignalBus } from '../core/signals'
+import { formatForSize } from '../core/format'
 import { Gpu } from '../gpu/context'
 import { DefaultSurface, FullscreenPass } from '../gpu/targets'
 import { AudioEngine, publishDemoSignals } from '../audio/engine'
@@ -763,6 +764,10 @@ export class Engine {
         audio,
         shaders,
         image,
+        // Stamped from the engine's own gpu backing-store dims (never from
+        // App state) so the doc always records the format the take was
+        // ACTUALLY rendered at (session/types.ts's SessionDoc.format).
+        format: formatForSize(this.gpu.width, this.gpu.height),
       },
       this.transport.frame,
     )

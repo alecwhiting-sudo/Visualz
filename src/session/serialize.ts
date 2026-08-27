@@ -1,3 +1,4 @@
+import { CANVAS_FORMATS } from '../core/format'
 import type { SessionDoc } from './types'
 
 /**
@@ -136,6 +137,9 @@ export function parseSession(json: string): SessionDoc {
   }
   if (!isFiniteNumber(raw.durationFrames) || raw.durationFrames < 0) {
     throw new Error('Session durationFrames must be a non-negative finite number')
+  }
+  if (raw.format !== undefined && !(CANVAS_FORMATS as readonly unknown[]).includes(raw.format)) {
+    throw new Error(`Session format must be one of ${CANVAS_FORMATS.join(', ')} when present (got ${JSON.stringify(raw.format)})`)
   }
   if (!Array.isArray(raw.events)) {
     throw new Error('Session events must be an array')

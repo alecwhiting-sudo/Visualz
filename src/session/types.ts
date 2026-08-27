@@ -1,3 +1,4 @@
+import type { CanvasFormat } from '../core/format'
 import type { SourceEvent } from '../mapping/types'
 
 /**
@@ -61,4 +62,12 @@ export interface SessionDoc {
   audio: SessionAudio
   durationFrames: number
   events: SessionEvent[] // ascending by frame (stable order within a frame)
+  /** Canvas format (`src/core/format.ts`) the take was recorded at — a
+   * construction-time constant (docs/SCENE_CONTRACT.md's Framing section),
+   * so replay/export must size their engine from THIS field, never from
+   * whatever format happens to be selected live (that's the preview=export
+   * gap REQUIREMENTS.md §5.3 requires closed). Absent means `'16:9'` —
+   * docs recorded before this field existed; version stays 1. The recorder
+   * (`session/recorder.ts`) always stamps it explicitly on new takes. */
+  format?: CanvasFormat
 }

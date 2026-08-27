@@ -15,7 +15,7 @@ import { placeholderFor, suggestionsFor } from './exprSuggest'
 import { applySceneEntry, captureSceneEntry } from './sceneMemory'
 import { classifyFile, parseRig, serializeRig, type SceneRigEntry, type SessionRig } from '../session/rig'
 import type { ParamSchema } from '../scenes/types'
-import { CANVAS_FORMATS, liveSize, type CanvasFormat } from '../core/format'
+import { CANVAS_FORMATS, exportSize, liveSize, type CanvasFormat } from '../core/format'
 import { framesToRenderForAudioSync } from './replayPacing'
 import { snapToStep } from '../scenes/paramStep'
 import { SHADER_DOCS } from '../scenes/shaderDocs'
@@ -207,17 +207,19 @@ function resolveExportCodec(choice: ExportFormatChoice): ExportCodec | undefined
  * on-black look reads as grainy/soft next to the live canvas — high-contrast
  * edges are exactly what a low H.264/VP9 bitrate mangles. 'high' (1080p, generous
  * bitrate) is the default; 'max' is near-lossless for archival; 'standard' keeps
- * the smaller/faster 720p for quick clips. All 16:9 (the current export
- * orientation). */
+ * the smaller/faster 720p for quick clips. Dimensions come from `exportSize`
+ * (src/core/format.ts), keyed by the doc's own recorded format — this table
+ * only owns bitrate/label, which stay the same across formats (see below). */
 type ExportQualityChoice = 'standard' | 'high' | 'max'
 
-const EXPORT_QUALITIES: Record<
-  ExportQualityChoice,
-  { label: string; width: number; height: number; bitrate: number }
-> = {
-  standard: { label: 'Standard — 720p', width: 1280, height: 720, bitrate: 8_000_000 },
-  high: { label: 'High — 1080p', width: 1920, height: 1080, bitrate: 20_000_000 },
-  max: { label: 'Max — 1080p, pristine', width: 1920, height: 1080, bitrate: 44_000_000 },
+// Bitrate is deliberately format-independent: all three formats share the
+// same ~518,400px live pixel budget (src/core/format.ts) and their export
+// tiers (exportSize) scale proportionally, so a tier's bitrate stays in the
+// same pixel-rate ballpark at 16:9, 9:16, or 1:1 — no per-format table needed.
+const EXPORT_QUALITIES: Record<ExportQualityChoice, { label: string; bitrate: number }> = {
+  standard: { label: 'Standard — 720p', bitrate: 8_000_000 },
+  high: { label: 'High — 1080p', bitrate: 20_000_000 },
+  max: { label: 'Max — 1080p, pristine', bitrate: 44_000_000 },
 }
 
 /** mm:ss, floored to whole seconds — used by the transport row's scrub readout. */
@@ -705,6 +707,12 @@ export function App() {
   // synced anyway). `null` when nothing needs saying (already synced to the
   // right track, or a demo-kind doc with nothing to sync at all).
   const [replayAudioHint, setReplayAudioHint] = useState<string | null>(null)
+  // Stage 4 (preview=export gap, REQUIREMENTS.md §5.3): a take is replayed at
+  // the FORMAT IT WAS RECORDED AT (`doc.format`), never at whatever the live
+  // canvas-format switch currently shows — same "surface, don't silently
+  // diverge" convention as `replayAudioHint` above, for when those two
+  // formats differ.
+  const [replayFormatHint, setReplayFormatHint] = useState<string | null>(null)
   // Task 1 (stop replay): set to the in-progress replay's own `restoreLive`
   // closure the moment it starts, cleared (to null) the moment it fires —
   // the SESSION tab's "Stop replay" button and the Esc-while-replaying
@@ -1724,6 +1732,14 @@ export function App() {
           ? 'load the track (INPUTS tab) to hear the replay in sync'
           : null,
     )
+    // Stage 4: the take's own recorded format (docs/SCENE_CONTRACT.md's
+    // Framing section — construction-time constant), not the live canvasFormat.
+    const docFormat = doc.format ?? '16:9'
+    setReplayFormatHint(
+      docFormat !== canvasFormat
+        ? `This take was recorded in ${FORMAT_LABELS[docFormat]} — replaying at that format.`
+        : null,
+    )
 
     // Any failure from here on (an uncompilable binding in a hand-edited session
     // throws DslError from loadSession or mid-replay from a binding event) must
@@ -1748,6 +1764,7 @@ export function App() {
       engineRef.current = null
       setReplay(null)
       setReplayAudioHint(null)
+      setReplayFormatHint(null)
       const liveCanvas = canvasRef.current
       // Read directly rather than from the `sceneId` state closure: restoreLive
       // can fire synchronously (bad scene id) before a queued setSceneId below
@@ -1776,10 +1793,14 @@ export function App() {
     try {
       const entry = SCENES[doc.scene.id]
       if (!entry) throw new Error(`unknown scene ${doc.scene.id}`)
-      // Sized off the CURRENT live canvasFormat, not the doc (session-doc-
-      // driven format is a later stage) — keeps the replay consistent with
-      // the live canvas the user is looking at.
-      const { width, height } = liveSize(canvasFormat)
+      // Stage 4 (preview=export gap, REQUIREMENTS.md §5.3): sized off the
+      // DOC's own recorded format, never the live canvasFormat — a replay
+      // must reproduce the take exactly as it was performed, and canvas
+      // format is a construction-time constant of the take
+      // (docs/SCENE_CONTRACT.md's Framing section). `replayFormatHint` above
+      // surfaces it when this differs from what's currently live; the live
+      // canvas element letterboxes the mismatch via object-fit: contain.
+      const { width, height } = liveSize(docFormat)
       replayEngine = new Engine(canvas, entry.create(), {
         mode: 'render',
         seed: doc.seed,
@@ -1884,9 +1905,13 @@ export function App() {
       // (VP9/WebM preferred where supported, H.264/MP4 fallback for iOS/macOS
       // Safari); 'mp4'/'webm' pin the codec explicitly (export/encode.ts).
       const q = EXPORT_QUALITIES[exportQuality]
+      // Stage 4 (preview=export gap, REQUIREMENTS.md §5.3): dimensions come
+      // from the DOC's own recorded format, never the live canvasFormat —
+      // an export must reproduce the take exactly as it was performed.
+      const { width, height } = exportSize(doc.format ?? '16:9', exportQuality)
       const result = await exportSession(
         doc,
-        { width: q.width, height: q.height, fps: doc.fps, bitrate: q.bitrate, codec: resolveExportCodec(exportFormat) },
+        { width, height, fps: doc.fps, bitrate: q.bitrate, codec: resolveExportCodec(exportFormat) },
         (p: ExportProgress) => setExporting({ frame: p.frame, total: p.total }),
         audio,
       )
@@ -2264,6 +2289,7 @@ export function App() {
                 </div>
               )}
               {replay && replayAudioHint && <p className="session-status">{replayAudioHint}</p>}
+              {replay && replayFormatHint && <p className="session-status">{replayFormatHint}</p>}
               {exporting && (
                 <p className="session-status">
                   exporting… {Math.round((exporting.frame / Math.max(1, exporting.total)) * 100)}%

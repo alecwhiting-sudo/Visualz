@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CANVAS_FORMATS, exportSize, liveSize, type ExportTier } from '../../src/core/format'
+import { CANVAS_FORMATS, exportSize, formatForSize, liveSize, type ExportTier } from '../../src/core/format'
 
 const TIERS: ExportTier[] = ['standard', 'high', 'max']
 
@@ -58,5 +58,19 @@ describe('exportSize', () => {
     expect(exportSize('16:9', 'standard')).toEqual({ width: 1280, height: 720 })
     expect(exportSize('16:9', 'high')).toEqual({ width: 1920, height: 1080 })
     expect(exportSize('16:9', 'max')).toEqual({ width: 1920, height: 1080 })
+  })
+})
+
+describe('formatForSize', () => {
+  it('round-trips every liveSize entry back to its own format', () => {
+    for (const f of CANVAS_FORMATS) {
+      const { width, height } = liveSize(f)
+      expect(formatForSize(width, height)).toBe(f)
+    }
+  })
+
+  it('falls back to 16:9 for a size that matches none of the three liveSize entries', () => {
+    expect(formatForSize(1920, 1080)).toBe('16:9')
+    expect(formatForSize(100, 100)).toBe('16:9')
   })
 })

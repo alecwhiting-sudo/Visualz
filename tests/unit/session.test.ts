@@ -430,6 +430,27 @@ describe('parseSession validation', () => {
   })
 })
 
+// --- format validation (Stage 4: preview=export gap, REQUIREMENTS.md §5.3) ----
+
+describe('parseSession format validation', () => {
+  it('19) accepts a doc with no format at all — absent means 16:9 (docs recorded before the field existed)', () => {
+    const doc = docWithEvents([]) // no `format` key
+    expect(() => parseSession(JSON.stringify(doc))).not.toThrow()
+    expect(parseSession(JSON.stringify(doc)).format).toBeUndefined()
+  })
+
+  it('20) round-trips a doc with format: "9:16"', () => {
+    const doc = docWithEvents([], { format: '9:16' })
+    expect(parseSession(serializeSession(doc))).toEqual(doc)
+    expect(parseSession(serializeSession(doc)).format).toBe('9:16')
+  })
+
+  it('21) rejects a format that is not one of the three CANVAS_FORMATS', () => {
+    const doc = { ...docWithEvents([]), format: 'bogus' }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/format/i)
+  })
+})
+
 // --- audio.startSeconds validation (take-baselining, audio-start-offset half) --
 
 describe('parseSession audio.startSeconds validation', () => {
