@@ -42,12 +42,16 @@ const FLOATS_PER_VERTEX = 6 // pos.xy + color.rgba
 const POINT_VS = `#version 300 es
 layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec4 aColor;
-uniform float uPointSize, uResHeight;
+uniform float uPointSize, uResShort;
 out vec4 vColor;
 void main() {
   vColor = aColor;
   gl_Position = vec4(aPos, 0.0, 1.0);
-  gl_PointSize = uPointSize * max(uResHeight / 720.0, 1.0);
+  // F3 (docs/SCENE_CONTRACT.md, docs/FRAMING_AUDIT.md section B.4): keyed off
+  // the short axis (min(width,height)), not raw height — the three live
+  // formats are equal-pixel-count, so a height key renders chunkier in
+  // portrait (flowfield.ts's uResShort is the reference pattern).
+  gl_PointSize = uPointSize * max(uResShort / 720.0, 1.0);
 }`
 
 const POINT_FS = `#version 300 es
@@ -111,7 +115,7 @@ function hsv2rgb(h: number, s: number, v: number): [number, number, number] {
 
 interface PointLocs {
   uPointSize: WebGLUniformLocation | null
-  uResHeight: WebGLUniformLocation | null
+  uResShort: WebGLUniformLocation | null
 }
 
 export class StrangeAttractorScene implements SceneRuntime {
@@ -297,7 +301,7 @@ export class StrangeAttractorScene implements SceneRuntime {
     gl.blendFunc(gl.ONE, gl.ONE)
     gl.useProgram(this.pointProgram)
     gl.uniform1f(this.pointLoc.uPointSize, POINT_SIZE)
-    gl.uniform1f(this.pointLoc.uResHeight, surface.height)
+    gl.uniform1f(this.pointLoc.uResShort, Math.min(surface.width, surface.height))
     gl.bindVertexArray(this.pointVao)
     gl.bindBuffer(gl.ARRAY_BUFFER, this.pointVbo)
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.verts)
@@ -354,7 +358,7 @@ export class StrangeAttractorScene implements SceneRuntime {
     const gl = this.gpu.gl
     return {
       uPointSize: gl.getUniformLocation(program, 'uPointSize'),
-      uResHeight: gl.getUniformLocation(program, 'uResHeight'),
+      uResShort: gl.getUniformLocation(program, 'uResShort'),
     }
   }
 }

@@ -93,7 +93,7 @@ precision highp float;
 uniform sampler2D uState;
 uniform sampler2D uColor;
 uniform int uTexSize;
-uniform float uAspect, uPointSize, uResHeight;
+uniform float uAspect, uPointSize, uResShort;
 out vec3 vColor;
 void main(){
   int i = gl_VertexID;
@@ -104,7 +104,11 @@ void main(){
   p.x /= max(uAspect,1.0);
   p.y *= min(uAspect,1.0);
   gl_Position = vec4(p, 0.0, 1.0);
-  gl_PointSize = uPointSize * max(uResHeight/360.0, 1.0);
+  // F3 (docs/SCENE_CONTRACT.md, docs/FRAMING_AUDIT.md section B.4): keyed off
+  // the short axis (min(width,height)), not raw height — the three live
+  // formats are equal-pixel-count, so a height key renders chunkier in
+  // portrait (flowfield.ts's uResShort is the reference pattern).
+  gl_PointSize = uPointSize * max(uResShort/360.0, 1.0);
 }`
 
 const RENDER_FS = `#version 300 es
@@ -326,7 +330,7 @@ interface RenderLocs {
   uTexSize: WebGLUniformLocation | null
   uAspect: WebGLUniformLocation | null
   uPointSize: WebGLUniformLocation | null
-  uResHeight: WebGLUniformLocation | null
+  uResShort: WebGLUniformLocation | null
   uFalloff: WebGLUniformLocation | null
 }
 
@@ -522,7 +526,7 @@ export class PhotoSwarmScene implements SceneRuntime {
     gl.uniform1i(this.renderLoc.uTexSize, this.side)
     gl.uniform1f(this.renderLoc.uAspect, surface.width / surface.height)
     gl.uniform1f(this.renderLoc.uPointSize, this.getParam('pointSize'))
-    gl.uniform1f(this.renderLoc.uResHeight, surface.height)
+    gl.uniform1f(this.renderLoc.uResShort, Math.min(surface.width, surface.height))
     gl.uniform1f(this.renderLoc.uFalloff, FALLOFF)
     gl.bindVertexArray(this.pointsVao)
     gl.drawArrays(gl.POINTS, 0, this.side * this.side)
@@ -570,7 +574,7 @@ export class PhotoSwarmScene implements SceneRuntime {
       uTexSize: gl.getUniformLocation(program, 'uTexSize'),
       uAspect: gl.getUniformLocation(program, 'uAspect'),
       uPointSize: gl.getUniformLocation(program, 'uPointSize'),
-      uResHeight: gl.getUniformLocation(program, 'uResHeight'),
+      uResShort: gl.getUniformLocation(program, 'uResShort'),
       uFalloff: gl.getUniformLocation(program, 'uFalloff'),
     }
   }
