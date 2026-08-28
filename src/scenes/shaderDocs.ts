@@ -639,7 +639,7 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
     },
     'blit-fs': {
       summary:
-        "This is just a display pass: it fits the kaleidoscope's square simulation onto the screen at whatever aspect ratio the canvas actually is, then applies a small brightness curve before showing it. There's no simulation happening here at all — the actual kaleidoscope maths lives entirely in the feedback stage.",
+        "This is just a display pass: it covers the screen with the kaleidoscope's square simulation (cropping the long axis on a non-square canvas, never letterboxing or smearing), then applies a small brightness curve before showing it. There's no simulation happening here at all — the actual kaleidoscope maths lives entirely in the feedback stage.",
       tryThis: [
         {
           target: 'col = pow(clamp(col, 0.0, 1.0), vec3(0.85));',
@@ -944,7 +944,7 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
         {
           target: 'outColor = vec4(0.02,0.02,0.03,1.0); return;',
           effect:
-            'the near-black color shown outside the simulation\'s square area on a non-square canvas; brighten it to something like vec4(0.1,0.0,0.15,1.0) for a visible violet border instead of near-black.',
+            'the fallback color for samples the warp pushes past the simulation\'s edge — since the cover mapping fills the whole frame, only pixels within a warp\'s reach of the border ever hit it; brighten it to vec4(0.1,0.0,0.15,1.0) and raise uWarp to see a thin violet fringe at the edges.',
         },
         {
           target: 'st += uWarp * vec2(sin((st.y+uWarpPhase)*6.2831), cos((st.x+uWarpPhase)*6.2831));',

@@ -343,6 +343,10 @@ export class FlowFieldScene implements SceneRuntime {
 
   resize(width: number, height: number): void {
     this.gpu.resize(width, height)
+    // SCENE_CONTRACT.md Framing: recompute the F1 domain extents on resize —
+    // an aspect-changing resize must move the respawn walls with the frame.
+    this.hx = Math.max(width / height, 1)
+    this.hy = Math.max(height / width, 1)
     this.gpu.gl.clearColor(0, 0, 0, 1)
     this.gpu.gl.clear(this.gpu.gl.COLOR_BUFFER_BIT)
   }

@@ -249,10 +249,10 @@ export class OrreryScene implements SceneRuntime {
   // Cached aspect: types.ts requires aspect come from the render surface, not
   // gpu.canvas (a child of a composite renders into a differently-shaped
   // target). Seeded at init() from gpu.width/height (init's own pre-first-
-  // render default) and refreshed at the top of render() from
-  // surface.width/height, which SCENE_CONTRACT.md's Framing section
-  // guarantees is the same aspect for the instance's whole life — so caching
-  // it here for computeJoints (called from update()) is contract-legal.
+  // render default) and recomputed in resize(); SCENE_CONTRACT.md's Framing
+  // section guarantees the surface aspect equals it for the instance's whole
+  // life, so caching it for computeJoints (called from update()) is
+  // contract-legal — and R1 forbids writing it from render().
   private aspect = 1
 
   // CPU-only state (ARCHITECTURE.md §1). `slots` is a fixed-size MAX_ARMS
@@ -464,11 +464,6 @@ export class OrreryScene implements SceneRuntime {
     const gl = this.gpu.gl
     surface.bind()
 
-    // Refresh from the surface being rendered into (types.ts: never gpu.canvas)
-    // — a no-op numerically today since composite child targets match the
-    // canvas, but this is the truth computeJoints (called from update()) reads.
-    this.aspect = surface.width / surface.height
-
     const trail = this.getParam('trail')
     const inkFlow = this.getParam('inkFlow')
     const machineGlow = this.getParam('machineGlow')
@@ -596,6 +591,8 @@ export class OrreryScene implements SceneRuntime {
 
   resize(width: number, height: number): void {
     this.gpu.resize(width, height)
+    // SCENE_CONTRACT.md Framing: a resize() must recompute cached aspect constants.
+    this.aspect = width / height
     this.gpu.gl.clearColor(0, 0, 0, 1)
     this.gpu.gl.clear(this.gpu.gl.COLOR_BUFFER_BIT)
   }
