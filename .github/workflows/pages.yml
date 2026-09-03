@@ -1,14 +1,19 @@
-name: Deploy to GitHub Pages
+name: Deploy to GitHub Pages (dev audition)
 
-# Deploys from main ONLY. The feature branch used to be a trigger too, but the
-# github-pages environment restricts deployment to the default branch, so the
-# feature-branch run always failed — and worse, it shared the concurrency group
-# and could cancel the main run when both branches were pushed together,
-# leaving nothing deployed.
+# The GitHub Pages site is the DEV AUDITION deployment: it serves whatever was
+# pushed last to main or to a claude/* feature branch, so new work can be
+# demoed at the Pages URL before it merges. Production is the Vercel site,
+# which deploys from main independently — nothing here touches it.
+#
+# NOTE: the github-pages environment must allow these branches to deploy.
+# Repo Settings → Environments → github-pages → Deployment branches: either
+# "No restriction" or add the pattern claude/*. With the default main-only
+# policy, feature-branch runs fail at the deploy step.
 on:
   push:
     branches:
       - main
+      - 'claude/**'
   workflow_dispatch:
 
 permissions:
@@ -16,6 +21,8 @@ permissions:
   pages: write
   id-token: write
 
+# One Pages site per repo: last push wins. cancel-in-progress keeps a stale
+# run from finishing after a newer one started.
 concurrency:
   group: pages
   cancel-in-progress: true
