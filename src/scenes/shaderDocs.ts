@@ -191,7 +191,7 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
   neuralweb3d: {
     'line-fs': {
       summary:
-        'A 3D graph that builds itself to the beat, viewed through a slowly orbiting perspective camera: nodes spawn wired to a parent and nearest neighbours, and a 3D force-directed layout (springs, all-pairs repulsion, a soft spherical boundary) spreads the web through space. This shader draws the EDGES — the dim neutral structural web, plus the Streak "warmth" a passing pulse leaves glowing along the pathway behind it, both computed CPU-side and baked into the vertex colour, already dimmed by distance from camera.',
+        'A 3D graph that builds itself to the beat, viewed through a slowly orbiting perspective camera: nodes spawn wired to a parent and nearest neighbours, and a 3D force-directed layout (springs, Barnes-Hut approximated repulsion, a soft spherical boundary) spreads the web through space. This shader draws the EDGES — the dim neutral structural web, plus the Streak "warmth" a passing pulse leaves glowing along the pathway behind it, both computed CPU-side and baked into the vertex colour, already dimmed by distance from camera.',
       tryThis: [
         {
           target: 'outColor = vColor;',

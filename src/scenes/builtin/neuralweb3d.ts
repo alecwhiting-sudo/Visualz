@@ -2,28 +2,41 @@ import { mulberry32, type Prng } from '../../core/prng'
 import type { Gpu } from '../../gpu/context'
 import type { RenderSurface } from '../../gpu/targets'
 import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../types'
+import { RepulsionOctree } from './neuralweb3dForces'
 
 /**
  * Geometry family: "Neural Web 3D" — a redesign of neuralweb.ts as a 3D graph
  * viewed through an orbiting perspective camera, built to the SCENE CONTRACT
  * (docs/SCENE_CONTRACT.md) from the ground up rather than patched onto it.
  *
+ * PARAM SURFACE (post-cull — see task spec): several original knobs turned
+ * out to be dead weight for performance and were hard-coded rather than
+ * exposed: seed cluster size (8), beat-growth additions (6/beat), orbit rate
+ * (0.12 rad/s), connectivity (3, see the constant's comment), and roam
+ * (always forward-only now — see below). Master `glow` was removed too
+ * (pulseGlow/edgeBright already carry brightness; treat glow as constant 1).
+ * `hueBase` + `hue` (spread) were merged into a single `colour` param — see
+ * `injectBass` for the mapping. Performable order: splits, colour, hueDrive,
+ * hitDrive, pulseGlow, edgeBright, maxNodes, reach, then zoom, streak,
+ * sensitivity, pulseSpeed.
+ *
  * DIFFERENCES FROM neuralweb.ts (all deliberate — see task spec):
  *  - No node fade/lifetime. Nodes never die of age; growth just stalls once
  *    the active count reaches `maxNodes` (a knob, hard-capped at MAX_NODES).
  *    The only removal path left is the boundary safety cull.
- *  - 3D layout: springs + all-pairs repulsion + centering gravity + a soft
- *    spherical boundary, projected through a slowly orbiting perspective
- *    camera (CPU-side projection into NDC, same vertex format as the 2D
- *    scene). Depth cues: point size ~ 1/depth, brightness dims with depth.
+ *  - 3D layout: springs + repulsion (Barnes-Hut octree approximation, see
+ *    `neuralweb3dForces.ts`) + centering gravity + a soft spherical
+ *    boundary, projected through a slowly orbiting perspective camera
+ *    (CPU-side projection into NDC, same vertex format as the 2D scene).
+ *    Depth cues: point size ~ 1/depth, brightness dims with depth.
  *  - Pulses split: a pulse arriving at a node re-emits along up to `splits`
  *    OTHER edges (never back the way it came), hash-chosen and hash-counted
- *    so replay stays deterministic. By default (`roam` = 0) candidate edges
- *    are further restricted to FORWARD ones — toward a strictly higher node
- *    id, i.e. younger nodes, matching legacy neuralweb.ts's forward rule —
- *    at both injection and every split, so pulses read as travelling
- *    outward through the growing web rather than buzzing in place. Setting
- *    `roam` = 1 restores unrestricted any-direction travel.
+ *    so replay stays deterministic. Candidate edges are always restricted to
+ *    FORWARD ones — toward a strictly higher node id, i.e. younger nodes,
+ *    matching legacy neuralweb.ts's forward rule — at both injection and
+ *    every split, so pulses read as travelling outward through the growing
+ *    web rather than buzzing in place (the old `roam` knob that relaxed this
+ *    has been removed).
  *  - New nodes spawn already at rest length from their parent (not a small
  *    jitter) with zero velocity, and ease in over ~0.5s via a `ramp` factor
  *    that scales both the forces they take part in and their rendered
@@ -39,6 +52,9 @@ import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../ty
  *    each injection's base hue toward one driven by the `centroid` signal
  *    (dark/bassy -> warm, bright -> cool); `centroid` defaults to 0 via
  *    SignalBus's missing-signal fallback when nothing publishes it.
+ *  - Repulsion at up to `maxNodes` = 2000 uses a Barnes-Hut octree (opening
+ *    criterion s/d < 0.6) instead of all-pairs summation — an approximation
+ *    of the same force law, not an exact match; goldens reflect this.
  *
  * SCENE CONTRACT compliance:
  *  - render() is PURE: full opaque clear + redraw from state every call, no
@@ -103,10 +119,25 @@ void main() {
 
 // --- Model constants ---------------------------------------------------------
 
-const MAX_NODES = 1000
+const MAX_NODES = 2000
 const MAX_EDGES = MAX_NODES * 8
 const MAX_PULSES = 4096
 const REACH_MAX = 40
+
+// Hard-coded former knobs (see class doc's PARAM SURFACE note).
+const SEED_CLUSTER_SIZE = 8
+const BEAT_ADDITIONS = 6
+const ORBIT_RATE = 0.12 // rad/s
+// Reserved tuning lever: user wants to be reminded of this if emerging
+// shapes disappoint — raising/lowering wiring density changes web character
+// (stringy vs meshy).
+const CONNECTIVITY = 3
+
+// Barnes-Hut opening criterion: cells with s/d < THETA are approximated as
+// a single body at their centre of mass (see neuralweb3dForces.ts). 0.55
+// keeps a safety margin under the 1/sqrt(3)~=0.577 bound past which a
+// cell's own bounding cube could contain the query point.
+const THETA = 0.55
 
 const BOUND_RADIUS = 3.0 // world half-extent nodes are softly contained within
 const SAFETY_CULL = 2.2 // × BOUND_RADIUS: escaped nodes past this are culled
@@ -244,25 +275,18 @@ export class NeuralWeb3DScene implements SceneRuntime {
   meta = { id: 'neuralweb3d', name: 'Neural Web 3D', family: 'geometry' as const, framing: 'bounded' as const }
 
   params: ParamSchema[] = [
-    { name: 'nodes', label: 'Nodes', min: 1, max: 40, default: 8, step: 1 },
-    { name: 'additions', label: 'Additions', min: 1, max: 6, default: 2, step: 1 },
     { name: 'splits', label: 'Splits', min: 1, max: 6, default: 3, step: 1 },
-    { name: 'roam', label: 'Roam', min: 0, max: 1, default: 0, step: 1 },
-    { name: 'hueBase', label: 'Hue', min: 0, max: 1, default: 0 },
-    { name: 'hue', label: 'Hue spread', min: 0, max: 1, default: 0.6 },
+    { name: 'colour', label: 'Colour', min: 0, max: 1, default: 0.6 },
     { name: 'hueDrive', label: 'Hue drive', min: 0, max: 1, default: 0 },
     { name: 'hitDrive', label: 'Hit drive', min: 0, max: 1, default: 0.6 },
     { name: 'pulseGlow', label: 'Pulse glow', min: 0, max: 2.5, default: 1.1 },
     { name: 'edgeBright', label: 'Edge bright', min: 0, max: 1, default: 0.2 },
-    { name: 'maxNodes', label: 'Max nodes', min: 100, max: 1000, default: 600, step: 50 },
-    { name: 'connectivity', label: 'Connectivity', min: 1, max: 8, default: 3, step: 1 },
+    { name: 'maxNodes', label: 'Max nodes', min: 100, max: 2000, default: 600, step: 50 },
     { name: 'reach', label: 'Reach', min: 0, max: REACH_MAX, default: 14, step: 1 },
     { name: 'zoom', label: 'Zoom', min: 0.4, max: 3, default: 1 },
-    { name: 'orbit', label: 'Orbit', min: 0, max: 0.6, default: 0.12 },
     { name: 'streak', label: 'Streak', min: 0, max: 1, default: 0.35 },
     { name: 'sensitivity', label: 'Sensitivity', min: 0, max: 1, default: 0.5 },
     { name: 'pulseSpeed', label: 'Pulse speed', min: 0.3, max: 3, default: 1 },
-    { name: 'glow', label: 'Glow', min: 0.3, max: 2, default: 1 },
   ]
 
   private values = new Map<string, number>()
@@ -288,6 +312,17 @@ export class NeuralWeb3DScene implements SceneRuntime {
   // Camera orbit angle — state, advanced only in update() (R2/R3).
   private orbitAngle = 0
 
+  // Pooled Barnes-Hut octree + body buffers, reused across sub-steps (see
+  // neuralweb3dForces.ts) — no per-substep object/array allocation once
+  // these have grown to MAX_NODES once.
+  private repulsionTree = new RepulsionOctree()
+  private repulsionSlots = new Int32Array(MAX_NODES)
+  private repulsionBX = new Float64Array(MAX_NODES)
+  private repulsionBY = new Float64Array(MAX_NODES)
+  private repulsionBZ = new Float64Array(MAX_NODES)
+  private repulsionBRamp = new Float64Array(MAX_NODES)
+  private repulsionForces = new Float64Array(MAX_NODES * 3)
+
   private lineProgram!: WebGLProgram
   private pointProgram!: WebGLProgram
   private lineVao!: WebGLVertexArrayObject
@@ -295,7 +330,10 @@ export class NeuralWeb3DScene implements SceneRuntime {
   private pointVao!: WebGLVertexArrayObject
   private pointVbo!: WebGLBuffer
 
-  private lineVerts = new Float32Array(MAX_EDGES * 2 * 6)
+  // Edges render as camera-facing screen-space quads (2 triangles = 6 verts)
+  // rather than gl.LINES, since gl.LINES lineWidth is clamped to 1px on most
+  // GPUs — edgeBright's thickness lever (render()) needs real width.
+  private lineVerts = new Float32Array(MAX_EDGES * 6 * 6)
   private pointVerts = new Float32Array((MAX_NODES + MAX_PULSES) * 7)
 
   private lineSource = LINE_FS
@@ -424,14 +462,10 @@ export class NeuralWeb3DScene implements SceneRuntime {
     return e.a === slot ? e.b : e.a
   }
 
-  /** Forward-only filter (roam=0): keep edges whose other endpoint has a
-   *  strictly higher node id than `slot` — toward younger nodes, matching the
-   *  legacy neuralweb.ts forward rule. Applied on top of any no-U-turn
-   *  exclusion the caller has already done. */
-  private getParamRoam(): boolean {
-    return this.getParam('roam') >= 0.5
-  }
-
+  /** Forward-only filter (always applied — roam knob removed): keep edges
+   *  whose other endpoint has a strictly higher node id than `slot` — toward
+   *  younger nodes, matching the legacy neuralweb.ts forward rule. Applied
+   *  on top of any no-U-turn exclusion the caller has already done. */
   private forwardOnly(edges: Edge[], slot: number): Edge[] {
     const myId = this.nodes[slot].id
     return edges.filter((e) => this.nodes[this.other(e, slot)].id > myId)
@@ -466,25 +500,21 @@ export class NeuralWeb3DScene implements SceneRuntime {
   }
 
   private seedCluster(): void {
-    const target = Math.round(clamp(this.getParam('nodes'), 1, 40))
-    const conn = Math.round(clamp(this.getParam('connectivity'), 1, 8))
     const maxNodes = Math.round(clamp(this.getParam('maxNodes'), 100, MAX_NODES))
-    for (let i = 0; i < target && this.activeCount < maxNodes; i++) {
+    for (let i = 0; i < SEED_CLUSTER_SIZE && this.activeCount < maxNodes; i++) {
       const [dx, dy, dz] = this.randomDir()
       const rad = this.random() * 0.8
       this.allocNode(dx * rad, dy * rad, dz * rad)
     }
     for (let s = 0; s < MAX_NODES; s++) {
-      if (this.nodes[s].active) this.wireNearest(s, conn)
+      if (this.nodes[s].active) this.wireNearest(s, CONNECTIVITY)
     }
     this.seeded = true
   }
 
   private spawnBeat(): void {
-    const additions = Math.round(clamp(this.getParam('additions'), 1, 6))
-    const conn = Math.round(clamp(this.getParam('connectivity'), 1, 8))
     const maxNodes = Math.round(clamp(this.getParam('maxNodes'), 100, MAX_NODES))
-    for (let k = 0; k < additions; k++) {
+    for (let k = 0; k < BEAT_ADDITIONS; k++) {
       if (this.activeCount >= maxNodes) return
       const live: number[] = []
       for (let s = 0; s < MAX_NODES; s++) if (this.nodes[s].active) live.push(s)
@@ -503,7 +533,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
       const slot = this.allocNode(p.x + dx * REST_LEN, p.y + dy * REST_LEN, p.z + dz * REST_LEN)
       if (slot < 0) return
       this.addEdge(slot, parent)
-      this.wireNearest(slot, conn - 1)
+      this.wireNearest(slot, CONNECTIVITY - 1)
     }
   }
 
@@ -568,11 +598,15 @@ export class NeuralWeb3DScene implements SceneRuntime {
     const live: number[] = []
     for (let s = 0; s < MAX_NODES; s++) if (this.nodes[s].active) live.push(s)
     if (live.length === 0) return
-    const hueSpread = clamp(this.getParam('hue'), 0, 1)
-    const hueBase = clamp(this.getParam('hueBase'), 0, 1)
+    // `colour` combines the old hueBase (0) + hue spread into one knob:
+    // saturation and hue-jitter span both scale with it, so colour=0 gives
+    // white pulses, mid gives a narrow tinted palette, 1 gives full rainbow.
+    const colour = clamp(this.getParam('colour'), 0, 1)
+    const hueSpread = colour
+    const saturation = clamp(colour * 1.4, 0, 1)
+    const hueBase = 0
     const hueDrive = clamp(this.getParam('hueDrive'), 0, 1)
     const hitDrive = clamp(this.getParam('hitDrive'), 0, 1)
-    const roam = this.getParamRoam()
     const reach = Math.round(clamp(this.getParam('reach'), 0, REACH_MAX))
     // 0 at the trigger threshold, saturating (1) at 3x threshold.
     const power = clamp((jump - rise) / (rise * 2), 0, 1)
@@ -588,11 +622,11 @@ export class NeuralWeb3DScene implements SceneRuntime {
     }
     let k = 0
     for (const slot of picked) {
-      const edges = roam ? this.edgesOf(slot) : this.forwardOnly(this.edgesOf(slot), slot)
+      const edges = this.forwardOnly(this.edgesOf(slot), slot)
       if (edges.length > 0) {
         const chosen = this.pickEdges(edges, 1, hash32(this.injectCounter * 613 + slot * 31 + k * 7))[0]
         const hh = hash32(this.injectCounter * 977 + k * 49297) / 4294967296
-        const [r, g, b] = hsv2rgb(hueMixed + hh * hueSpread, hueSpread, 1) // hueSpread 0 -> white
+        const [r, g, b] = hsv2rgb(hueMixed + hh * hueSpread, saturation, 1) // colour 0 -> white
         this.allocPulse(slot, this.other(chosen, slot), chosen, r, g, b, 0, power, maxHops)
       }
       k++
@@ -664,7 +698,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
       if (depth > reach || depth > maxHops) continue
 
       let available = this.edgesOf(slot).filter((e) => e !== arrivedEdge)
-      if (!this.getParamRoam()) available = this.forwardOnly(available, slot)
+      available = this.forwardOnly(available, slot)
       if (available.length === 0) continue
       this.eventCounter++
       const seed = hash32(slot * 92821 + this.eventCounter * 977 + depth * 131)
@@ -703,9 +737,34 @@ export class NeuralWeb3DScene implements SceneRuntime {
       const n = this.nodes[s]
       if (n.active && n.ramp < 1) n.ramp = Math.min(1, n.ramp + dt / SPAWN_RAMP_TIME)
     }
+    // Barnes-Hut repulsion: build a fresh tree over active nodes (ascending
+    // slot order, fixed insertion order — deterministic), then walk it once
+    // per node with the s/d < THETA opening criterion. Replaces the old
+    // O(N^2) all-pairs sum so maxNodes can reach MAX_NODES (2000) at
+    // interactive cost — see neuralweb3dForces.ts.
+    let activeN = 0
     for (let i = 0; i < MAX_NODES; i++) {
       const a = this.nodes[i]
       if (!a.active) continue
+      this.repulsionSlots[activeN] = i
+      this.repulsionBX[activeN] = a.x
+      this.repulsionBY[activeN] = a.y
+      this.repulsionBZ[activeN] = a.z
+      this.repulsionBRamp[activeN] = a.ramp
+      activeN++
+    }
+    this.repulsionTree.build(this.repulsionBX, this.repulsionBY, this.repulsionBZ, this.repulsionBRamp, activeN)
+    const repParams = { repulse: REPULSE, repulseSoft: REPULSE_SOFT, maxForce: MAX_FORCE, theta: THETA }
+    for (let bi = 0; bi < activeN; bi++) {
+      this.repulsionForces[bi * 3] = 0
+      this.repulsionForces[bi * 3 + 1] = 0
+      this.repulsionForces[bi * 3 + 2] = 0
+      this.repulsionTree.forceOn(bi, repParams, this.repulsionForces, bi * 3)
+    }
+
+    for (let bi = 0; bi < activeN; bi++) {
+      const i = this.repulsionSlots[bi]
+      const a = this.nodes[i]
       let fx = -a.x * GRAVITY
       let fy = -a.y * GRAVITY
       let fz = -a.z * GRAVITY
@@ -716,21 +775,9 @@ export class NeuralWeb3DScene implements SceneRuntime {
         fy -= (a.y / rr) * over
         fz -= (a.z / rr) * over
       }
-      for (let j = 0; j < MAX_NODES; j++) {
-        if (j === i) continue
-        const b = this.nodes[j]
-        if (!b.active) continue
-        const dx = a.x - b.x
-        const dy = a.y - b.y
-        const dz = a.z - b.z
-        const d2 = dx * dx + dy * dy + dz * dz + REPULSE_SOFT
-        const dist = Math.sqrt(d2)
-        let fmag = (REPULSE / d2) * Math.min(a.ramp, b.ramp)
-        if (fmag > MAX_FORCE) fmag = MAX_FORCE
-        fx += (dx / dist) * fmag
-        fy += (dy / dist) * fmag
-        fz += (dz / dist) * fmag
-      }
+      fx += this.repulsionForces[bi * 3]
+      fy += this.repulsionForces[bi * 3 + 1]
+      fz += this.repulsionForces[bi * 3 + 2]
       a.vx += fx * a.ramp * dt
       a.vy += fy * a.ramp * dt
       a.vz += fz * a.ramp * dt
@@ -806,7 +853,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
     this.updatePulses(dt, reach, splits)
     this.warmEdges(dt)
 
-    this.orbitAngle += clamp(this.getParam('orbit'), 0, 0.6) * dt
+    this.orbitAngle += ORBIT_RATE * dt
 
     this.cull()
   }
@@ -847,7 +894,6 @@ export class NeuralWeb3DScene implements SceneRuntime {
     gl.clearColor(0, 0, 0, 1)
     gl.clear(gl.COLOR_BUFFER_BIT)
 
-    const glow = clamp(this.getParam('glow'), 0.3, 2)
     const streak = clamp(this.getParam('streak'), 0, 1)
     const edgeBright = clamp(this.getParam('edgeBright'), 0, 1)
     const pulseGlow = clamp(this.getParam('pulseGlow'), 0, 2.5)
@@ -856,6 +902,14 @@ export class NeuralWeb3DScene implements SceneRuntime {
     const ax = 1 / Math.max(aspect, 1)
     const ay = Math.min(aspect, 1)
     const resScale = Math.max(Math.min(surface.width, surface.height) / 720, 0.5)
+
+    // edgeBright thickens edges in the top half of its range (bottom half is
+    // a hairline, matching the old fixed-1px look): up to 3px at max.
+    const edgeThicknessPx = edgeBright <= 0.5 ? 1 : 1 + (edgeBright - 0.5) * 2 * 2
+    const halfThickPx = edgeThicknessPx / 2
+    // pulseGlow scales pulse point SIZE in the top half of its range (bottom
+    // half leaves size untouched, only brightness): up to 2x at max (2.5).
+    const pulseGlowSizeK = pulseGlow <= 1.25 ? 1 : 1 + (pulseGlow - 1.25) / 1.25
 
     const cam = this.camera()
     const { eye, right, up, fwd, dist } = cam
@@ -875,8 +929,18 @@ export class NeuralWeb3DScene implements SceneRuntime {
       return { ndcX, ndcY, vz, depthNorm }
     }
 
-    // --- Edges ---
+    // --- Edges (screen-space quads, 2 triangles / 6 verts each) ---
+    const halfW = surface.width / 2
+    const halfH = surface.height / 2
     let ln = 0
+    const pushVert = (x: number, y: number, r: number, g: number, b: number) => {
+      this.lineVerts[ln++] = x
+      this.lineVerts[ln++] = y
+      this.lineVerts[ln++] = r
+      this.lineVerts[ln++] = g
+      this.lineVerts[ln++] = b
+      this.lineVerts[ln++] = 1
+    }
     for (const e of this.edges) {
       const a = this.nodes[e.a]
       const b = this.nodes[e.b]
@@ -886,25 +950,40 @@ export class NeuralWeb3DScene implements SceneRuntime {
       if (!pa || !pb) continue
       const rampDim = Math.min(a.ramp, b.ramp)
       const depthDim = 1 - 0.65 * Math.max(pa.depthNorm, pb.depthNorm)
-      const dim = rampDim * depthDim * edgeBright * glow
+      const dim = rampDim * depthDim * edgeBright
       // 1.3 was the legacy heat/pulse-glow ratio at the old fixed pulseGlow=1.1;
       // scale by the same ratio so the trail dims/brightens along with pulseGlow.
-      const heat = e.heat * streak * (pulseGlow * (1.3 / 1.1)) * glow * depthDim
+      const heat = e.heat * streak * (pulseGlow * (1.3 / 1.1)) * depthDim
       const r = NODE_R * dim + e.hr * heat
       const g = NODE_G * dim + e.hg * heat
       const bb = NODE_B * dim + e.hb * heat
-      this.lineVerts[ln++] = pa.ndcX
-      this.lineVerts[ln++] = pa.ndcY
-      this.lineVerts[ln++] = r
-      this.lineVerts[ln++] = g
-      this.lineVerts[ln++] = bb
-      this.lineVerts[ln++] = 1
-      this.lineVerts[ln++] = pb.ndcX
-      this.lineVerts[ln++] = pb.ndcY
-      this.lineVerts[ln++] = r
-      this.lineVerts[ln++] = g
-      this.lineVerts[ln++] = bb
-      this.lineVerts[ln++] = 1
+
+      // Perpendicular offset, computed in device-pixel space so thickness is
+      // isotropic regardless of canvas aspect, then converted back to this
+      // scene's (aspect-scaled) NDC-like space.
+      const dxPix = (pb.ndcX - pa.ndcX) * halfW
+      const dyPix = (pb.ndcY - pa.ndcY) * halfH
+      const segLen = Math.sqrt(dxPix * dxPix + dyPix * dyPix) || 1
+      const nx = (-dyPix / segLen) * halfThickPx
+      const ny = (dxPix / segLen) * halfThickPx
+      const offX = nx / halfW
+      const offY = ny / halfH
+
+      const ax0 = pa.ndcX + offX
+      const ay0 = pa.ndcY + offY
+      const ax1 = pa.ndcX - offX
+      const ay1 = pa.ndcY - offY
+      const bx0 = pb.ndcX + offX
+      const by0 = pb.ndcY + offY
+      const bx1 = pb.ndcX - offX
+      const by1 = pb.ndcY - offY
+
+      pushVert(ax0, ay0, r, g, bb)
+      pushVert(ax1, ay1, r, g, bb)
+      pushVert(bx0, by0, r, g, bb)
+      pushVert(ax1, ay1, r, g, bb)
+      pushVert(bx1, by1, r, g, bb)
+      pushVert(bx0, by0, r, g, bb)
     }
     const lineVertCount = ln / 6
 
@@ -925,7 +1004,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
       const p = proj(nd.x, nd.y, nd.z)
       if (!p) continue
       const depthDim = 1 - 0.65 * p.depthNorm
-      const k = 0.6 * nd.ramp * depthDim * glow
+      const k = 0.6 * nd.ramp * depthDim
       const size = clamp((5 / p.vz) * resScale + 1.5, 1.5, 14)
       pushPoint(p.ndcX, p.ndcY, NODE_R * k, NODE_G * k, NODE_B * k, size)
     }
@@ -941,9 +1020,9 @@ export class NeuralWeb3DScene implements SceneRuntime {
       if (!p) continue
       const depthDim = 1 - 0.65 * p.depthNorm
       const hitK = hitBrightness(pu.power, hitDrive)
-      const k = pulseGlow * depthDim * glow * hitK
+      const k = pulseGlow * depthDim * hitK
       const sizeK = 1 + hitDrive * (0.7 + 0.8 * pu.power - 1)
-      const size = clamp((8 / p.vz) * resScale + 2, 2, 20) * sizeK
+      const size = clamp((8 / p.vz) * resScale + 2, 2, 20) * sizeK * pulseGlowSizeK
       pushPoint(p.ndcX, p.ndcY, pu.r * k, pu.g * k, pu.bl * k, size)
     }
     const pointCount = pn / 7
@@ -957,7 +1036,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
       gl.bindVertexArray(this.lineVao)
       gl.bindBuffer(gl.ARRAY_BUFFER, this.lineVbo)
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.lineVerts, 0, ln)
-      gl.drawArrays(gl.LINES, 0, lineVertCount)
+      gl.drawArrays(gl.TRIANGLES, 0, lineVertCount)
     }
     if (pointCount > 0) {
       gl.useProgram(this.pointProgram)
