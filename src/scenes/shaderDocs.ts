@@ -188,6 +188,50 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
       ],
     },
   },
+  neuralweb3d: {
+    'line-fs': {
+      summary:
+        'A 3D graph that builds itself to the beat, viewed through a slowly orbiting perspective camera: nodes spawn wired to a parent and nearest neighbours, and a 3D force-directed layout (springs, all-pairs repulsion, a soft spherical boundary) spreads the web through space. This shader draws the EDGES — the dim neutral structural web, plus the Streak "warmth" a passing pulse leaves glowing along the pathway behind it, both computed CPU-side and baked into the vertex colour, already dimmed by distance from camera.',
+      tryThis: [
+        {
+          target: 'outColor = vColor;',
+          effect:
+            'the whole body — replace with outColor = vec4(vColor.rgb * 2.5, 1.0); to make the structural edges glow much brighter, closer to the pulses.',
+        },
+        {
+          target: 'vColor',
+          effect:
+            'the interpolated edge colour (endpoint tints × depth dim, computed CPU-side); use vColor.gbra to swap the web toward a cooler palette without touching the node colours.',
+        },
+        {
+          target: 'out vec4 outColor;',
+          effect:
+            "the stage's single output; add a `uniform float uDim;` above it and multiply to wire a live edge-brightness knob (needs a matching setUniform in render()).",
+        },
+      ],
+    },
+    'point-fs': {
+      summary:
+        'Draws the NODES and the travelling PULSES as soft round glowing dots, sized by 1/depth so nearer nodes read bigger. Each bass hit injects a pulse into 2-4 nodes that leaves along ONE hash-chosen edge; on arrival it re-emits along up to `splits` OTHER edges (never back the way it came), up to the Reach depth. Where pulses converge on a node the re-emitted one adopts the DOMINANT incoming colour (majority by hue). Output is premultiplied for the additive (ONE,ONE) blend so overlapping light brightens.',
+      tryThis: [
+        {
+          target: 'float d = length(gl_PointCoord - vec2(0.5));',
+          effect:
+            'distance from the dot centre; divide gl_PointCoord by a larger number (e.g. length(gl_PointCoord*0.8 - 0.4)) to tighten the glow into a harder pinpoint.',
+        },
+        {
+          target: 'float a = smoothstep(0.5, 0.0, d);',
+          effect:
+            'the radial falloff; try smoothstep(0.5, 0.35, d) for a crisp ring-edged dot instead of a soft blob.',
+        },
+        {
+          target: 'outColor = vec4(vColor.rgb * a * vColor.a, 1.0);',
+          effect:
+            'swap for outColor = vec4(vColor.rgb * a * a * vColor.a, 1.0); to square the falloff — hotter cores, darker halos, a more electric spark.',
+        },
+      ],
+    },
+  },
   starflight: {
     'line-fs': {
       summary:

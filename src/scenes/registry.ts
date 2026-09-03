@@ -19,6 +19,7 @@ import { TerrainScene } from './builtin/terrain'
 import { OrreryScene } from './builtin/orrery'
 import { WhipStormScene } from './builtin/whipstorm'
 import { NeuralWebScene } from './builtin/neuralweb'
+import { NeuralWeb3DScene } from './builtin/neuralweb3d'
 import { StarFlightScene } from './builtin/starflight'
 import { CymaticsScene } from './builtin/cymatics'
 import { StrangeAttractorScene } from './builtin/attractor'
@@ -75,6 +76,7 @@ export const SCENES: Record<string, { name: string; create(): SceneRuntime }> = 
   orrery: { name: 'Orrery', create: () => new OrreryScene() },
   whipstorm: { name: 'Whip Storm', create: () => new WhipStormScene() },
   neuralweb: { name: 'Neural Web', create: () => new NeuralWebScene() },
+  neuralweb3d: { name: 'Neural Web 3D', create: () => new NeuralWeb3DScene() },
   starflight: { name: 'Star Flight', create: () => new StarFlightScene() },
   attractor: { name: 'Strange Attractor', create: () => new StrangeAttractorScene() },
   cymatics: { name: 'Cymatics', create: () => new CymaticsScene() },
