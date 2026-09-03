@@ -48,7 +48,15 @@ import { RepulsionOctree } from './neuralweb3dForces'
  *    (0 = today's exact behaviour) blends `power` into pulse/streak
  *    brightness, pulse point size, and a per-pulse hop cap (`maxHops`,
  *    computed once at injection from `reach`) so weak hits die shallow and
- *    strong hits run deep. Separately, `hueDrive` (default 0, no-op) blends
+ *    strong hits run deep. A dt-paced keep-alive (`KEEPALIVE_SEC` = 1.25s
+ *    since the last injection, live or keep-alive) injects a dim, shallow,
+ *    zero-power pulse so the web idles with gentle sparse pulses during
+ *    quiet passages instead of going fully dark — real bass-transient hits
+ *    reset the timer and still dominate visually via power scaling.
+ *    Injection candidates are also restricted to nodes with at least one
+ *    forward edge (built in one O(E) pass over `edges`), so a hit never
+ *    lands on a dead-end node with nowhere to send its pulse. Separately,
+ *    `hueDrive` (default 0, no-op) blends
  *    each injection's base hue toward one driven by the `centroid` signal
  *    (dark/bassy -> warm, bright -> cool); `centroid` defaults to 0 via
  *    SignalBus's missing-signal fallback when nothing publishes it.
@@ -166,6 +174,12 @@ const FOCAL = 1.6 // pinhole focal length
 const NEAR_EPS = 0.15 // clip a point once its view-space depth drops below this
 
 const PULSE_SPEED_PER_SEC = 1.0 // edge-fractions per second at pulseSpeed = 1
+
+// Keep-alive: the bass-transient detector can go well past cascade lifetime
+// (~9s) without firing on real music, letting the web go dark. A dt-paced
+// dim, shallow injection keeps it lit during quiet passages; loud hits still
+// dominate via power scaling (see class doc).
+const KEEPALIVE_SEC = 1.25
 
 // Hue-drive endpoints: dark/bassy -> warm red-orange, bright/high-centroid -> cyan-violet.
 const HUE_DARK = 0.02
@@ -306,6 +320,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
   private bassArmed = true
   private injectCounter = 0
   private eventCounter = 0
+  private sinceInject = 0
 
   // Simulation accumulator (R4: fixed virtual sub-step, paced by frame.dt).
   private simAccum = 0
@@ -364,6 +379,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
     this.bassArmed = true
     this.injectCounter = 0
     this.eventCounter = 0
+    this.sinceInject = 0
     this.simAccum = 0
     this.orbitAngle = 0
 
@@ -595,8 +611,17 @@ export class NeuralWeb3DScene implements SceneRuntime {
    *  hash-chosen edge. Node picks + hues + edge choice are a pure hash of the
    *  injection counter (deterministic, decoupled from the spawn PRNG). */
   private injectBass(jump: number, rise: number, centroid: number): void {
+    // Only nodes with at least one forward edge (the LOWER-id endpoint of
+    // some edge) can host an injection — otherwise the pulse has nowhere to
+    // go and the injection is wasted (~27% of nodes are forward dead-ends).
+    // One O(E) pass over `this.edges` builds the capability set up front.
+    const canForward = new Set<number>()
+    for (const e of this.edges) {
+      const loSlot = this.nodes[e.a].id < this.nodes[e.b].id ? e.a : e.b
+      canForward.add(loSlot)
+    }
     const live: number[] = []
-    for (let s = 0; s < MAX_NODES; s++) if (this.nodes[s].active) live.push(s)
+    for (let s = 0; s < MAX_NODES; s++) if (this.nodes[s].active && canForward.has(s)) live.push(s)
     if (live.length === 0) return
     // `colour` combines the old hueBase (0) + hue spread into one knob:
     // saturation and hue-jitter span both scale with it, so colour=0 gives
@@ -828,12 +853,21 @@ export class NeuralWeb3DScene implements SceneRuntime {
     const bass = signals.get('bass')
     this.bassEnv += (bass - this.bassEnv) * (1 - Math.exp(-BASS_ENV_RATE * dt))
     const jump = bass - this.bassEnv
+    this.sinceInject += dt
     if (this.bassArmed && jump > rise) {
       const centroid = clamp(signals.get('centroid'), 0, 1)
       this.injectBass(jump, rise, centroid)
       this.bassArmed = false
+      this.sinceInject = 0
     } else if (!this.bassArmed && jump < rise * 0.4) {
       this.bassArmed = true
+    }
+    if (this.sinceInject >= KEEPALIVE_SEC) {
+      // jump == rise -> power = 0: a dim, shallow keep-alive pulse so the web
+      // never goes fully dark during a long quiet passage; loud hits still
+      // dominate via power scaling in injectBass.
+      this.injectBass(rise, rise, clamp(signals.get('centroid'), 0, 1))
+      this.sinceInject = 0
     }
 
     // Fixed virtual sub-step accumulator (R4): identical simulated state at

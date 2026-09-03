@@ -139,6 +139,33 @@ test('neuralweb3d orbit/injection state is dt-paced: equal at 30/60/120fps at eq
   for (const p of [a, b, c]) expect(p.injections).toBe(a.injections)
 })
 
+// --- Keep-alive: pulses survive a long bass-transient drought ----------------
+
+// Regression for the dead-web bug: the bass-transient detector can go 15+
+// seconds without firing on real music while cascades live only ~9s, so the
+// web would go fully dark. Holding `bass` steady (no transient, since jump =
+// bass - bassEnv settles near 0 once the envelope tracks it) for a long
+// stretch must still keep injections growing (via the dt-paced keep-alive)
+// and pulses alive at the end, rather than freezing/dying out.
+test('neuralweb3d pulses stay alive under sustained bass (no transients)', async ({ page }) => {
+  await boot(page)
+  await page.evaluate(() => window.__viz!.setInputSignal('bass', 0.75))
+  const initialInjections = await page.evaluate(() => (window.__viz as unknown as { getParam(n: string): number }).getParam('#injections'))
+
+  // 8s of frames at 60fps, in chunks so a single evaluate() doesn't run long.
+  const chunk = 60
+  const totalFrames = 480
+  for (let done = 0; done < totalFrames; done += chunk) {
+    await page.evaluate((n) => window.__viz!.renderFrames(n), chunk)
+  }
+
+  const finalInjections = await page.evaluate(() => (window.__viz as unknown as { getParam(n: string): number }).getParam('#injections'))
+  const activePulses = await page.evaluate(() => (window.__viz as unknown as { getParam(n: string): number }).getParam('#activePulses'))
+
+  expect(finalInjections - initialInjections).toBeGreaterThan(3)
+  expect(activePulses).toBeGreaterThan(0)
+})
+
 // --- Determinism: byte-identical replay via loadSession ---------------------
 
 test('neuralweb3d replays byte-identically via loadSession', async ({ page }) => {
