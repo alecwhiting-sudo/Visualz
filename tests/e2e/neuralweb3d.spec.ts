@@ -114,7 +114,29 @@ test('neuralweb3d looks the same at 30/60/120fps at equal wall-clock time', asyn
   for (const lit of [a, b, c]) expect(lit).toBeGreaterThan(100)
   const hi = Math.max(a, b, c)
   const lo = Math.min(a, b, c)
-  expect(hi / lo).toBeLessThan(1.15)
+  expect(hi / lo).toBeLessThan(1.1)
+})
+
+// dt-paced state invariant (terrain.spec.ts:117-129 pattern): orbitAngle and
+// injectCounter are both advanced only in update(), directly paced by
+// frame.dt — same wall-clock time must land on the same values regardless of
+// how many update() calls it took to get there.
+async function probeStateAtFps(page: import('@playwright/test').Page, fps: number, seconds: number) {
+  await boot(page, `&fps=${fps}`)
+  await page.evaluate((n) => window.__viz!.renderFrames(n), Math.round(seconds * fps))
+  return page.evaluate(() => ({
+    orbitAngle: (window.__viz as { getParam(n: string): number }).getParam('#orbitAngle'),
+    injections: (window.__viz as { getParam(n: string): number }).getParam('#injections'),
+  }))
+}
+
+test('neuralweb3d orbit/injection state is dt-paced: equal at 30/60/120fps at equal wall-clock time', async ({ page }) => {
+  const seconds = 4
+  const a = await probeStateAtFps(page, 30, seconds)
+  const b = await probeStateAtFps(page, 60, seconds)
+  const c = await probeStateAtFps(page, 120, seconds)
+  for (const p of [a, b, c]) expect(p.orbitAngle).toBeCloseTo(a.orbitAngle, 4)
+  for (const p of [a, b, c]) expect(p.injections).toBe(a.injections)
 })
 
 // --- Determinism: byte-identical replay via loadSession ---------------------

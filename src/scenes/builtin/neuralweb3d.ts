@@ -31,9 +31,10 @@ import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../ty
  *    identical.
  *  - The force sim advances via a FIXED virtual sub-step accumulated against
  *    frame.dt (R4) — never a fixed amount per update() call — so 30/60/120fps
- *    land on the same simulated state at the same wall-clock time. Pulse
- *    travel, edge-heat decay, node ramp and the camera's orbit angle are all
- *    paced directly by frame.dt (R2).
+ *    land on the same simulated state at the same wall-clock time. Node ramp
+ *    advances inside that same fixed sub-step so its trajectory doesn't
+ *    depend on display rate. Pulse travel, edge-heat decay, the bass envelope
+ *    and the camera's orbit angle are all paced directly by frame.dt (R2).
  *  - Determinism (R3): the spawn PRNG only advances at init()/seed-cluster/
  *    beat-spawn (discrete events); pulse injection and splitting draw from a
  *    pure hash of monotonic counters, independent of the PRNG stream and of
@@ -108,6 +109,7 @@ const GRAVITY = 0.35
 const BOUND_K = 2.2
 
 const SPAWN_RAMP_TIME = 0.5 // seconds for a new node's `ramp` to ease 0 -> 1
+const BASS_ENV_RATE = 5.0 // 1/s, dt-paced low-pass on bass; matches old 0.08/frame @ 60fps
 
 // Camera.
 const BASE_VIEW = 2.6 // world half-extent reference (matches neuralweb.ts's convention)
@@ -205,6 +207,7 @@ interface Arrival {
   bl: number
   hops: number
   edge: Edge // the edge this arrival rode in on — excluded from re-emission
+  overshoot: number // how far pos ran past 1.0 this step — carried to re-emitted pulses
 }
 
 export class NeuralWeb3DScene implements SceneRuntime {
@@ -334,6 +337,17 @@ export class NeuralWeb3DScene implements SceneRuntime {
     this.values.set(name, value)
   }
   getParam(name: string): number {
+    // Debug probes (terrain.ts convention): '#'-prefixed names bypass the
+    // params map and expose internal dt-paced state directly, for the
+    // fps-equivalence test's state-invariant assertion (not part of the
+    // public param schema).
+    if (name === '#orbitAngle') return this.orbitAngle
+    if (name === '#injections') return this.injectCounter
+    if (name === '#activePulses') {
+      let n = 0
+      for (const pu of this.pulses) if (pu.active) n++
+      return n
+    }
     return this.values.get(name) ?? 0
   }
 
@@ -467,7 +481,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
 
   // --- Pulses ---------------------------------------------------------------
 
-  private allocPulse(a: number, b: number, edge: Edge, r: number, g: number, bl: number, hops: number): void {
+  private allocPulse(a: number, b: number, edge: Edge, r: number, g: number, bl: number, hops: number, startPos = 0): void {
     const i = this.freePulses.pop()
     if (i === undefined) return
     const pu = this.pulses[i]
@@ -475,7 +489,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
     pu.a = a
     pu.b = b
     pu.edge = edge
-    pu.pos = 0
+    pu.pos = startPos
     pu.r = r
     pu.g = g
     pu.bl = bl
@@ -543,7 +557,12 @@ export class NeuralWeb3DScene implements SceneRuntime {
           list = []
           arrivals.set(pu.b, list)
         }
-        if (pu.edge) list.push({ r: pu.r, g: pu.g, bl: pu.bl, hops: pu.hops, edge: pu.edge })
+        // Carry the overshoot into the arrival so re-emitted pulses start
+        // ahead of 0 — otherwise a hop cascade lags further behind real time
+        // at every low-fps step (each hop losing up to a whole `speed` worth
+        // of travel).
+        const overshoot = clamp(pu.pos - 1, 0, 0.999)
+        if (pu.edge) list.push({ r: pu.r, g: pu.g, bl: pu.bl, hops: pu.hops, edge: pu.edge, overshoot })
         this.freePulse(i)
       }
     }
@@ -574,6 +593,8 @@ export class NeuralWeb3DScene implements SceneRuntime {
       const depth = minHops + 1
       firstOfBucket = byBucket[win]
       const arrivedEdge = firstOfBucket[0].edge
+      let overshoot = 0
+      for (const a of firstOfBucket) if (a.overshoot > overshoot) overshoot = a.overshoot
       if (depth > reach) continue
 
       const available = this.edgesOf(slot).filter((e) => e !== arrivedEdge)
@@ -585,7 +606,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
       const count = clamp(Math.round(splitsParam + jitter), 1, available.length)
       const chosen = this.pickEdges(available, count, seed)
       for (const e of chosen) {
-        this.allocPulse(slot, this.other(e, slot), e, r, g, bl, depth)
+        this.allocPulse(slot, this.other(e, slot), e, r, g, bl, depth, overshoot)
       }
     }
   }
@@ -606,6 +627,13 @@ export class NeuralWeb3DScene implements SceneRuntime {
   }
 
   private simulateStep(dt: number): void {
+    // Node ramp: eases 0 -> 1 over SPAWN_RAMP_TIME seconds. Advanced inside the
+    // fixed sub-step (not once per update()) so its trajectory is identical at
+    // any display rate, matching the force sim it gates.
+    for (let s = 0; s < MAX_NODES; s++) {
+      const n = this.nodes[s]
+      if (n.active && n.ramp < 1) n.ramp = Math.min(1, n.ramp + dt / SPAWN_RAMP_TIME)
+    }
     for (let i = 0; i < MAX_NODES; i++) {
       const a = this.nodes[i]
       if (!a.active) continue
@@ -682,7 +710,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
     const sens = clamp(this.getParam('sensitivity'), 0, 1)
     const rise = 0.2 - sens * 0.16
     const bass = signals.get('bass')
-    this.bassEnv += (bass - this.bassEnv) * 0.08
+    this.bassEnv += (bass - this.bassEnv) * (1 - Math.exp(-BASS_ENV_RATE * dt))
     const jump = bass - this.bassEnv
     if (this.bassArmed && jump > rise) {
       this.injectBass()
@@ -691,15 +719,11 @@ export class NeuralWeb3DScene implements SceneRuntime {
       this.bassArmed = true
     }
 
-    // Node ramp: eases 0 -> 1 over SPAWN_RAMP_TIME seconds, paced by dt.
-    for (let s = 0; s < MAX_NODES; s++) {
-      const n = this.nodes[s]
-      if (n.active && n.ramp < 1) n.ramp = Math.min(1, n.ramp + dt / SPAWN_RAMP_TIME)
-    }
-
     // Fixed virtual sub-step accumulator (R4): identical simulated state at
     // the same wall-clock time regardless of how often update() was called.
-    this.simAccum += dt
+    // Clamped so a slow/stalled live frame can't build an unbounded backlog
+    // that later fast-forwards several seconds' worth of steps at once.
+    this.simAccum = Math.min(this.simAccum + dt, MAX_STEPS_PER_FRAME * FIXED_DT)
     let steps = 0
     while (this.simAccum >= FIXED_DT && steps < MAX_STEPS_PER_FRAME) {
       this.simulateStep(FIXED_DT)
