@@ -28,6 +28,17 @@ import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../ty
  *    jitter) with zero velocity, and ease in over ~0.5s via a `ramp` factor
  *    that scales both the forces they take part in and their rendered
  *    brightness — a glow-in instead of a spring-loaded pop.
+ *  - Audio-reactive pulses: at injection (`injectBass`) a per-hit `power`
+ *    (0..1, saturating at 3x the trigger threshold) is stamped on the pulse
+ *    and inherited through every re-emission of its cascade — convergence at
+ *    a node takes the max power among the winning bucket's arrivals. `hitDrive`
+ *    (0 = today's exact behaviour) blends `power` into pulse/streak
+ *    brightness, pulse point size, and a per-pulse hop cap (`maxHops`,
+ *    computed once at injection from `reach`) so weak hits die shallow and
+ *    strong hits run deep. Separately, `hueDrive` (default 0, no-op) blends
+ *    each injection's base hue toward one driven by the `centroid` signal
+ *    (dark/bassy -> warm, bright -> cool); `centroid` defaults to 0 via
+ *    SignalBus's missing-signal fallback when nothing publishes it.
  *
  * SCENE CONTRACT compliance:
  *  - render() is PURE: full opaque clear + redraw from state every call, no
@@ -125,6 +136,10 @@ const NEAR_EPS = 0.15 // clip a point once its view-space depth drops below this
 
 const PULSE_SPEED_PER_SEC = 1.0 // edge-fractions per second at pulseSpeed = 1
 
+// Hue-drive endpoints: dark/bassy -> warm red-orange, bright/high-centroid -> cyan-violet.
+const HUE_DARK = 0.02
+const HUE_BRIGHT = 0.58
+
 const NODE_R = 0.5
 const NODE_G = 0.58
 const NODE_B = 0.72
@@ -143,6 +158,12 @@ function hash32(x: number): number {
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v
+}
+
+/** hitDrive=0 -> 1 (today's exact behaviour); hitDrive=1 -> 0.5 at power=0
+ *  (dim) up to 2.0 at power=1 (bright). */
+function hitBrightness(power: number, hitDrive: number): number {
+  return 1 + hitDrive * (0.5 + 1.5 * power - 1)
 }
 
 function hsv2rgb(h: number, s: number, v: number): [number, number, number] {
@@ -204,6 +225,8 @@ interface Pulse {
   g: number
   bl: number
   hops: number
+  power: number // 0..1 hit strength from injection, inherited through re-emission
+  maxHops: number // per-pulse hop cap, derived from `reach` and `power` at injection
 }
 
 interface Arrival {
@@ -213,6 +236,8 @@ interface Arrival {
   hops: number
   edge: Edge // the edge this arrival rode in on — excluded from re-emission
   overshoot: number // how far pos ran past 1.0 this step — carried to re-emitted pulses
+  power: number
+  maxHops: number
 }
 
 export class NeuralWeb3DScene implements SceneRuntime {
@@ -225,6 +250,8 @@ export class NeuralWeb3DScene implements SceneRuntime {
     { name: 'roam', label: 'Roam', min: 0, max: 1, default: 0, step: 1 },
     { name: 'hueBase', label: 'Hue', min: 0, max: 1, default: 0 },
     { name: 'hue', label: 'Hue spread', min: 0, max: 1, default: 0.6 },
+    { name: 'hueDrive', label: 'Hue drive', min: 0, max: 1, default: 0 },
+    { name: 'hitDrive', label: 'Hit drive', min: 0, max: 1, default: 0.6 },
     { name: 'pulseGlow', label: 'Pulse glow', min: 0, max: 2.5, default: 1.1 },
     { name: 'edgeBright', label: 'Edge bright', min: 0, max: 1, default: 0.2 },
     { name: 'maxNodes', label: 'Max nodes', min: 100, max: 1000, default: 600, step: 50 },
@@ -289,7 +316,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
     this.pulses = []
     this.freePulses = []
     for (let i = 0; i < MAX_PULSES; i++) {
-      this.pulses.push({ active: false, a: 0, b: 0, edge: null, pos: 0, r: 0, g: 0, bl: 0, hops: 0 })
+      this.pulses.push({ active: false, a: 0, b: 0, edge: null, pos: 0, r: 0, g: 0, bl: 0, hops: 0, power: 0, maxHops: REACH_MAX })
       this.freePulses.push(MAX_PULSES - 1 - i)
     }
     this.nextId = 0
@@ -503,7 +530,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
 
   // --- Pulses ---------------------------------------------------------------
 
-  private allocPulse(a: number, b: number, edge: Edge, r: number, g: number, bl: number, hops: number, startPos = 0): void {
+  private allocPulse(a: number, b: number, edge: Edge, r: number, g: number, bl: number, hops: number, power: number, maxHops: number, startPos = 0): void {
     const i = this.freePulses.pop()
     if (i === undefined) return
     const pu = this.pulses[i]
@@ -516,6 +543,8 @@ export class NeuralWeb3DScene implements SceneRuntime {
     pu.g = g
     pu.bl = bl
     pu.hops = hops
+    pu.power = power
+    pu.maxHops = maxHops
   }
   private freePulse(i: number): void {
     if (!this.pulses[i].active) return
@@ -535,13 +564,20 @@ export class NeuralWeb3DScene implements SceneRuntime {
   /** A bass hit: inject a pulse into 2-4 living nodes, each leaving along ONE
    *  hash-chosen edge. Node picks + hues + edge choice are a pure hash of the
    *  injection counter (deterministic, decoupled from the spawn PRNG). */
-  private injectBass(): void {
+  private injectBass(jump: number, rise: number, centroid: number): void {
     const live: number[] = []
     for (let s = 0; s < MAX_NODES; s++) if (this.nodes[s].active) live.push(s)
     if (live.length === 0) return
     const hueSpread = clamp(this.getParam('hue'), 0, 1)
     const hueBase = clamp(this.getParam('hueBase'), 0, 1)
+    const hueDrive = clamp(this.getParam('hueDrive'), 0, 1)
+    const hitDrive = clamp(this.getParam('hitDrive'), 0, 1)
     const roam = this.getParamRoam()
+    const reach = Math.round(clamp(this.getParam('reach'), 0, REACH_MAX))
+    // 0 at the trigger threshold, saturating (1) at 3x threshold.
+    const power = clamp((jump - rise) / (rise * 2), 0, 1)
+    const hueMixed = hueBase + hueDrive * (HUE_DARK + centroid * (HUE_BRIGHT - HUE_DARK) - hueBase)
+    const maxHops = clamp(Math.round(reach * (1 + hitDrive * (0.35 + 0.9 * power - 1))), 1, REACH_MAX)
     const count = Math.min(live.length, 2 + (hash32(this.injectCounter * 7 + 13) % 3)) // 2..4
     const picked = new Set<number>()
     let attempts = 0
@@ -556,8 +592,8 @@ export class NeuralWeb3DScene implements SceneRuntime {
       if (edges.length > 0) {
         const chosen = this.pickEdges(edges, 1, hash32(this.injectCounter * 613 + slot * 31 + k * 7))[0]
         const hh = hash32(this.injectCounter * 977 + k * 49297) / 4294967296
-        const [r, g, b] = hsv2rgb(hueBase + hh * hueSpread, hueSpread, 1) // hueSpread 0 -> white
-        this.allocPulse(slot, this.other(chosen, slot), chosen, r, g, b, 0)
+        const [r, g, b] = hsv2rgb(hueMixed + hh * hueSpread, hueSpread, 1) // hueSpread 0 -> white
+        this.allocPulse(slot, this.other(chosen, slot), chosen, r, g, b, 0, power, maxHops)
       }
       k++
     }
@@ -586,7 +622,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
         // at every low-fps step (each hop losing up to a whole `speed` worth
         // of travel).
         const overshoot = clamp(pu.pos - 1, 0, 0.999)
-        if (pu.edge) list.push({ r: pu.r, g: pu.g, bl: pu.bl, hops: pu.hops, edge: pu.edge, overshoot })
+        if (pu.edge) list.push({ r: pu.r, g: pu.g, bl: pu.bl, hops: pu.hops, edge: pu.edge, overshoot, power: pu.power, maxHops: pu.maxHops })
         this.freePulse(i)
       }
     }
@@ -618,8 +654,14 @@ export class NeuralWeb3DScene implements SceneRuntime {
       firstOfBucket = byBucket[win]
       const arrivedEdge = firstOfBucket[0].edge
       let overshoot = 0
-      for (const a of firstOfBucket) if (a.overshoot > overshoot) overshoot = a.overshoot
-      if (depth > reach) continue
+      let power = 0
+      let maxHops = 0
+      for (const a of firstOfBucket) {
+        if (a.overshoot > overshoot) overshoot = a.overshoot
+        if (a.power > power) power = a.power
+        if (a.maxHops > maxHops) maxHops = a.maxHops
+      }
+      if (depth > reach || depth > maxHops) continue
 
       let available = this.edgesOf(slot).filter((e) => e !== arrivedEdge)
       if (!this.getParamRoam()) available = this.forwardOnly(available, slot)
@@ -631,23 +673,25 @@ export class NeuralWeb3DScene implements SceneRuntime {
       const count = clamp(Math.round(splitsParam + jitter), 1, available.length)
       const chosen = this.pickEdges(available, count, seed)
       for (const e of chosen) {
-        this.allocPulse(slot, this.other(e, slot), e, r, g, bl, depth, overshoot)
+        this.allocPulse(slot, this.other(e, slot), e, r, g, bl, depth, power, maxHops, overshoot)
       }
     }
   }
 
   private warmEdges(dt: number): void {
     const streak = clamp(this.getParam('streak'), 0, 1)
+    const hitDrive = clamp(this.getParam('hitDrive'), 0, 1)
     const decayPerSec = 0.15 + streak * 0.8 // streak 0 -> fast decay, 1 -> long trail
     const decay = Math.pow(decayPerSec, dt)
     for (const e of this.edges) e.heat *= decay
     for (const pu of this.pulses) {
       if (!pu.active || !pu.edge) continue
       const e = pu.edge
+      const k = hitBrightness(pu.power, hitDrive)
       e.heat = 1
-      e.hr = pu.r
-      e.hg = pu.g
-      e.hb = pu.bl
+      e.hr = pu.r * k
+      e.hg = pu.g * k
+      e.hb = pu.bl * k
     }
   }
 
@@ -738,7 +782,8 @@ export class NeuralWeb3DScene implements SceneRuntime {
     this.bassEnv += (bass - this.bassEnv) * (1 - Math.exp(-BASS_ENV_RATE * dt))
     const jump = bass - this.bassEnv
     if (this.bassArmed && jump > rise) {
-      this.injectBass()
+      const centroid = clamp(signals.get('centroid'), 0, 1)
+      this.injectBass(jump, rise, centroid)
       this.bassArmed = false
     } else if (!this.bassArmed && jump < rise * 0.4) {
       this.bassArmed = true
@@ -806,6 +851,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
     const streak = clamp(this.getParam('streak'), 0, 1)
     const edgeBright = clamp(this.getParam('edgeBright'), 0, 1)
     const pulseGlow = clamp(this.getParam('pulseGlow'), 0, 2.5)
+    const hitDrive = clamp(this.getParam('hitDrive'), 0, 1)
     const aspect = surface.width / surface.height
     const ax = 1 / Math.max(aspect, 1)
     const ay = Math.min(aspect, 1)
@@ -894,8 +940,10 @@ export class NeuralWeb3DScene implements SceneRuntime {
       const p = proj(x, y, z)
       if (!p) continue
       const depthDim = 1 - 0.65 * p.depthNorm
-      const k = pulseGlow * depthDim * glow
-      const size = clamp((8 / p.vz) * resScale + 2, 2, 20)
+      const hitK = hitBrightness(pu.power, hitDrive)
+      const k = pulseGlow * depthDim * glow * hitK
+      const sizeK = 1 + hitDrive * (0.7 + 0.8 * pu.power - 1)
+      const size = clamp((8 / p.vz) * resScale + 2, 2, 20) * sizeK
       pushPoint(p.ndcX, p.ndcY, pu.r * k, pu.g * k, pu.bl * k, size)
     }
     const pointCount = pn / 7
