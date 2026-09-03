@@ -1,19 +1,17 @@
 name: Deploy to GitHub Pages (dev audition)
 
-# The GitHub Pages site is the DEV AUDITION deployment: it serves whatever was
-# pushed last to main or to a claude/* feature branch, so new work can be
-# demoed at the Pages URL before it merges. Production is the Vercel site,
-# which deploys from main independently — nothing here touches it.
+# The GitHub Pages site is the DEV AUDITION deployment: it serves the
+# `audition` branch. To demo a feature pre-merge, merge its branch into
+# `audition` and push — the Pages URL then shows it. Production is the Vercel
+# site, which deploys from main independently — nothing here touches it.
 #
-# NOTE: the github-pages environment must allow these branches to deploy.
-# Repo Settings → Environments → github-pages → Deployment branches: either
-# "No restriction" or add the pattern claude/*. With the default main-only
-# policy, feature-branch runs fail at the deploy step.
+# NOTE: the github-pages environment must allow `audition` to deploy.
+# Repo Settings → Environments → github-pages → Deployment branches and tags →
+# add branch rule `audition`. Without it the deploy step is rejected.
 on:
   push:
     branches:
-      - main
-      - 'claude/**'
+      - audition
   workflow_dispatch:
 
 permissions:
