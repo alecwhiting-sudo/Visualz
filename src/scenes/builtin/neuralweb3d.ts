@@ -16,9 +16,14 @@ import type { FrameContext, ParamSchema, SceneRuntime, ShaderStage } from '../ty
  *    spherical boundary, projected through a slowly orbiting perspective
  *    camera (CPU-side projection into NDC, same vertex format as the 2D
  *    scene). Depth cues: point size ~ 1/depth, brightness dims with depth.
- *  - Pulses split rather than fan out forward-only: a pulse arriving at a
- *    node re-emits along up to `splits` OTHER edges (never back the way it
- *    came), hash-chosen and hash-counted so replay stays deterministic.
+ *  - Pulses split: a pulse arriving at a node re-emits along up to `splits`
+ *    OTHER edges (never back the way it came), hash-chosen and hash-counted
+ *    so replay stays deterministic. By default (`roam` = 0) candidate edges
+ *    are further restricted to FORWARD ones — toward a strictly higher node
+ *    id, i.e. younger nodes, matching legacy neuralweb.ts's forward rule —
+ *    at both injection and every split, so pulses read as travelling
+ *    outward through the growing web rather than buzzing in place. Setting
+ *    `roam` = 1 restores unrestricted any-direction travel.
  *  - New nodes spawn already at rest length from their parent (not a small
  *    jitter) with zero velocity, and ease in over ~0.5s via a `ramp` factor
  *    that scales both the forces they take part in and their rendered
@@ -216,14 +221,18 @@ export class NeuralWeb3DScene implements SceneRuntime {
   params: ParamSchema[] = [
     { name: 'nodes', label: 'Nodes', min: 1, max: 40, default: 8, step: 1 },
     { name: 'additions', label: 'Additions', min: 1, max: 6, default: 2, step: 1 },
+    { name: 'splits', label: 'Splits', min: 1, max: 6, default: 3, step: 1 },
+    { name: 'roam', label: 'Roam', min: 0, max: 1, default: 0, step: 1 },
+    { name: 'hueBase', label: 'Hue', min: 0, max: 1, default: 0 },
+    { name: 'hue', label: 'Hue spread', min: 0, max: 1, default: 0.6 },
+    { name: 'pulseGlow', label: 'Pulse glow', min: 0, max: 2.5, default: 1.1 },
+    { name: 'edgeBright', label: 'Edge bright', min: 0, max: 1, default: 0.2 },
     { name: 'maxNodes', label: 'Max nodes', min: 100, max: 1000, default: 600, step: 50 },
     { name: 'connectivity', label: 'Connectivity', min: 1, max: 8, default: 3, step: 1 },
-    { name: 'splits', label: 'Splits', min: 1, max: 6, default: 3, step: 1 },
     { name: 'reach', label: 'Reach', min: 0, max: REACH_MAX, default: 14, step: 1 },
     { name: 'zoom', label: 'Zoom', min: 0.4, max: 3, default: 1 },
     { name: 'orbit', label: 'Orbit', min: 0, max: 0.6, default: 0.12 },
     { name: 'streak', label: 'Streak', min: 0, max: 1, default: 0.35 },
-    { name: 'hue', label: 'Hue spread', min: 0, max: 1, default: 0.6 },
     { name: 'sensitivity', label: 'Sensitivity', min: 0, max: 1, default: 0.5 },
     { name: 'pulseSpeed', label: 'Pulse speed', min: 0.3, max: 3, default: 1 },
     { name: 'glow', label: 'Glow', min: 0.3, max: 2, default: 1 },
@@ -388,6 +397,19 @@ export class NeuralWeb3DScene implements SceneRuntime {
     return e.a === slot ? e.b : e.a
   }
 
+  /** Forward-only filter (roam=0): keep edges whose other endpoint has a
+   *  strictly higher node id than `slot` — toward younger nodes, matching the
+   *  legacy neuralweb.ts forward rule. Applied on top of any no-U-turn
+   *  exclusion the caller has already done. */
+  private getParamRoam(): boolean {
+    return this.getParam('roam') >= 0.5
+  }
+
+  private forwardOnly(edges: Edge[], slot: number): Edge[] {
+    const myId = this.nodes[slot].id
+    return edges.filter((e) => this.nodes[this.other(e, slot)].id > myId)
+  }
+
   private wireNearest(slot: number, count: number): void {
     const me = this.nodes[slot]
     const cand: { s: number; d: number }[] = []
@@ -518,6 +540,8 @@ export class NeuralWeb3DScene implements SceneRuntime {
     for (let s = 0; s < MAX_NODES; s++) if (this.nodes[s].active) live.push(s)
     if (live.length === 0) return
     const hueSpread = clamp(this.getParam('hue'), 0, 1)
+    const hueBase = clamp(this.getParam('hueBase'), 0, 1)
+    const roam = this.getParamRoam()
     const count = Math.min(live.length, 2 + (hash32(this.injectCounter * 7 + 13) % 3)) // 2..4
     const picked = new Set<number>()
     let attempts = 0
@@ -528,11 +552,11 @@ export class NeuralWeb3DScene implements SceneRuntime {
     }
     let k = 0
     for (const slot of picked) {
-      const edges = this.edgesOf(slot)
+      const edges = roam ? this.edgesOf(slot) : this.forwardOnly(this.edgesOf(slot), slot)
       if (edges.length > 0) {
         const chosen = this.pickEdges(edges, 1, hash32(this.injectCounter * 613 + slot * 31 + k * 7))[0]
         const hh = hash32(this.injectCounter * 977 + k * 49297) / 4294967296
-        const [r, g, b] = hsv2rgb(hh, hueSpread, 1) // hueSpread 0 -> white
+        const [r, g, b] = hsv2rgb(hueBase + hh * hueSpread, hueSpread, 1) // hueSpread 0 -> white
         this.allocPulse(slot, this.other(chosen, slot), chosen, r, g, b, 0)
       }
       k++
@@ -597,7 +621,8 @@ export class NeuralWeb3DScene implements SceneRuntime {
       for (const a of firstOfBucket) if (a.overshoot > overshoot) overshoot = a.overshoot
       if (depth > reach) continue
 
-      const available = this.edgesOf(slot).filter((e) => e !== arrivedEdge)
+      let available = this.edgesOf(slot).filter((e) => e !== arrivedEdge)
+      if (!this.getParamRoam()) available = this.forwardOnly(available, slot)
       if (available.length === 0) continue
       this.eventCounter++
       const seed = hash32(slot * 92821 + this.eventCounter * 977 + depth * 131)
@@ -779,6 +804,8 @@ export class NeuralWeb3DScene implements SceneRuntime {
 
     const glow = clamp(this.getParam('glow'), 0.3, 2)
     const streak = clamp(this.getParam('streak'), 0, 1)
+    const edgeBright = clamp(this.getParam('edgeBright'), 0, 1)
+    const pulseGlow = clamp(this.getParam('pulseGlow'), 0, 2.5)
     const aspect = surface.width / surface.height
     const ax = 1 / Math.max(aspect, 1)
     const ay = Math.min(aspect, 1)
@@ -813,8 +840,10 @@ export class NeuralWeb3DScene implements SceneRuntime {
       if (!pa || !pb) continue
       const rampDim = Math.min(a.ramp, b.ramp)
       const depthDim = 1 - 0.65 * Math.max(pa.depthNorm, pb.depthNorm)
-      const dim = rampDim * depthDim * 0.2 * glow
-      const heat = e.heat * streak * 1.3 * glow * depthDim
+      const dim = rampDim * depthDim * edgeBright * glow
+      // 1.3 was the legacy heat/pulse-glow ratio at the old fixed pulseGlow=1.1;
+      // scale by the same ratio so the trail dims/brightens along with pulseGlow.
+      const heat = e.heat * streak * (pulseGlow * (1.3 / 1.1)) * glow * depthDim
       const r = NODE_R * dim + e.hr * heat
       const g = NODE_G * dim + e.hg * heat
       const bb = NODE_B * dim + e.hb * heat
@@ -865,7 +894,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
       const p = proj(x, y, z)
       if (!p) continue
       const depthDim = 1 - 0.65 * p.depthNorm
-      const k = 1.1 * depthDim * glow
+      const k = pulseGlow * depthDim * glow
       const size = clamp((8 / p.vz) * resScale + 2, 2, 20)
       pushPoint(p.ndcX, p.ndcY, pu.r * k, pu.g * k, pu.bl * k, size)
     }

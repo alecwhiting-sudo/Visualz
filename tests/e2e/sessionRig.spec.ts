@@ -30,7 +30,7 @@ test('knobs and expressions survive switching away and back (per-algorithm memor
   await page.evaluate(() => window.__vizLive!.setParam('freqX', 9))
   const freqYRow = page.locator('.knob').filter({ hasText: 'Y frequency' })
   await freqYRow.locator('input.expr').fill('1 + bass * 11')
-  await expect(freqYRow.locator('em')).toHaveText('ƒ(t)')
+  await expect(freqYRow.locator('em')).toHaveText(/^ƒ\(t\) /)
 
   await handOffTo(page, 'julia')
   // Julia starts from ITS defaults (fresh — never visited before).
@@ -42,7 +42,7 @@ test('knobs and expressions survive switching away and back (per-algorithm memor
   await expect.poll(() => getParam(page, 'freqX')).toBeCloseTo(9, 5)
   const restoredRow = page.locator('.knob').filter({ hasText: 'Y frequency' })
   await expect(restoredRow.locator('input.expr')).toHaveValue('1 + bass * 11')
-  await expect(restoredRow.locator('em')).toHaveText('ƒ(t)')
+  await expect(restoredRow.locator('em')).toHaveText(/^ƒ\(t\) /)
 })
 
 test('session export -> New session -> import round-trips the rig', async ({ page }) => {

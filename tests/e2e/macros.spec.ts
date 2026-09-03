@@ -138,6 +138,6 @@ test('studio knob goes dormant -> engaged when a ctl.N value arrives', async ({ 
   await page.evaluate(() => window.__vizLive!.setInputSignal('ctl.1', 1))
 
   // Engaged: source hint flips to "ctl 1" and the accent macro styling kicks in.
-  await expect(valueEl).toHaveText('ctl 1')
+  await expect(valueEl).toHaveText(/^ctl 1 /)
   await expect(freqXKnob).toHaveClass(/knob-macro/)
 })

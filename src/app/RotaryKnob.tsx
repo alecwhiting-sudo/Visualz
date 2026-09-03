@@ -148,7 +148,12 @@ export function RotaryKnob({
       {/* docs/MACROS.md §5: "ctl N" source hint where a bound row would show
          its expression (the rotary has no expression field of its own, so
          this is the readout's only "what's driving this" text). */}
-      <span className="rotary-knob-value">{macroDriven && !bound ? `ctl ${slot}` : displayValue.toFixed(2)}</span>
+      {/* User request: a driven knob still shows its NUMBER — the "ctl N"
+         source hint prefixes the value instead of replacing it. */}
+      <span className="rotary-knob-value">
+        {macroDriven && !bound ? `ctl ${slot} ` : ''}
+        {displayValue.toFixed(2)}
+      </span>
     </div>
   )
 }

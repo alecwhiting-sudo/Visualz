@@ -3232,7 +3232,13 @@ function Knob({
           {slot !== null && <span className="knob-slot-num">{slot}</span>}
           {schema.label}
         </span>
-        <em>{bound ? 'ƒ(t)' : macroDriven && slot !== null ? `ctl ${slot}` : displayValue.toFixed(2)}</em>
+        {/* User request: a driven param still shows its NUMBER — the source
+           hint (ƒ(t) / ctl N) becomes a prefix instead of replacing the
+           value, so you can always read where every parameter sits. */}
+        <em>
+          {bound ? 'ƒ(t) ' : macroDriven && slot !== null ? `ctl ${slot} ` : ''}
+          {displayValue.toFixed(2)}
+        </em>
       </span>
       <input
         type="range"

@@ -44,7 +44,7 @@ test('placeholders are param-specific and the fx menu applies a working binding'
   // The binding is live: input holds the expression, the row shows the
   // bound marker, and the slider is disabled (expression owns the param).
   await expect(exprInput).toHaveValue('1 + beatPhase * 11')
-  await expect(firstRow.locator('em')).toHaveText('ƒ(t)')
+  await expect(firstRow.locator('em')).toHaveText(/^ƒ\(t\) /)
   await expect(firstRow.locator('input[type=range]')).toBeDisabled()
 
   // The param genuinely moves under the expression (demo signals drive
@@ -98,6 +98,6 @@ test('a low-on-page fx menu clamps on-screen and holds still (user report: jiggl
 
   // And it still works: applying from the clamped menu binds the low param.
   await menu.getByRole('button', { name: /Sweep once per beat/ }).click()
-  await expect(lastRow.locator('em')).toHaveText('ƒ(t)')
+  await expect(lastRow.locator('em')).toHaveText(/^ƒ\(t\) /)
   expect(lastParam.name.length).toBeGreaterThan(0)
 })
