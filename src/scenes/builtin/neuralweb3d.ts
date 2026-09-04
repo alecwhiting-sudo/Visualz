@@ -60,7 +60,7 @@ import { RepulsionOctree } from './neuralweb3dForces'
  *    each injection's base hue toward one driven by the `centroid` signal
  *    (dark/bassy -> warm, bright -> cool); `centroid` defaults to 0 via
  *    SignalBus's missing-signal fallback when nothing publishes it.
- *  - Repulsion at up to `maxNodes` = 2000 uses a Barnes-Hut octree (opening
+ *  - Repulsion at up to `maxNodes` = 1500 uses a Barnes-Hut octree (opening
  *    criterion s/d < 0.6) instead of all-pairs summation — an approximation
  *    of the same force law, not an exact match; goldens reflect this.
  *
@@ -127,7 +127,7 @@ void main() {
 
 // --- Model constants ---------------------------------------------------------
 
-const MAX_NODES = 2000
+const MAX_NODES = 1500
 const MAX_EDGES = MAX_NODES * 8
 const MAX_PULSES = 4096
 const REACH_MAX = 40
@@ -295,7 +295,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
     { name: 'hitDrive', label: 'Hit drive', min: 0, max: 1, default: 0.6 },
     { name: 'pulseGlow', label: 'Pulse glow', min: 0, max: 2.5, default: 1.1 },
     { name: 'edgeBright', label: 'Edge bright', min: 0, max: 1, default: 0.2 },
-    { name: 'maxNodes', label: 'Max nodes', min: 100, max: 2000, default: 600, step: 50 },
+    { name: 'maxNodes', label: 'Max nodes', min: 100, max: 1500, default: 600, step: 50 },
     { name: 'reach', label: 'Reach', min: 0, max: REACH_MAX, default: 14, step: 1 },
     { name: 'zoom', label: 'Zoom', min: 0.4, max: 3, default: 1 },
     { name: 'streak', label: 'Streak', min: 0, max: 1, default: 0.35 },
@@ -765,7 +765,7 @@ export class NeuralWeb3DScene implements SceneRuntime {
     // Barnes-Hut repulsion: build a fresh tree over active nodes (ascending
     // slot order, fixed insertion order — deterministic), then walk it once
     // per node with the s/d < THETA opening criterion. Replaces the old
-    // O(N^2) all-pairs sum so maxNodes can reach MAX_NODES (2000) at
+    // O(N^2) all-pairs sum so maxNodes can reach MAX_NODES (1500) at
     // interactive cost — see neuralweb3dForces.ts.
     let activeN = 0
     for (let i = 0; i < MAX_NODES; i++) {
