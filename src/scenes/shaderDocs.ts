@@ -1092,6 +1092,50 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
       ],
     },
   },
+  swarmalators: {
+    'point-fs': {
+      summary:
+        'Draws each swarmalator agent as a soft round glowing dot. Every agent has a position AND a phase, and the two couple both ways: nearby agents pull each other\'s phase together (or apart), while phase-similar agents attract (or repel) in space — so the swarm reads as drifting clusters of synchronized colour, all computed CPU-side and handed in as position + colour + size per point. Output is premultiplied for the additive (ONE,ONE) blend so overlapping light brightens.',
+      tryThis: [
+        {
+          target: 'float d = length(gl_PointCoord - vec2(0.5));',
+          effect:
+            'distance from the dot centre; divide gl_PointCoord by a larger number (e.g. length(gl_PointCoord*0.8 - 0.4)) to tighten the glow into a harder pinpoint.',
+        },
+        {
+          target: 'float a = smoothstep(0.5, 0.0, d);',
+          effect:
+            'the radial falloff; try smoothstep(0.5, 0.35, d) for a crisp ring-edged dot instead of a soft blob.',
+        },
+        {
+          target: 'outColor = vec4(vColor.rgb * a * vColor.a, 1.0);',
+          effect:
+            'swap for outColor = vec4(vColor.rgb * a * a * vColor.a, 1.0); to square the falloff — hotter cores, darker halos, a more electric spark.',
+        },
+      ],
+    },
+    'line-fs': {
+      summary:
+        "Draws each agent's TRAIL: a short deterministic history of its recent positions, sampled every other simulation sub-step (so it paces with model time, not display rate) and rendered as a tapered screen-space ribbon — brightest and widest near the agent's current position, fading and thinning toward its oldest surviving sample. Colour and taper are computed CPU-side and baked into each vertex; this shader just outputs it.",
+      tryThis: [
+        {
+          target: 'outColor = vColor;',
+          effect:
+            'the whole body — replace with outColor = vec4(vColor.rgb * 2.0, 1.0); to make every trail glow much brighter, closer to the agent dots themselves.',
+        },
+        {
+          target: 'in vec4 vColor;',
+          effect:
+            'carries the CPU-baked taper (colour × age-fade); add if (vColor.a < 0.05) discard; at the top of main to hard-cut the faintest trail tail instead of letting it fade to near-invisible.',
+        },
+        {
+          target: 'out vec4 outColor;',
+          effect:
+            "the stage's single output; add a `uniform float uBoost;` line above it and multiply the result to wire in a live trail-brightness knob (needs a matching setUniform in render()).",
+        },
+      ],
+    },
+  },
   resonance: {
     'render-fs': {
       summary:
