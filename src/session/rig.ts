@@ -30,6 +30,13 @@ export interface SessionRigGlobal {
   handoffFadeSeconds?: number
   macroView?: number
   switchTargetId?: string
+  /** FX chain state (post-processing task): passId -> {paramName: value},
+   * where the param name `'enabled'` doubles as that pass's 0/1 toggle
+   * (mirrors `Engine.setFxParam`'s own routing). Engine-level, not
+   * per-scene, so it lives here rather than in a `SceneRigEntry`. Omitted
+   * entirely when no pass is engaged — a rig without this field loads with
+   * every pass disabled, same as a fresh `FxChain`'s own default state. */
+  fx?: Record<string, Record<string, number>>
 }
 
 export interface SessionRig {
@@ -66,6 +73,23 @@ function stringRecord(v: unknown): Record<string, string> | undefined {
   const out: Record<string, string> = {}
   for (const [k, val] of Object.entries(v)) {
     if (typeof val === 'string') out[k] = val
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+/** Tolerant parse of `SessionRigGlobal.fx`: any non-record pass entry, or
+ * one whose params sanitize to nothing, is dropped rather than failing the
+ * whole file — same tolerance policy as every other field here. Pass ids
+ * are NOT validated against a known list (this module stays registry-
+ * decoupled, same as `scenes` above uses `knownSceneIds` only for scene
+ * ids) — an id the live `FxChain` doesn't recognize is a harmless no-op at
+ * apply time (`FxChain.setParam`'s own tolerant routing). */
+function fxRecord(v: unknown): Record<string, Record<string, number>> | undefined {
+  if (!isRecord(v)) return undefined
+  const out: Record<string, Record<string, number>> = {}
+  for (const [passId, paramsRaw] of Object.entries(v)) {
+    const params = numberRecord(paramsRaw)
+    if (params) out[passId] = params
   }
   return Object.keys(out).length ? out : undefined
 }
@@ -155,6 +179,8 @@ export function parseRig(text: string, knownSceneIds: string[]): ParsedRig {
   if (typeof g.switchTargetId === 'string' && known.has(g.switchTargetId)) {
     global.switchTargetId = g.switchTargetId
   }
+  const fx = fxRecord(g.fx)
+  if (fx) global.fx = fx
 
   return {
     rig: {

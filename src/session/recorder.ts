@@ -80,6 +80,14 @@ export class SessionRecorder {
     this.events.push({ frame: this.relative(frame), type: 'shader', key, source })
   }
 
+  /** FX chain param/enable change (post-processing task). `name === 'enabled'`
+   * is the pass's 0/1 toggle, routed through the same event as every other
+   * fx param rather than a separate event type — one less case for the
+   * player/engine to special-case. */
+  recordFxParam(frame: number, passId: string, name: string, value: number): void {
+    this.events.push({ frame: this.relative(frame), type: 'fxParam', passId, name, value })
+  }
+
   /** Scene handoff (docs/HANDOFF.md §5): records only the target scene id —
    * the handoff snapshot itself is never serialized (invariant I7); it is
    * recomputed on replay by re-capturing A's re-rendered frame. */

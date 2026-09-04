@@ -131,6 +131,22 @@ timeline editor is a fifth frontend writing scheduled events — no new architec
 - Slower-than-realtime is fine; dropped frames are structurally impossible.
 - Determinism is CI-tested by hashing rendered frames for a fixture session.
 
+### 3.6b `fx/` — post-processing chain (VJ-style secondary transformers)
+- A fixed, ordered stack of **stateless** fullscreen passes (kaleido, mirror, rgbshift,
+  pixelate, posterize, zoompulse) applied to the scene's rendered frame: scene → offscreen
+  target → ping-pong through enabled passes → output surface. With nothing enabled the
+  chain is fully bypassed (scene renders straight to the surface — zero cost, byte-identical
+  to pre-FX output, so scene goldens are unaffected).
+- Passes are pure functions of (input texture, params, frame time): no mutable state, no
+  real time/randomness — so the whole pipeline keeps render purity and preview = export
+  (the export worker drives the same engine path, FX included).
+- FX params/enables ride the session-recording seam as `fxParam` events (baselined at
+  record start, replayed in order); rigs capture/restore chain state. Engine rebuilds
+  (scene/format switch) re-apply it.
+- Trade-off owned: engaging any pass routes the scene through a single-sample LINEAR
+  target, losing canvas MSAA. Stateful passes (feedback/echo) are v2: they need
+  update()-owned state per the Scene Contract before they can exist here.
+
 ### 3.7 `gpu/` — the thin layer
 Context creation, program compile with mapped error lines, VBO/VAO helpers, render targets +
 ping-pong pairs, fullscreen-triangle pass, instanced draw, GPGPU-via-texture utilities for
@@ -157,6 +173,7 @@ src/
   scenes/     types.ts  families/{geometry,particles}/  builtin/
   mapping/    mappings.ts  frontends/{keyboard,touch,midi,audioEvents}.ts
   session/    recorder.ts  player.ts
+  fx/         types.ts  chain.ts  passes/
   export/     worker.ts  encode.ts
   app/        React shell: panels, knobs, meters, editors
   testing/    hooks.ts (window.__viz test harness)

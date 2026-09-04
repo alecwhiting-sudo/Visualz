@@ -104,8 +104,21 @@ export class FloatTarget implements RenderSurface {
    * `initial` must be `width*height*4` floats (RGBA per texel), or omitted
    * for zeros — Float32Array-only, so it's invalid (throws) when `format` is
    * 'rgba8'. `format` defaults to 'rgba32f' (existing callers unchanged).
+   * `filter` defaults to 'nearest' (existing callers unchanged) — GPGPU state
+   * textures are read back with `texelFetch`, never sampled/filtered, so
+   * NEAREST is correct for every particle/sim use. Pass 'linear' only for a
+   * target that's genuinely resampled by a fragment shader's `texture()`
+   * call at a DIFFERENT UV than it was written at (e.g. the FX chain's
+   * offscreen targets — kaleido/zoompulse resample at warped coordinates,
+   * where NEAREST would look blocky).
    */
-  constructor(gpu: Gpu, size: FloatTargetSize, initial?: Float32Array, format: FloatTargetFormat = 'rgba32f') {
+  constructor(
+    gpu: Gpu,
+    size: FloatTargetSize,
+    initial?: Float32Array,
+    format: FloatTargetFormat = 'rgba32f',
+    filter: 'nearest' | 'linear' = 'nearest',
+  ) {
     const gl = gpu.gl
     this.gl = gl
     const { width, height } = typeof size === 'number' ? { width: size, height: size } : size
@@ -117,11 +130,12 @@ export class FloatTarget implements RenderSurface {
       throw new Error('FloatTarget: `initial` is Float32Array-only and invalid with format "rgba8"')
     }
 
+    const glFilter = filter === 'linear' ? gl.LINEAR : gl.NEAREST
     const tex = gl.createTexture()
     if (!tex) throw new Error('Failed to create GPGPU state texture')
     gl.bindTexture(gl.TEXTURE_2D, tex)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, glFilter)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, glFilter)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
     if (format === 'rgba8') {

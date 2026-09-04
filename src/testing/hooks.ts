@@ -96,6 +96,13 @@ export interface VizTestApi {
    * `Engine.setSceneImage`, so specs can exercise the real-image path without
    * a fixture file crossing the Playwright/page boundary. */
   setSceneImage(width: number, height: number, base64: string): void
+  /** FX chain (post-processing task): set an FX pass param, or its `enabled`
+   * flag (name `'enabled'`, 0/1) — recorded/replayed exactly like a scene
+   * param via `Engine.setFxParam`. */
+  setFxParam(passId: string, name: string, value: number): void
+  /** Current value of FX pass `passId`'s param `name` (`'enabled'` reads its
+   * 0/1 toggle) — `Engine.getFxParam`. */
+  getFxParam(passId: string, name: string): number
 }
 
 declare global {
@@ -280,6 +287,8 @@ export function bootTestMode(root: HTMLElement): void {
     setSceneImage: (width, height, base64) => {
       engine.setSceneImage({ width, height, data: decodeImageBase64(base64) })
     },
+    setFxParam: (passId, name, value) => engine.setFxParam(passId, name, value),
+    getFxParam: (passId, name) => engine.getFxParam(passId, name),
     makeFileSessionDoc: (seconds) => {
       const pcm = synthesizeKickTrackPCM(seconds)
       const timeline = analyzeAudio(pcm, KICK_SAMPLE_RATE)

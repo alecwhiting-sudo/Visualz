@@ -12,7 +12,7 @@ import type { ExportCodec } from '../export/encode'
 import { InfoPopover } from './InfoPopover'
 import { useParamBinding } from './paramBinding'
 import { placeholderFor, suggestionsFor } from './exprSuggest'
-import { applySceneEntry, captureSceneEntry } from './sceneMemory'
+import { applyFxRig, applySceneEntry, captureFxRig, captureSceneEntry } from './sceneMemory'
 import { classifyFile, parseRig, serializeRig, type SceneRigEntry, type SessionRig } from '../session/rig'
 import type { ParamSchema } from '../scenes/types'
 import { CANVAS_FORMATS, exportSize, liveSize, type CanvasFormat } from '../core/format'
@@ -356,10 +356,11 @@ type ViewMode = 'studio' | 'full'
  * manage takes -> deep-edit code"): INPUTS | PERFORM | SESSION | CODE — but
  * PERFORM stays the DEFAULT active tab (`activeTab` state below) regardless
  * of its position, since it's the home surface casual use never leaves. */
-type StudioTab = 'scene' | 'session' | 'inputs' | 'code'
+type StudioTab = 'scene' | 'fx' | 'session' | 'inputs' | 'code'
 const STUDIO_TABS: Array<[StudioTab, string]> = [
   ['inputs', 'INPUTS'],
   ['scene', 'PERFORM'],
+  ['fx', 'FX'],
   ['session', 'SESSION'],
   ['code', 'CODE'],
 ]
@@ -425,6 +426,29 @@ const TAB_HELP: Record<StudioTab, { title: string; body: ReactNode }> = {
           <li>
             <b>Blended scenes</b> also add <b>Mix</b>, <b>Blend mode</b>, and A / B / Fader knob views.
           </li>
+        </ul>
+      </>
+    ),
+  },
+  fx: {
+    title: 'FX',
+    body: (
+      <>
+        <p>Stack post-processing passes over whatever the scene draws.</p>
+        <ul>
+          <li>
+            Each row is one pass, in a fixed order — tick it on, then drag its sliders. Passes
+            compose top to bottom: the output of one feeds the next.
+          </li>
+          <li>
+            <b>Kaleido</b> mirrors the frame into N pie-slice segments. <b>Mirror</b> folds it into
+            quadrant / left-right / top-bottom symmetry. <b>RGB Shift</b> splits the color channels
+            apart for a chromatic-aberration glitch. <b>Pixelate</b> mosaics it into square cells.{' '}
+            <b>Posterize</b> hard-quantizes brightness into stepped, Ikeda-ish bands. <b>Zoom Pulse</b>{' '}
+            scales from center for a punch effect (its plain slider goes to 0.5–1.5; a future update
+            may add ƒx expression binding here like the scene knobs have).
+          </li>
+          <li>With nothing enabled the chain costs nothing — the scene renders exactly as before.</li>
         </ul>
       </>
     ),
@@ -674,6 +698,10 @@ export function App() {
   // `engine.scene.getParam` getter (not a state mutation of the scene) means
   // the poll never fights a user's in-progress drag on an unbound control.
   const [paramValues, setParamValues] = useState<Record<string, number>>({})
+  // FX tab (post-processing task): `engine.fx` is a plain mutable object, not
+  // React state, so bumping this counter after every setFxParam call is what
+  // forces the FX panel to re-render and show the new value/enabled state.
+  const [fxVersion, setFxVersion] = useState(0)
   const [trackName, setTrackName] = useState<string | null>(null)
   const [recording, setRecording] = useState(false)
   // Three-state performance model (rehearsal/armed/performing — see
@@ -981,11 +1009,15 @@ export function App() {
     for (const [id, bank] of Object.entries(framesBySceneRef.current)) {
       if (bank.some((f) => f !== null)) scenes[id] = { ...(scenes[id] ?? {}), frames: bank }
     }
+    // FX chain state (post-processing task): engine-level, captured
+    // alongside the other globals — see captureFxRig's doc comment.
+    const e = engineRef.current
+    const fx = e ? captureFxRig(e) : undefined
     return {
       kind: 'session',
       version: 1,
       scenes,
-      global: { transitionSpeed, handoffFadeSeconds, macroView, switchTargetId },
+      global: { transitionSpeed, handoffFadeSeconds, macroView, switchTargetId, ...(fx ? { fx } : {}) },
     }
   }
   const buildRigRef = useRef(buildRig)
@@ -1023,6 +1055,10 @@ export function App() {
     if (rig.global.handoffFadeSeconds !== undefined) setHandoffFadeSeconds(rig.global.handoffFadeSeconds)
     if (rig.global.macroView !== undefined) setMacroView(rig.global.macroView)
     if (rig.global.switchTargetId) setSwitchTargetId(rig.global.switchTargetId)
+    // FX chain state (post-processing task): applyFxRig always visits every
+    // built-in pass, so a rig with no `fx` field correctly resets the chain
+    // to all-disabled rather than leaving whatever was engaged before load.
+    applyFxRig(e, rig.global.fx)
     resetCurrentScene()
     applyMemoryFor(e.scene.meta.id)
     setSessionNote(warnings.length ? `Session loaded — ${warnings.join(' · ')}` : 'Session loaded')
@@ -1039,6 +1075,10 @@ export function App() {
     setTransitionSpeed(1)
     setHandoffFadeSeconds(0.1)
     setMacroView(0)
+    // FX chain (post-processing task): "New session" resets every algorithm
+    // to defaults — an engaged chain left over from before is the same kind
+    // of stale state resetCurrentScene() clears for the scene's own params.
+    if (e) applyFxRig(e, undefined)
     resetCurrentScene()
     try {
       localStorage.removeItem(SESSION_STORAGE_KEY)
@@ -1415,6 +1455,11 @@ export function App() {
     // transport to the audio position on start).
     // Session rig: remember the outgoing scene before the teardown.
     captureCurrentScene()
+    // FX chain (post-processing task): engine-level state, lost along with
+    // the whole Engine object this rebuild discards below — capture before
+    // teardown, re-apply once the new engine (and its own fresh FxChain)
+    // is attached (same reasoning/pattern as the scene rig capture above).
+    const fx = engineRef.current ? captureFxRig(engineRef.current) : undefined
     const audio = engineRef.current?.audio
     detachLiveEngine()
     engineRef.current?.dispose({ keepAudio: true })
@@ -1435,6 +1480,7 @@ export function App() {
     // Session rig: restore how the user left this algorithm (no-op if
     // untouched this session).
     applyMemoryFor(id)
+    applyFxRig(newEngine, fx)
   }
 
   /**
@@ -1508,6 +1554,11 @@ export function App() {
     // teardown, or applyMemoryFor below restores a stale entry and the
     // user's positions since the last capture silently reset.
     captureCurrentScene()
+    // FX chain (post-processing task): same capture-before-teardown /
+    // re-apply-after-attach as onSceneChange above — a format switch
+    // rebuilds the whole Engine (fresh FxChain, all disabled) exactly like
+    // a scene change does.
+    const fx = engineRef.current ? captureFxRig(engineRef.current) : undefined
     const audio = engineRef.current?.audio
     detachLiveEngine()
     engineRef.current?.dispose({ keepAudio: true })
@@ -1519,6 +1570,7 @@ export function App() {
     }
     attachLiveEngine(newEngine)
     applyMemoryFor(sceneId)
+    applyFxRig(newEngine, fx)
   }
 
   // Hotkey (docs/HANDOFF.md §6): "x", handled directly in App (not through the
@@ -1710,6 +1762,12 @@ export function App() {
     const mismatchedAudioName =
       syncAudio && liveFileName !== null && liveFileName !== docAudioName ? liveFileName : null
 
+    // FX chain (post-processing task): captured before the live engine is
+    // disposed below, re-applied once `restoreLive` rebuilds a fresh live
+    // Engine (own fresh FxChain) at the end of the replay round trip — same
+    // capture-before-teardown pattern as `liveAudio` just above.
+    const liveFx = engineRef.current ? captureFxRig(engineRef.current) : undefined
+
     // Stop and dispose the live engine before handing the canvas to a
     // render-mode replay engine.
     detachLiveEngine()
@@ -1786,6 +1844,11 @@ export function App() {
       // switch-away would capture those defaults and erase the remembered
       // entry for good. Restore the rig the moment the live engine is back.
       applyMemoryFor(newEngine.scene.meta.id)
+      // FX chain: same restore, using the state captured before this
+      // replay's own teardown above (`liveFx`) — the replay engine itself
+      // never touches FX (post-processing is applied on live playback and
+      // the "preview = export" chain, not woven into replay sessions here).
+      applyFxRig(newEngine, liveFx)
     }
     replayCancelRef.current = restoreLive
 
@@ -2093,6 +2156,60 @@ export function App() {
                   transitionSpeed={transitionSpeed}
                   onTransitionSpeedChange={setTransitionSpeed}
                 />
+              </section>
+            )}
+          </div>
+
+          {/* FX: post-processing chain (`engine.fx`, `src/fx/`) — fixed-order
+             built-in passes, each an enable toggle + plain sliders. v1 note:
+             these are NOT wired through `useParamBinding` (that hook targets
+             SCENE params via engine.setBinding/getBinding), so there is no
+             ƒx expression-binding box here yet, unlike the PERFORM knobs —
+             plain sliders only, per the task's accepted v1 latitude. */}
+          <div className="panel-tab-content" role="tabpanel" hidden={activeTab !== 'fx'}>
+            {engine && (
+              <section data-fx-version={fxVersion}>
+                <div className="scene-params-header">
+                  <h2>FX Chain</h2>
+                </div>
+                {engine.fx.passes.map((pass) => (
+                  <div className="fx-pass" key={pass.meta.id}>
+                    <label className="knob fx-pass-toggle">
+                      <span>
+                        <span className="knob-label">{pass.meta.name}</span>
+                        <em>{engine.fx.isEnabled(pass.meta.id) ? 'on' : 'off'}</em>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={engine.fx.isEnabled(pass.meta.id)}
+                        onChange={(ev) => {
+                          engine.setFxParam(pass.meta.id, 'enabled', ev.target.checked ? 1 : 0)
+                          setFxVersion((v) => v + 1)
+                        }}
+                      />
+                    </label>
+                    {pass.params.map((p) => (
+                      <label className="knob" key={p.name}>
+                        <span>
+                          <span className="knob-label">{p.label}</span>
+                          <em>{engine.fx.getParam(pass.meta.id, p.name).toFixed(2)}</em>
+                        </span>
+                        <input
+                          type="range"
+                          min={p.min}
+                          max={p.max}
+                          step={p.step ?? 0.01}
+                          value={engine.fx.getParam(pass.meta.id, p.name)}
+                          disabled={!engine.fx.isEnabled(pass.meta.id)}
+                          onChange={(ev) => {
+                            engine.setFxParam(pass.meta.id, p.name, Number(ev.target.value))
+                            setFxVersion((v) => v + 1)
+                          }}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                ))}
               </section>
             )}
           </div>

@@ -110,3 +110,47 @@ export function applySceneEntry(engine: Engine, entry: SceneRigEntry): string[] 
   }
   return notes
 }
+
+/**
+ * FX chain state (post-processing task): engine-level, not per-scene, so it
+ * lives in `SessionRigGlobal.fx` rather than a `SceneRigEntry` — captured
+ * and applied alongside the other globals (transitionSpeed, macroView, …)
+ * in App.tsx's `buildRig`/`applyRig`. Sparse-absolute like `captureSceneEntry`
+ * above: a pass is included only when engaged or holding a non-default
+ * param, so an untouched chain costs nothing in the saved file.
+ */
+export function captureFxRig(engine: Engine): Record<string, Record<string, number>> | undefined {
+  const fx: Record<string, Record<string, number>> = {}
+  for (const pass of engine.fx.passes) {
+    const enabled = engine.fx.isEnabled(pass.meta.id)
+    const params: Record<string, number> = {}
+    for (const p of pass.params) {
+      const v = engine.fx.getParam(pass.meta.id, p.name)
+      if (Math.abs(v - p.default) > PARAM_EPS) params[p.name] = v
+    }
+    if (enabled || Object.keys(params).length) {
+      fx[pass.meta.id] = { ...params, enabled: enabled ? 1 : 0 }
+    }
+  }
+  return Object.keys(fx).length ? fx : undefined
+}
+
+/**
+ * Applies FX rig state through the recorded seam (`engine.setFxParam`), same
+ * reasoning as `applySceneEntry` above — a mid-take restore lands in the
+ * event log as ordinary recorded `fxParam` events. ALWAYS visits every
+ * built-in pass (not just ones present in `fx`) so this doubles as the
+ * reset path: a rig with no `fx` field (or `undefined`, e.g. `newSession`)
+ * puts every pass back to disabled/defaults, matching `FxChain`'s own
+ * cold-start state (version tolerance — an old rig file loads with the
+ * chain fully disabled).
+ */
+export function applyFxRig(engine: Engine, fx: Record<string, Record<string, number>> | undefined): void {
+  for (const pass of engine.fx.passes) {
+    const entry = fx?.[pass.meta.id]
+    engine.setFxParam(pass.meta.id, 'enabled', entry?.enabled ?? 0)
+    for (const p of pass.params) {
+      engine.setFxParam(pass.meta.id, p.name, entry?.[p.name] ?? p.default)
+    }
+  }
+}

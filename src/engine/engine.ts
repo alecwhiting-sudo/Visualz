@@ -2,7 +2,8 @@ import { Transport, type TransportMode } from '../core/transport'
 import { SignalBus } from '../core/signals'
 import { formatForSize } from '../core/format'
 import { Gpu } from '../gpu/context'
-import { DefaultSurface, FullscreenPass } from '../gpu/targets'
+import { DefaultSurface, FloatTarget, FullscreenPass } from '../gpu/targets'
+import { FxChain } from '../fx/chain'
 import { AudioEngine, publishDemoSignals } from '../audio/engine'
 import { AudioEventDetector, type AudioEventResult } from '../audio/events'
 import { sampleTimeline, serializeTimeline, parseTimeline } from '../audio/timeline'
@@ -128,6 +129,19 @@ export class Engine {
    * combiner scene yet), but scenes read viewport/aspect from it, not `gpu`. */
   private readonly surface: DefaultSurface
 
+  /** Post-processing FX chain (VJ-style secondary transformers over the
+   * scene's output — `src/fx/`): engine-level, not scene-level, so it
+   * persists across scene switches/handoffs. Disabled (bypass) by default —
+   * see `sceneTarget`'s doc comment for the render-path split. */
+  readonly fx = new FxChain()
+  /** Offscreen target the scene renders into ONLY while the fx chain has at
+   * least one enabled pass (`fx.hasEnabled`); lazily (re)sized to the canvas
+   * in `updateAndRender`. When no pass is enabled the scene renders straight
+   * to `this.surface` as it always has — the bypass path costs nothing and
+   * changes zero pixels, which is what keeps every pre-existing scene golden
+   * byte-identical (task requirement). */
+  private sceneTarget: FloatTarget | null = null
+
   private raf = 0
   private running = false
   private bindings = new Map<string, Binding>()
@@ -224,6 +238,9 @@ export class Engine {
     setParam: (name, value) => this.scene.setParam(name, value),
     setBinding: (param, src) => this.setBinding(param, src),
     clearBinding: (param) => this.clearBinding(param),
+    // Straight to the chain, bypassing this.setFxParam (and thus recording)
+    // — same reasoning as setParam/setBinding above.
+    setFxParam: (passId, name, value) => this.fx.setParam(passId, name, value),
     // Straight to the scene, bypassing this.setShaderSource (and thus
     // recording) — same reasoning as setParam above (mirrors setBinding's
     // reuse pattern in the comment on this field). A compile error on replay
@@ -259,6 +276,7 @@ export class Engine {
     // list, and cheap insurance against a future refactor that reorders fields.
     this.macros.reset()
     scene.init(this.gpu, opts.seed)
+    this.fx.init(this.gpu)
   }
 
   /** Live mode: start the rAF loop. */
@@ -431,6 +449,23 @@ export class Engine {
 
   getBinding(param: string): string | undefined {
     return this.bindings.get(param)?.src
+  }
+
+  /**
+   * FX chain param/enable change (post-processing task): `name === 'enabled'`
+   * toggles the pass, anything else sets one of its own params. Recorded and
+   * replayed exactly like `setParam` (its scene-param twin) via a namespaced
+   * `fxParam` session event, so a session recorded with FX passes engaged
+   * replays with them engaged identically.
+   */
+  setFxParam(passId: string, name: string, value: number): void {
+    if (this.recorder) this.recorder.recordFxParam(this.transport.frame, passId, name, value)
+    this.fx.setParam(passId, name, value)
+    this.controlsDirty = true
+  }
+
+  getFxParam(passId: string, name: string): number {
+    return this.fx.getParam(passId, name)
   }
 
   /**
@@ -796,6 +831,23 @@ export class Engine {
         this.recorder.recordInputSignal(this.transport.frame, name, value)
       }
     }
+    // FX chain state (post-processing task): baseline every pass's enabled
+    // flag + param values as frame-0 fxParam events, same reasoning as
+    // BASELINED_SIGNALS above — a chain engaged BEFORE arming (e.g. kaleido
+    // already on) is UI-mode state that shapes the whole take and must
+    // replay identically from frame one, not fall back to "all disabled"
+    // until the first in-take tweak.
+    for (const pass of this.fx.passes) {
+      this.recorder.recordFxParam(this.transport.frame, pass.meta.id, 'enabled', this.fx.isEnabled(pass.meta.id) ? 1 : 0)
+      for (const param of pass.params) {
+        this.recorder.recordFxParam(
+          this.transport.frame,
+          pass.meta.id,
+          param.name,
+          this.fx.getParam(pass.meta.id, param.name),
+        )
+      }
+    }
   }
 
   /** Stops recording and returns the finished session doc, or null if nothing was recording. */
@@ -840,6 +892,13 @@ export class Engine {
     // A dissolve overlay in flight belongs to the pre-load live state, not
     // the session being replayed — replayed switch events arm their own.
     this.clearHandoffFade()
+    // FX chain (post-processing task): reset to all-disabled/defaults before
+    // replay applies whatever `fxParam` events the doc carries — version
+    // tolerance for docs recorded before this feature existed (they carry no
+    // fxParam events at all, so the reset state is the final state), and so
+    // a chain left engaged from PRE-load live editing doesn't leak into the
+    // replay.
+    this.fx.reset()
 
     this.sessionTimeline = null
     if (doc.audio.kind === 'file') {
@@ -942,6 +1001,9 @@ export class Engine {
     if (this.fadeProgram) this.gpu.gl.deleteProgram(this.fadeProgram)
     this.fadePass?.dispose()
     this.scene.dispose()
+    this.fx.dispose()
+    this.sceneTarget?.dispose()
+    this.sceneTarget = null
   }
 
   /**
@@ -1081,7 +1143,30 @@ export class Engine {
     // transport is frozen, and scenes read params at render time so the
     // control change is still visible.
     if (!opts?.skipSceneUpdate) this.scene.update(ctx)
-    this.scene.render(ctx, this.surface)
+    // FX bypass (post-processing task, REQUIRED): with no pass enabled the
+    // scene renders straight to the real surface, byte-identical to the
+    // pre-FX code path — every existing scene golden depends on this. Only
+    // when at least one pass is enabled does the scene render into an
+    // offscreen target first so the chain has a texture to process.
+    if (this.fx.hasEnabled) {
+      const w = this.gpu.width
+      const h = this.gpu.height
+      if (!this.sceneTarget || this.sceneTarget.width !== w || this.sceneTarget.height !== h) {
+        this.sceneTarget?.dispose()
+        // LINEAR filtering (post-processing review): the FX chain resamples
+        // this target at warped coordinates (kaleido/zoompulse), where
+        // NEAREST looks blocky. MSAA is lost on this path either way — the
+        // scene renders into an offscreen single-sample target instead of
+        // the (antialiased) canvas default framebuffer whenever FX is
+        // engaged; that tradeoff is inherent to routing through a texture at
+        // all and isn't addressed here.
+        this.sceneTarget = new FloatTarget(this.gpu, { width: w, height: h }, undefined, 'rgba8', 'linear')
+      }
+      this.scene.render(ctx, this.sceneTarget)
+      this.fx.render(this.gpu, this.sceneTarget, this.surface, frame.time)
+    } else {
+      this.scene.render(ctx, this.surface)
+    }
     this.renderHandoffFade(frame.time)
   }
 }

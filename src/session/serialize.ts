@@ -20,7 +20,7 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
 }
 
-const KNOWN_EVENT_TYPES = new Set(['input', 'inputSignal', 'param', 'binding', 'shader', 'switch'])
+const KNOWN_EVENT_TYPES = new Set(['input', 'inputSignal', 'param', 'binding', 'shader', 'switch', 'fxParam'])
 const MAX_SHADER_SOURCE_LENGTH = 100_000
 /** Photo Swarm task: caps `scene.image`'s pixel count (width*height), keeping
  * the base64 snapshot bounded (~256KB raw at the ceiling) in every session doc. */
@@ -195,6 +195,17 @@ export function parseSession(json: string): SessionDoc {
         }
         if ((e.source as string).length > MAX_SHADER_SOURCE_LENGTH) {
           throw new Error(`Session events[${i}].source exceeds max length (${MAX_SHADER_SOURCE_LENGTH})`)
+        }
+        break
+      case 'fxParam':
+        if (typeof e.passId !== 'string') {
+          throw new Error(`Session events[${i}].passId must be a string`)
+        }
+        if (typeof e.name !== 'string') {
+          throw new Error(`Session events[${i}].name must be a string`)
+        }
+        if (!isFiniteNumber(e.value)) {
+          throw new Error(`Session events[${i}].value must be a finite number`)
         }
         break
       case 'switch':

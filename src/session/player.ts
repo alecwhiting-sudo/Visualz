@@ -12,6 +12,9 @@ export interface PlayerTarget {
   setParam(name: string, value: number): void
   setBinding(param: string, src: string): void
   clearBinding(param: string): void
+  /** FX chain param/enable change (post-processing task), routed straight to
+   * `FxChain.setParam` — bypasses recording, same reasoning as `setParam`. */
+  setFxParam(passId: string, name: string, value: number): void
   /** Code-layer hot-recompile (ARCHITECTURE.md §3.3). Routed straight to the
    * scene, bypassing recording — see engine.ts's `playerTarget`. A compile
    * error here means the doc is corrupt (it was recorded with a compiling
@@ -66,6 +69,9 @@ export class SessionPlayer {
           break
         case 'switch':
           target.switchScene(event.toScene)
+          break
+        case 'fxParam':
+          target.setFxParam(event.passId, event.name, event.value)
           break
       }
       this.cursor++

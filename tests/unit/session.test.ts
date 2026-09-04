@@ -43,6 +43,7 @@ function fakeTarget() {
     clearBinding: (param) => calls.push({ fn: 'clearBinding', args: [param] }),
     setShaderSource: (key, source) => calls.push({ fn: 'setShaderSource', args: [key, source] }),
     switchScene: (id) => calls.push({ fn: 'switchScene', args: [id] }),
+    setFxParam: (passId, name, value) => calls.push({ fn: 'setFxParam', args: [passId, name, value] }),
   }
   return { target, calls }
 }
@@ -330,6 +331,37 @@ describe('serializeSession / parseSession round-trip', () => {
     ])
     expect(parseSession(serializeSession(doc))).toEqual(doc)
   })
+
+  it('12d) round-trips a doc with fxParam events (post-processing task)', () => {
+    const doc = docWithEvents([
+      { frame: 0, type: 'fxParam', passId: 'kaleido', name: 'enabled', value: 1 },
+      { frame: 0, type: 'fxParam', passId: 'kaleido', name: 'segments', value: 8 },
+      { frame: 2, type: 'fxParam', passId: 'kaleido', name: 'enabled', value: 0 },
+    ])
+    expect(parseSession(serializeSession(doc))).toEqual(doc)
+  })
+
+  it('12e) record -> serializeSession -> parseSession -> replay round-trips an fxParam event end to end (regression: a doc with a recorded fxParam event must survive a real save/load, not just a hand-built doc handed straight to loadSession)', () => {
+    const recorder = new SessionRecorder(baseSnapshot())
+    recorder.recordFxParam(0, 'kaleido', 'enabled', 1)
+    recorder.recordFxParam(0, 'kaleido', 'segments', 8)
+    const doc = recorder.finish(1)
+
+    // The regression this guards: startRecording() baselines fxParam events
+    // into every take, so any bug that made parseSession reject them would
+    // break loading EVERY saved take, not just ones that touch FX.
+    const parsed = parseSession(serializeSession(doc))
+    expect(parsed).toEqual(doc)
+
+    const player = new SessionPlayer(parsed)
+    const { target, calls } = fakeTarget()
+    player.applyUpTo(0, target)
+    expect(player.done).toBe(true)
+    expect(calls).toEqual([
+      { fn: 'setFxParam', args: ['kaleido', 'enabled', 1] },
+      { fn: 'setFxParam', args: ['kaleido', 'segments', 8] },
+    ])
+  })
 })
 
 describe('parseSession validation', () => {
@@ -354,6 +386,19 @@ describe('parseSession validation', () => {
   it('16) rejects an unknown event type', () => {
     const doc = { ...docWithEvents([]), events: [{ frame: 0, type: 'bogus' }] }
     expect(() => parseSession(JSON.stringify(doc))).toThrow(/unknown event type/i)
+  })
+
+  it('16b) rejects an fxParam event with a non-string passId', () => {
+    const doc = { ...docWithEvents([]), events: [{ frame: 0, type: 'fxParam', passId: 5, name: 'enabled', value: 1 }] }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/passId/i)
+  })
+
+  it('16c) rejects an fxParam event with a non-finite value', () => {
+    const doc = {
+      ...docWithEvents([]),
+      events: [{ frame: 0, type: 'fxParam', passId: 'kaleido', name: 'segments', value: Number.NaN }],
+    }
+    expect(() => parseSession(JSON.stringify(doc))).toThrow(/value/i)
   })
 
   it('17) rejects a non-finite seed', () => {

@@ -19,6 +19,7 @@ export type SessionEvent =
   | { frame: number; type: 'binding'; param: string; src: string | null } // null = cleared
   | { frame: number; type: 'shader'; key: string; source: string } // code-layer hot-recompile
   | { frame: number; type: 'switch'; toScene: string } // scene handoff (docs/HANDOFF.md)
+  | { frame: number; type: 'fxParam'; passId: string; name: string; value: number } // FX chain param (name 'enabled' = 0/1 toggle)
 
 /**
  * `demo` sessions drive signals from `publishDemoSignals`/the live detector, same
