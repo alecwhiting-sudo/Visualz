@@ -1120,4 +1120,69 @@ export const SHADER_DOCS: Record<string, Record<string, ShaderDocEntry>> = {
       ],
     },
   },
+  fluidink: {
+    'render-fs': {
+      summary:
+        'The whole simulation (velocity, pressure, dye) lives in `update()` — this shader just looks up the dye colour at each pixel and tone-maps it, so glowing ink never blows out to flat white the way raw colour values would. It samples straight from the dye texture with no cropping: the simulation grid is already shaped to match the screen.',
+      tryThis: [
+        {
+          target: 'vec3 col = 1.0 - exp(-dye * uExposure);',
+          effect:
+            'the tone-map curve — try `dye * uExposure` alone (no exp) for a harsher, more clipped look, or square `col` afterwards for punchier contrast between faint wisps and bright cores.',
+        },
+        {
+          target: 'vec2 uv = gl_FragCoord.xy / uRes;',
+          effect:
+            'the UV lookup — scale it about the centre (e.g. `(uv-0.5)*0.8+0.5`) for a zoomed-in crop of the dye field instead of the full simulation.',
+        },
+        {
+          target: 'col = mix(vec3(luma), col, 1.35);',
+          effect:
+            'the saturation lift — raise 1.35 higher for neon-vivid ink, or drop below 1.0 to desaturate mid-density regions toward grey.',
+        },
+      ],
+    },
+    'force-fs': {
+      summary:
+        'Two forces stir the fluid every step: vorticity confinement (this scene\'s "swirl" knob) measures how much the velocity field is already curling and pushes harder in that direction, which is what keeps ink curling into vortices instead of smoothing into a flat drift; and an ambient curl-noise wind field ("wind" knob) that churns the whole tank, scrolling slowly over model time. Bass-hit splats add a third, momentary radial push.',
+      tryThis: [
+        {
+          target: 'vec2 vort = vec2(N.y * wC, -N.x * wC) * uSwirl;',
+          effect:
+            'the confinement force itself — negate it (drop the minus, i.e. swap the signs) to spin vortices the opposite handedness, or multiply by an extra `wC` for confinement that gets dramatically stronger in already-spinny regions.',
+        },
+        {
+          target: 'vec2 p = vec2(uv.x * uAspect, uv.y) * 3.0 + vec2(uSimTime * 0.05, -uSimTime * 0.035);',
+          effect:
+            'the ambient wind field\'s scale and drift — raise `3.0` for smaller, busier eddies, or speed up the `uSimTime *` terms for a faster-scrolling current.',
+        },
+        {
+          target: 'float fall = exp(-r2 / (uSplatRadius[i]*uSplatRadius[i]));',
+          effect:
+            'the splat force falloff — divide `r2` by a smaller denominator for a tighter, punchier kick, or a larger one for splats that shove the whole tank.',
+        },
+      ],
+    },
+    'dye-advect-fs': {
+      summary:
+        'Each step, this shader looks up where the ink at this pixel came FROM a moment ago (following the velocity field backwards) and copies that colour forward — the classic semi-Lagrangian trick that lets ink flow smoothly without ever storing particles. It also fades the ink slightly (the `fade` knob) and adds this frame\'s splat colours on top.',
+      tryThis: [
+        {
+          target: 'c *= exp(-uDissipation * uDt);',
+          effect:
+            'the fade — drop this line entirely for ink that never dissipates and slowly floods the whole tank, or raise the multiplier for ghost-quick trails.',
+        },
+        {
+          target: 'vec2 back = uv - v * uDt;',
+          effect:
+            'the backwards-advection step — scale `v` up (e.g. `v * uDt * 1.5`) for ink that overshoots and streaks further per frame, an easy way to fake a faster-flowing fluid.',
+        },
+        {
+          target: 'c += uSplatColor[i] * uSplatBright[i] * fall;',
+          effect:
+            'how splats add colour — replace `+=` with a `mix()` toward the splat colour for injections that overwrite the ink underneath instead of adding to it.',
+        },
+      ],
+    },
+  },
 }

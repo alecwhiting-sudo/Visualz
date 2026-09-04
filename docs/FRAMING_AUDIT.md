@@ -22,6 +22,7 @@ composition is an aesthetic decision — needs eyes).
 | guilloche | Bounded curve *engineered* full-bleed (per-axis envelope to BLEED=0.94) |
 | whipline | Physics already runs on the real frame rect: `Wx=max(aspect,1), Wy=max(1/aspect,1)` — F1/F2 avant la lettre |
 | whipstorm | Same full-rect wall-bounce physics |
+| fluidink | Sim grid sized to the surface aspect at init (F1) so dye already covers the frame 1:1, no crop/letterbox map needed; splat/ambient/wind-cell distances aspect-corrected (`uAspect`) so they're circular/square at every format instead of stretched |
 
 `framing` declarations: all `'field'` except guilloche / whipline / whipstorm
 (`'bounded'` — composed objects that happen to fill the frame; band-coverage

@@ -16,9 +16,9 @@ import { expect, test } from '@playwright/test'
  * (Morphogen — registry id is 'morph', not 'morphogen'), resonance,
  * mandeldive, orbitdive, physarum, waves, glyphrain — plus flowfield,
  * grayscott, and kaleido, added by their section B.1/B.2/B.3 F1/F2/F3
- * migrations (docs/FRAMING_AUDIT.md). The `'bounded'` scenes from that same
- * section (guilloche/whipline/whipstorm) are NOT covered here — F4 only
- * *requires* band coverage for `'field'`.
+ * migrations, and fluidink (docs/FRAMING_AUDIT.md). The `'bounded'` scenes
+ * from that same section (guilloche/whipline/whipstorm) are NOT covered here
+ * — F4 only *requires* band coverage for `'field'`.
  *
  * Settle-frame counts and any test-mode query flags (`&count=`/`&grid=`) are
  * copied from each scene's own golden spec — same seed=42, same frame — so
@@ -61,6 +61,10 @@ const FIELD_SCENES: FieldScene[] = [
   // tests/e2e/newscenes.spec.ts).
   { id: 'grayscott', extraQuery: '&grid=128', settleFrames: 96 },
   { id: 'kaleido', settleFrames: 90 },
+  // fluidink: stable-fluids ink, GPU-simulation-heavy (20 Jacobi iterations x
+  // up to 4 substeps/frame) — settle at its own golden's frame 240, same
+  // seed=42, per docs/FRAMING_AUDIT.md's newest row.
+  { id: 'fluidink', settleFrames: 240, slow: true },
 ]
 
 const ASPECTS = [
