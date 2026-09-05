@@ -130,6 +130,45 @@ test('seeding localStorage before boot restores the Controls 1-8 rows', async ({
   await expect(page.getByText('CC 41')).toBeVisible()
 })
 
+/**
+ * Regression for the sequential-learn dedup guard bug (App.tsx
+ * `acceptLaunchkeyMap` / DISTINCT-CC guard fix at the sequential-learn CC
+ * handler ~line 1406): with a pre-populated table (the Launchkey auto-map
+ * having already claimed all 8 slots — CC 21-28), running "Map controls…"
+ * again and sweeping the same 8 CCs must still complete all 8 slots and
+ * drive params. Before the `already < macro.slot - 1` fix, `already >= 0`
+ * alone made every "already mapped" CC a no-op forever, so slot 1 (armed
+ * first) matched CC 21 (already at slot 0 = "already mapped") and the whole
+ * sequential pass deadlocked — "manual midi-learn not biting".
+ */
+test('sequential learn remaps over a pre-populated table', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      'visualz.midi.macroSlots.v1',
+      JSON.stringify([21, 22, 23, 24, 25, 26, 27, 28]),
+    )
+  })
+  await bootWithFakeMidi(page)
+  await expect(page.locator('.macro-slot-cc', { hasText: 'CC 21' })).toBeVisible()
+  await expect(page.locator('.macro-slot-cc', { hasText: 'CC 28' })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Map controls…' }).click()
+  for (let n = 21; n <= 28; n++) await cc(page, n, 10)
+  // A completed 8-slot sequential pass ends itself (spec: auto-stop after the
+  // last slot) — "Map controls…" is back, not "Stop mapping".
+  await expect(page.getByRole('button', { name: 'Map controls…' })).toBeVisible()
+
+  // All 8 slots still show their (unchanged, since it's the same CCs) rows.
+  const slotCcs = await page.locator('.macro-slot-cc').allTextContents()
+  expect(slotCcs).toEqual(['CC 21', 'CC 22', 'CC 23', 'CC 24', 'CC 25', 'CC 26', 'CC 27', 'CC 28'])
+
+  // And the mapping actually drives params: slot 1 (CC 21) engages the
+  // current scene's first param.
+  const param0 = await page.evaluate(() => window.__vizLive!.sceneParams()[0])
+  await cc(page, 21, 127)
+  await expect.poll(() => getParam(page, param0.name)).toBeCloseTo(param0.max, 1)
+})
+
 test('"Clear mapping" resets all 8 slots, and the reset itself persists across a reload', async ({ page }) => {
   await bootWithFakeMidi(page)
 

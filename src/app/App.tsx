@@ -613,6 +613,18 @@ export function App() {
   }, [midiDevices])
   const acceptLaunchkeyMap = () => {
     setMacroCcBySlot(LAUNCHKEY_MACRO_CC.slice()) // Controls 1-8 <- CC 21-28
+    // Force-activate every currently-known Launchkey Mini port (MIDI
+    // diagnosis follow-up #1): accepting the auto-map offer is unambiguous
+    // intent to use this controller, but a stale persisted `active: false`
+    // flag (from an earlier session, or a manual deactivate) would otherwise
+    // silently keep every message from it dropped at the `!device.active`
+    // gate in mapping/midi.ts — the mapping would exist but nothing would
+    // ever move. Route through the exact same path the INPUTS checkbox uses
+    // (`onToggleDeviceActive`) so this is live + persisted + marked restored,
+    // never fought by the one-time persisted-flag restore on the next resync.
+    for (const d of midiDevices) {
+      if (isLaunchkeyMini(d.name)) onToggleDeviceActive(d.id, true)
+    }
     launchkeyAskedRef.current = true
     saveLaunchkeyAsked()
     setLaunchkeyPrompt(false)
@@ -632,6 +644,14 @@ export function App() {
   // handle, so its freshly-resynced device list needs restoring again).
   const deviceActiveMapRef = useRef<Record<string, boolean>>(loadDeviceActiveMap())
   const restoredDeviceIdsRef = useRef<Set<string>>(new Set())
+  // Per-device MIDI activity blip (task follow-up #2): port id -> the
+  // `performance.now()` timestamp of its most recent message, from ANY
+  // device (active or not — see attachMidi's `onDeviceActivity` doc). A ref,
+  // not state, so a message flood never triggers React churn; read back by
+  // the render below against the existing 100ms meter-poll re-render. Reset
+  // per `attachLiveEngine` alongside `restoredDeviceIdsRef`, so a stale blip
+  // never survives a scene-switch teardown/rebuild of the MIDI handle.
+  const midiActivityRef = useRef<Record<string, number>>({})
   /** Wraps a manual device-active toggle (the INPUTS tab's checkbox) so the
    * new flag is both applied live AND persisted — and marked "already
    * restored" so a later resync on this same handle never overwrites the
@@ -1344,6 +1364,7 @@ export function App() {
       },
     }
     restoredDeviceIdsRef.current = new Set()
+    midiActivityRef.current = {}
     midiHandleRef.current = attachMidi(
       midiSink,
       (state) => {
@@ -1380,11 +1401,18 @@ export function App() {
         // dozens of CC messages, and native MIDI events flush React state
         // between them — without a synchronous check one knob turn could
         // claim several sequential slots (all with the same CC). The spec
-        // says "each DISTINCT CC claims the next slot": a CC already mapped
-        // to any slot is a no-op (doesn't advance), and the armed slot is
-        // advanced on the REF synchronously.
+        // says "each DISTINCT CC claims the next slot": a CC claimed EARLIER
+        // IN THIS PASS (i.e. sitting at a slot below the armed one) is a
+        // no-op (doesn't advance), and the armed slot is advanced on the REF
+        // synchronously. Crucially the skip is scoped to this pass, not the
+        // whole persisted table: with a pre-populated table (the Launchkey
+        // auto-map, or any restored mapping) every knob CC is "already
+        // mapped", and a table-wide skip deadlocked sequential learn
+        // entirely (user report: "manual midi-learn not biting") — a CC at
+        // or above the armed slot instead MOVES to the armed slot, same as
+        // single-mode re-learn.
         const already = macroCcBySlotRef.current.indexOf(cc)
-        if (macro.mode === 'sequential' && already >= 0) return
+        if (macro.mode === 'sequential' && already >= 0 && already < macro.slot - 1) return
         const claimed = [...macroCcBySlotRef.current]
         // Single-mode re-learn MOVES a CC (clears its old slot) rather than
         // refusing it — re-arranging hardware must stay possible.
@@ -1399,6 +1427,15 @@ export function App() {
           macroLearnRef.current = { mode: 'sequential', slot: macro.slot + 1 }
           setMacroLearn(macroLearnRef.current)
         }
+      },
+      // Per-device activity blip (MIDI diagnosis follow-up #2): a timestamp
+      // per port id, written to a ref (not state — no per-message React
+      // churn) and read back by the existing 100ms meter poll above, which
+      // already forces a re-render every tick. `performance.now()` is fine
+      // here: App.tsx is the one place real-time reads are allowed
+      // (ARCHITECTURE.md §1 exempts src/app/).
+      (deviceId) => {
+        midiActivityRef.current[deviceId] = performance.now()
       },
     )
   }
@@ -2518,20 +2555,40 @@ export function App() {
                   <div id="midi-disclosure" className="midi-disclosure">
                     <p className="session-status">{formatMidiStatus(midiSupported, midiDevices.length)}</p>
                     {midiDevices.length > 0 && (
-                      <ul className="midi-devices">
-                        {midiDevices.map((d) => (
-                          <li key={d.id}>
-                            <label>
-                              <input
-                                type="checkbox"
-                                checked={d.active}
-                                onChange={(ev) => onToggleDeviceActive(d.id, ev.target.checked)}
-                              />
-                              {d.name}
-                            </label>
-                          </li>
-                        ))}
-                      </ul>
+                      <>
+                        <ul className="midi-devices">
+                          {midiDevices.map((d) => {
+                            const lastActivity = midiActivityRef.current[d.id]
+                            // 800ms lit window (spec) — the surrounding
+                            // 100ms meter poll already re-renders often
+                            // enough for this to read as a live blip rather
+                            // than a stepped one.
+                            const recentlyActive = lastActivity !== undefined && performance.now() - lastActivity < 800
+                            return (
+                              <li key={d.id}>
+                                <label>
+                                  <input
+                                    type="checkbox"
+                                    checked={d.active}
+                                    onChange={(ev) => onToggleDeviceActive(d.id, ev.target.checked)}
+                                  />
+                                  {d.name}
+                                  <span
+                                    className={`midi-activity-dot${recentlyActive ? ' midi-activity-dot-active' : ''}`}
+                                    aria-hidden="true"
+                                    title="MIDI activity"
+                                  />
+                                </label>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                        {midiDevices.some((d) => midiActivityRef.current[d.id] === undefined) && (
+                          <p className="session-status midi-activity-hint">
+                            No data from this device — if another app (e.g. a DAW) is using it, close that app and reload.
+                          </p>
+                        )}
+                      </>
                     )}
                     {/* Controls 1-8 (docs/MACROS.md §5, task #34): eight
                        generic macro slots — map hardware ONCE here, and it

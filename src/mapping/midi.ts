@@ -107,11 +107,19 @@ export interface MidiHandle {
  * fully-qualified signal name (`midi.cc.<n>` / `midi.note.<n>`) for every CC
  * or note-on received from an *active* device — the learn-mode UI arms a
  * param, then binds it to whatever name arrives next.
+ *
+ * `onDeviceActivity`, if given, fires with the port id for EVERY message
+ * received from ANY device — active or not — before the `!device.active`
+ * gate below. This is deliberately unfiltered: the whole point (MIDI
+ * diagnosis follow-up #2) is to let the UI tell apart "port is talking but
+ * you've deactivated it" (blip lit, no signals moving) from "port is silent"
+ * (no blip at all — another app may hold the port exclusively).
  */
 export function attachMidi(
   sink: MidiSink,
   onChange: (state: MidiState) => void,
   onActivity: (signalName: string) => void,
+  onDeviceActivity?: (deviceId: string) => void,
 ): MidiHandle {
   const devices = new Map<string, { input: MIDIInput; name: string; active: boolean }>()
 
@@ -138,7 +146,9 @@ export function attachMidi(
     // toggle takes effect on the very next message, not just future ones
     // re-subscribed from scratch.
     const device = devices.get(id)
-    if (!device || !device.active || !ev.data) return
+    if (!device || !ev.data) return
+    onDeviceActivity?.(id)
+    if (!device.active) return
     const decoded = decodeMidiMessage(ev.data)
     switch (decoded.kind) {
       case 'cc': {

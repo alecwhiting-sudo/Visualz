@@ -838,6 +838,27 @@ body {
   cursor: pointer;
 }
 
+.midi-activity-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  opacity: 0.4;
+  flex-shrink: 0;
+}
+
+.midi-activity-dot-active {
+  background: var(--accent);
+  opacity: 1;
+  box-shadow: 0 0 4px var(--accent);
+}
+
+.midi-activity-hint {
+  margin-top: -4px;
+  margin-bottom: 10px;
+}
+
 .midi-learning {
   border-color: var(--accent);
   color: var(--accent);
