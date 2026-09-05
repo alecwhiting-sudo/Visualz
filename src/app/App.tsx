@@ -2583,11 +2583,18 @@ export function App() {
                             )
                           })}
                         </ul>
-                        {midiDevices.some((d) => midiActivityRef.current[d.id] === undefined) && (
-                          <p className="session-status midi-activity-hint">
-                            No data from this device — if another app (e.g. a DAW) is using it, close that app and reload.
-                          </p>
-                        )}
+                        {/* Only when EVERY port is silent: a multi-port
+                           controller's secondary (DAW) port is legitimately
+                           quiet forever, so per-device gating would show this
+                           permanently on a healthy setup. All-silent is the
+                           actual "another app may hold the port" signature. */}
+                        {midiDevices.length > 0 &&
+                          midiDevices.every((d) => midiActivityRef.current[d.id] === undefined) && (
+                            <p className="session-status midi-activity-hint">
+                              No data from any device yet — if another app (e.g. a DAW) is using the controller, close
+                              that app and reload.
+                            </p>
+                          )}
                       </>
                     )}
                     {/* Controls 1-8 (docs/MACROS.md §5, task #34): eight
