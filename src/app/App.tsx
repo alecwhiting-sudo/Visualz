@@ -357,12 +357,16 @@ type ViewMode = 'studio' | 'full'
  * PERFORM stays the DEFAULT active tab (`activeTab` state below) regardless
  * of its position, since it's the home surface casual use never leaves. */
 type StudioTab = 'scene' | 'fx' | 'session' | 'inputs' | 'code'
-const STUDIO_TABS: Array<[StudioTab, string]> = [
-  ['inputs', 'INPUTS'],
-  ['scene', 'PERFORM'],
-  ['fx', 'FX'],
-  ['session', 'SESSION'],
-  ['code', 'CODE'],
+// [tab, label, shortLabel] — the short form shows only on mobile (≤720px,
+// where CODE is hidden and the row must stay a single line; see app.css's
+// .tab-label-full/.tab-label-short swap). The full label stays the button's
+// aria-label either way, so tests and screen readers see one stable name.
+const STUDIO_TABS: Array<[StudioTab, string, string]> = [
+  ['inputs', 'INPUTS', 'IN'],
+  ['scene', 'PERFORM', 'PERF'],
+  ['fx', 'FX', 'FX'],
+  ['session', 'SESSION', 'SESS'],
+  ['code', 'CODE', 'CODE'],
 ]
 
 /** Per-tab help shown in the "?" popover — what each page does, not every knob. */
@@ -2075,16 +2079,18 @@ export function App() {
         )}
 
         <div className="panel-tabs" role="tablist">
-          {STUDIO_TABS.map(([tab, label]) => (
+          {STUDIO_TABS.map(([tab, label, shortLabel]) => (
             <button
               key={tab}
               type="button"
               role="tab"
               aria-selected={activeTab === tab}
+              aria-label={label}
               className={`tab-button${activeTab === tab ? ' tab-button-active' : ''}${tab === 'code' ? ' tab-code' : ''}`}
               onClick={() => setActiveTab(tab)}
             >
-              {label}
+              <span className="tab-label-full">{label}</span>
+              <span className="tab-label-short" aria-hidden="true">{shortLabel}</span>
               {/* Task 3: dot badge while an unexported take is sitting in the
                  SESSION tab's take card — cleared by that card's own Export
                  and Discard actions (same `takeReady` flag as the footer's

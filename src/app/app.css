@@ -239,8 +239,20 @@ body {
 .panel-tabs .tab-button {
   flex: 1 1 0;
   min-width: 0;
-  padding: 6px 4px;
+  padding: 6px 2px;
   text-align: center;
+  /* Five tabs (FX joined the row) in 288px: drop the base rule's wide
+     0.08em tracking and a font point so even PERFORM/SESSION sit with
+     clear air instead of touching their button edges. */
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+/* Full/short tab-label swap: desktop shows the full word, mobile (≤720px,
+   below) the abbreviation — the button's aria-label carries the full name
+   in both, so the accessible name never changes. */
+.panel-tabs .tab-label-short {
+  display: none;
 }
 
 /* The only scrolling region in the studio panel. flex: 1 1 auto + min-height:
@@ -1071,10 +1083,20 @@ body {
     display: none;
   }
 
-  /* Hide the CODE tab (no in-browser code editing on a phone) so the remaining
-     three tabs fit the row comfortably. */
+  /* Hide the CODE tab (no in-browser code editing on a phone) and swap the
+     remaining four tabs to their short labels (IN | PERF | FX | SESS) so the
+     row always fits ONE line on a narrow screen (user request). */
   .tab-button.tab-code {
     display: none;
+  }
+  .panel-tabs {
+    flex-wrap: nowrap;
+  }
+  .panel-tabs .tab-label-full {
+    display: none;
+  }
+  .panel-tabs .tab-label-short {
+    display: inline;
   }
 
   /* Hide the hand-off section entirely (target-scene dropdown + Switch button +

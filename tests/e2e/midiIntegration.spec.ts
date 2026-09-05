@@ -60,7 +60,7 @@ test('macro-mapped hardware knobs keep driving params across a handoff', async (
   await cc(page, 21, 12) // burst dedup: same CC again must NOT claim slot 2
   await cc(page, 22, 10)
   await page.getByRole('button', { name: /Stop mapping/ }).click()
-  await expect(page.getByText('CC 21')).toBeVisible()
+  await expect(page.locator('.macro-slot-cc', { hasText: 'CC 21' })).toBeVisible()
   await expect(page.getByText('CC 22')).toBeVisible()
 
   // Slot 1 drives the current scene's first param to its schema max at CC 127.
