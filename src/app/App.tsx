@@ -671,11 +671,26 @@ export function App() {
   useEffect(() => {
     macroLearnRef.current = macroLearn
   }, [macroLearn])
+  /**
+   * The ONLY correct way to change the learn state outside the CC handler:
+   * the MIDI CC handler reads `macroLearnRef` synchronously (a midimessage
+   * can arrive before React flushes the passive effect that mirrors state
+   * into the ref), so every writer must update the ref in the same tick. A
+   * bare `setMacroLearn` from a click handler left a window where the first
+   * CC of a "Map controls…" pass was judged against a stale null ref and
+   * silently dropped — the pass then never auto-stopped (CI-reproduced:
+   * midiIntegration.spec.ts "sequential learn remaps over a pre-populated
+   * table"). The mirroring effect above stays as a harmless belt.
+   */
+  const armMacroLearn = (v: { mode: 'sequential' | 'single'; slot: number } | null) => {
+    macroLearnRef.current = v
+    setMacroLearn(v)
+  }
   // Esc ends an in-progress macro-learn early (spec: "Esc/click ends early").
   useEffect(() => {
     if (!macroLearn) return
     const onKeyDown = (ev: KeyboardEvent) => {
-      if (ev.key === 'Escape') setMacroLearn(null)
+      if (ev.key === 'Escape') armMacroLearn(null)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -1456,7 +1471,7 @@ export function App() {
     // it was targeting is gone) — but NOT `macroCcBySlot` itself: the learned
     // CC->slot hardware mapping is scene-independent app state that must
     // survive even a cold scene-dropdown swap (docs/MACROS.md §1/§3).
-    setMacroLearn(null)
+    armMacroLearn(null)
   }
 
   useEffect(() => {
@@ -2614,9 +2629,9 @@ export function App() {
                               className={`session-button${macroLearn?.mode === 'sequential' ? ' midi-learning' : ''}`}
                               onClick={() => {
                                 if (macroLearn?.mode === 'sequential') {
-                                  setMacroLearn(null)
+                                  armMacroLearn(null)
                                 } else {
-                                  setMacroLearn({ mode: 'sequential', slot: 1 })
+                                  armMacroLearn({ mode: 'sequential', slot: 1 })
                                 }
                               }}
                             >
@@ -2653,7 +2668,7 @@ export function App() {
                                 <button
                                   type="button"
                                   className="macro-slot-learn"
-                                  onClick={() => setMacroLearn({ mode: 'single', slot })}
+                                  onClick={() => armMacroLearn({ mode: 'single', slot })}
                                 >
                                   Learn
                                 </button>

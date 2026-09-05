@@ -85,6 +85,9 @@ test('attractor at 16:9, 9:16, and 1:1 are all non-blank', async ({ page }) => {
 // --- Determinism: loadSession re-init, two runs, byte-identical pixelHash ---
 
 test('attractor replays byte-identically via loadSession', async ({ page }) => {
+  // 300 frames rendered twice, fully drained to the CPU rasterizer per
+  // evaluate (hooks.ts syncGpu) — a known-heavy test on SwiftShader CI.
+  test.slow()
   await boot(page)
   const doc = minimalDoc(300)
   const hash1 = await page.evaluate((d) => {

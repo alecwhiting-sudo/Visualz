@@ -102,13 +102,14 @@ test('studio panel tabs show only the active tab\'s content; the footer stays pi
 })
 
 /**
- * Small addition (user report): the SCENE->PERFORM rename made the four tab
+ * Small addition (user report): the SCENE->PERFORM rename made the tab
  * labels wider than the 320px panel's 288px inner width, clipping CODE off
  * the right edge. Each tab button must now fully fit inside the panel at the
  * panel's real (narrow) width — checked as a cheap bounding-box comparison
- * rather than a pixel diff.
+ * rather than a pixel diff. (Five tabs since the FX chain task added the FX
+ * tab: INPUTS / PERFORM / FX / SESSION / CODE.)
  */
-test('all four panel tabs fit fully inside the panel at its real width', async ({ page }) => {
+test('all five panel tabs fit fully inside the panel at its real width', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('.panel')).toBeVisible()
 
@@ -118,7 +119,7 @@ test('all four panel tabs fit fully inside the panel at its real width', async (
 
   const tabButtons = page.locator('.panel-tabs button')
   const count = await tabButtons.count()
-  expect(count).toBe(4)
+  expect(count).toBe(5)
 
   const widths: number[] = []
   for (let i = 0; i < count; i++) {

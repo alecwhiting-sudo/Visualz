@@ -111,6 +111,10 @@ test('mandeldive canvas is not blank', async ({ page }) => {
 // --- Determinism: loadSession re-init, two runs, byte-identical pixelHash --
 
 test('mandeldive replays byte-identically via loadSession', async ({ page }) => {
+  // 450 frames rendered twice (GOLDEN_FRAME is deep for this scene), fully
+  // drained to the CPU rasterizer per evaluate (hooks.ts syncGpu) — a
+  // known-heavy test on SwiftShader CI (hit the 60s cap in baseline runs).
+  test.slow()
   await boot(page)
   const doc = minimalDoc(GOLDEN_FRAME)
   const hash1 = await page.evaluate((d) => {

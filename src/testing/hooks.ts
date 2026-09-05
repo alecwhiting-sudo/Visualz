@@ -230,9 +230,32 @@ export function bootTestMode(root: HTMLElement): void {
   const count = params.get('count')
   if (count !== null) engine.setParam('count', Number(count))
 
+  // Drain the GL pipeline before an evaluate returns to Playwright. WebGL
+  // calls are queued to Chromium's GPU process asynchronously, so a heavy
+  // renderFrames() batch (fluidink: 25 passes/sub-step) can leave many
+  // seconds of SwiftShader software rasterizing still in flight on CI when
+  // the evaluate resolves. toHaveScreenshot's pre-shot "element is stable"
+  // wait is rAF-paced, and rAF starves behind that GPU-process backlog —
+  // the recurring CI "waiting for element to be stable" timeout class (the
+  // screenshots were never even taken; no pixels ever diverged). A 1×1
+  // readPixels is a guaranteed full pipeline sync (same no-bind read as
+  // pixelHash — the canvas's default framebuffer is bound after a frame),
+  // so the wall time moves into the evaluate call, where the per-test
+  // timeout governs it honestly and the page is idle when the shot begins.
+  const syncGpu = () => {
+    const { gl } = engine.gpu
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4))
+  }
+
   window.__viz = {
-    renderFrames: (n) => engine.renderFrames(n),
-    rerender: () => engine.rerender(),
+    renderFrames: (n) => {
+      engine.renderFrames(n)
+      syncGpu()
+    },
+    rerender: () => {
+      engine.rerender()
+      syncGpu()
+    },
     setParam: (name, value) => engine.setParam(name, value),
     getParam: (name) => engine.scene.getParam(name),
     setBinding: (param, src) => engine.setBinding(param, src),

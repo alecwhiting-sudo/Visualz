@@ -66,23 +66,26 @@ test('a take recorded after rehearsal reports the PERFORMED length, not lead-in 
 
   // THE regression: before the fix, durationFrames was the absolute end frame
   // (~2s rehearsal + ~1s take = ~3s worth of frames at 60fps ≈ 180). Fixed,
-  // it must be the ~1s PERFORMED length only. Tightened from the original
-  // 0.3-2s band (Finding 2's fix): `transport.frame` is now `floor(time * fps)`
-  // instead of a per-rAF-tick counter, so the take's frame count tracks real
-  // elapsed seconds regardless of the test runner's actual rAF rate — a ~1s
-  // `waitForTimeout` should now land within ~20%, not just "not obviously
-  // still carrying the rehearsal" (the old loose band only ruled out the
-  // ~3x-too-long regression, it didn't assert real-time accuracy).
+  // it must be the ~1s PERFORMED length only. The UPPER bound is the
+  // load-bearing regression guard (lead-in inflates the take). The LOWER
+  // bound cannot assert wall-clock accuracy: in demo mode (no audio file)
+  // the live engine's clock is `fallbackClock += 1/60` per rAF tick
+  // (engine.ts) — tick-paced BY DESIGN, so on a starved CI runner where rAF
+  // fires well below 60Hz, ~1s of waitForTimeout yields well under 1s of
+  // demo-clock time (CI measured 0.63s; an earlier 0.8 floor flaked on
+  // exactly this). 0.2 still proves the take isn't empty/zero-length.
   const performedSeconds = doc.durationFrames / doc.fps
-  expect(performedSeconds).toBeGreaterThan(0.8)
+  expect(performedSeconds).toBeGreaterThan(0.2)
   expect(performedSeconds).toBeLessThan(1.3)
 
   // The audio-start-offset half of the fix: this take started well into the
   // demo clock's run (~2s of rehearsal already elapsed), so startSeconds must
-  // have been captured and be roughly that large — proving the engine baselined
-  // the take's own time source, not just the frame counter.
+  // have been captured and be nonzero-large — proving the engine baselined
+  // the take's own time source, not just the frame counter. Bound loosened
+  // like performedSeconds above: the demo clock is rAF-tick-paced, so 2s of
+  // wall-clock rehearsal shrinks proportionally on a starved CI runner.
   expect(doc.audio.kind).toBe('demo')
-  expect(doc.audio.startSeconds ?? 0).toBeGreaterThan(1)
+  expect(doc.audio.startSeconds ?? 0).toBeGreaterThan(0.4)
 
   // Replay determinism: hand the doc to the render-mode harness (same seed,
   // default scene matches doc.scene.id === 'lissajous') and replay it twice,

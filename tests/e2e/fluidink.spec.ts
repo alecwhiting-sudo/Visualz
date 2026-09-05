@@ -10,6 +10,13 @@ import { expect, test } from '@playwright/test'
 
 const GOLDEN_FRAME = 120
 
+// Heaviest scene in the suite: 25 GL passes per sub-step, and now that the
+// harness's renderFrames() drains the GL pipeline before returning (see
+// src/testing/hooks.ts syncGpu), all of that SwiftShader time is billed to
+// the evaluate call. 120 frames × up-to-3 boots per test needs real headroom
+// on CI; a targeted file-level bump beats inflating the global 60s timeout.
+test.setTimeout(180_000)
+
 async function boot(page: import('@playwright/test').Page, extra?: string) {
   await page.goto(`/?test=1&seed=42&scene=fluidink${extra ?? ''}`)
   await page.waitForFunction(() => window.__viz !== undefined)

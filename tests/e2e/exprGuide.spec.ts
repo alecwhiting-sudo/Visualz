@@ -77,7 +77,15 @@ test('a low-on-page fx menu clamps on-screen and holds still (user report: jiggl
     const params = window.__vizLive!.sceneParams()
     return params[params.length - 1]
   })
-  const lastRow = page.locator('.knob').filter({ has: page.locator(`input[type=range]`) }).last()
+  // `visible: true` matters: the FX tab keeps its panel mounted-but-hidden
+  // (`hidden={activeTab !== 'fx'}`) and its param rows are `.knob`s with
+  // range inputs too, so an unscoped `.last()` resolves to an invisible FX
+  // row and scrollIntoViewIfNeeded spins forever ("element is not visible").
+  const lastRow = page
+    .locator('.knob')
+    .filter({ has: page.locator(`input[type=range]`) })
+    .filter({ visible: true })
+    .last()
   await lastRow.scrollIntoViewIfNeeded()
   await lastRow.getByRole('button', { name: /Expression ideas/ }).click()
 
