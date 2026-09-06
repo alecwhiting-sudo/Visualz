@@ -6,6 +6,7 @@ import { pixelHash, bandCoverage } from '../gpu/readback'
 import { exportSession } from '../export/client'
 import type { ExportVideoOpts } from '../export/render'
 import type { ExportAudio } from '../export/encode'
+import { drawCredits } from '../export/credits'
 import { analyzeAudio } from '../audio/analysis'
 import { serializeTimeline } from '../audio/timeline'
 import { mulberry32 } from '../core/prng'
@@ -103,6 +104,23 @@ export interface VizTestApi {
   /** Current value of FX pass `passId`'s param `name` (`'enabled'` reads its
    * 0/1 toggle) — `Engine.getFxParam`. */
   getFxParam(passId: string, name: string): number
+  /**
+   * Credits-overlay probe (export/credits.ts). Draws `drawCredits` onto a
+   * fresh `width`x`height` OffscreenCanvas at the given `alpha` and returns
+   * the brightest pixel (max of r/g/b, 0-255) found in the bottom-right
+   * corner region (last `regionFrac` of both width and height) — used where
+   * reading back the actual encoded video frame isn't reachable from
+   * Playwright, so the spec instead asserts on this pure canvas-2D draw
+   * directly (documented in tests/e2e/export.spec.ts).
+   */
+  sampleCreditsCorner(
+    width: number,
+    height: number,
+    line1: string,
+    line2: string,
+    alpha: number,
+    regionFrac: number,
+  ): number
 }
 
 declare global {
@@ -328,6 +346,20 @@ export function bootTestMode(root: HTMLElement): void {
         durationFrames: 90,
         events: [],
       }
+    },
+    sampleCreditsCorner: (width, height, line1, line2, alpha, regionFrac) => {
+      const canvas = new OffscreenCanvas(width, height)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('Could not get 2D context for credits probe canvas')
+      drawCredits(ctx, width, height, line1, line2, alpha)
+      const rw = Math.max(1, Math.round(width * regionFrac))
+      const rh = Math.max(1, Math.round(height * regionFrac))
+      const { data } = ctx.getImageData(width - rw, height - rh, rw, rh)
+      let maxChannel = 0
+      for (let i = 0; i < data.length; i += 4) {
+        maxChannel = Math.max(maxChannel, data[i], data[i + 1], data[i + 2])
+      }
+      return maxChannel
     },
   }
 }

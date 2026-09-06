@@ -74,6 +74,35 @@ body {
   border-radius: 8px;
 }
 
+/* Replay preview parity for the automatic credits overlay (approximate —
+   the export's canvas-2D draw is the source of truth). Percent-based sizing
+   mirrors export/credits.ts's frame-height fractions closely enough for a
+   best-effort live preview. */
+.credits-overlay {
+  position: absolute;
+  right: 3.5%;
+  bottom: 3.5%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  pointer-events: none;
+  text-align: right;
+  font-family: system-ui, -apple-system, Helvetica, Arial, sans-serif;
+  font-weight: 400;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
+}
+
+.credits-overlay-line1 {
+  font-size: 3.2vh;
+  line-height: 1.2;
+}
+
+.credits-overlay-line2 {
+  font-size: 2.4vh;
+  line-height: 1.2;
+}
+
 /* Fixed-width column pinned to exactly 100vh — never grows past it. Header,
    tab row, and footer are fixed-height flex items; .panel-content is the
    only piece that scrolls (see below), so a scene with a long param list or

@@ -24,6 +24,13 @@ export interface ExportVideoOpts {
   bitrate?: number
   /** Explicit codec preference. Omit to auto-detect via `detectExportCodec`. */
   codec?: ExportCodec
+  /**
+   * Automatic credits overlay (user identity settings, not performance data —
+   * deliberately NOT part of `SessionDoc`; see `src/export/credits.ts`).
+   * Omitted, or both lines blank after trim, means the export pipeline stays
+   * on today's direct-canvas path, byte-identical to before this feature.
+   */
+  credits?: { line1: string; line2: string }
 }
 
 /** Optional audio track to mux alongside the video (REQUIREMENTS.md §5.1: "audio track

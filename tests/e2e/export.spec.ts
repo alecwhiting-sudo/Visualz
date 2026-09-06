@@ -176,3 +176,69 @@ test('explicit h264 request on a non-supporting browser throws a clear error', a
   expect(message).not.toBeNull()
   expect(message!.toLowerCase()).toMatch(/h264|h\.264|avc/)
 })
+
+test('credits overlay: lit bottom-right pixels near the end, none at an early frame', async ({ page }) => {
+  // Frame-level readback of the actual MUXED/encoded video isn't reachable
+  // from Playwright here (no in-suite VideoDecoder verification, per the
+  // existing "decoded a real export with ffmpeg" note above) — so this
+  // asserts directly on `drawCredits`'s pure canvas-2D output via the
+  // `sampleCreditsCorner` test hook, at the exact alpha `creditsAlpha` would
+  // compute for an early frame vs the last frame of a short (3s) export —
+  // shorter than the default 5s window, exercising the clamp-to-0 case too.
+  await boot(page, 42)
+
+  const width = 320
+  const height = 180
+  // durationSec=3 is < the default 5s window, exercising the clamp-to-0 case:
+  // start clamps to 0, the fade completes at t=1, and holds at 1 well before
+  // the last frame — so alpha=0 (t=0) vs alpha=1 (last frame) below is exactly
+  // what creditsAlpha would compute for that clip.
+
+  const [early, last] = await page.evaluate(
+    ({ width, height }) => {
+      const regionFrac = 0.2
+      return [
+        window.__viz!.sampleCreditsCorner(width, height, 'Alec Whiting', 'divurj.com', 0, regionFrac),
+        window.__viz!.sampleCreditsCorner(width, height, 'Alec Whiting', 'divurj.com', 1, regionFrac),
+      ]
+    },
+    { width, height },
+  )
+
+  expect(early).toBe(0)
+  expect(last).toBeGreaterThan(100)
+})
+
+test('credits overlay does not change the export determinism fixture (default: both lines blank)', async ({
+  page,
+}) => {
+  // The existing determinism test above passes NO `credits` option — proving
+  // the export pipeline stays on today's byte-identical path is exactly what
+  // that test already does. This test proves the ENGAGED feature end to end:
+  // with credits set, frame hashes come from the composited 2D canvas (the
+  // pixels that get encoded — render.ts hashes the composite when active), so
+  // (a) two runs matching proves the overlay itself renders deterministically
+  // (shadow blur included), and (b) the final frame's hash differing from a
+  // credits-blank export's final frame proves the overlay is actually present
+  // in the encoded source, not silently absent.
+  await boot(page, 42)
+  const doc = await recordSession(page)
+
+  const [run1, run2, runBlank] = await page.evaluate((sessionDoc) => {
+    const base = { width: 320, height: 180, fps: 30, collectHashes: true }
+    const credits = { line1: 'Alec Whiting', line2: 'divurj.com' }
+    return Promise.all([
+      window.__viz!.exportSession(sessionDoc, { ...base, credits }),
+      window.__viz!.exportSession(sessionDoc, { ...base, credits }),
+      window.__viz!.exportSession(sessionDoc, base),
+    ])
+  }, doc)
+
+  expect(run1.frameHashes?.length).toBe(60)
+  expect(run2.frameHashes).toEqual(run1.frameHashes)
+  // Presence: the 2s fixture is fully inside the (duration<5s → from t=0)
+  // credits window, so the last frame must differ from the blank export's.
+  expect(run1.frameHashes![59]).not.toBe(runBlank.frameHashes![59])
+  expect(run1.mime).toBe('video/webm')
+  expect(run1.size).toBeGreaterThan(1000)
+})

@@ -1,8 +1,9 @@
 import { Engine } from '../engine/engine'
 import { SCENES } from '../scenes/registry'
-import { pixelHash } from '../gpu/readback'
+import { fnv1aHex, pixelHash } from '../gpu/readback'
 import type { SessionDoc } from '../session/types'
 import { createVideoSink, type EncodedResult, type ExportAudio, type ExportVideoOpts, type VideoSink } from './encode'
+import { creditsActive, creditsAlpha, drawCredits } from './credits'
 
 export interface ExportProgress {
   frame: number
@@ -51,14 +52,47 @@ export async function renderSessionToVideo(
     const frameHashes = opts.collectHashes ? ([] as string[]) : undefined
     const total = doc.durationFrames
 
+    // Credits overlay (opt-in, user-set text — see `credits.ts`): both lines
+    // blank after trim (the default) keeps this whole block a no-op and the
+    // export on today's direct-canvas-to-VideoFrame path, byte-identical to
+    // before this feature existed. Only when at least one line is non-blank
+    // does a frame get composited through a same-size 2D OffscreenCanvas
+    // (drawImage the GL frame, draw the credits at the computed alpha, feed
+    // *that* canvas to VideoFrame) instead of the GL canvas directly.
+    const credits = opts.credits
+    const showCredits = !!credits && creditsActive(credits.line1, credits.line2)
+    const compositeCanvas = showCredits ? new OffscreenCanvas(opts.width, opts.height) : null
+    const compositeCtx = compositeCanvas?.getContext('2d') ?? null
+    if (showCredits && !compositeCtx) {
+      throw new Error('Could not get a 2D context for the credits-overlay composite canvas')
+    }
+    const durationSec = total / opts.fps
+
     for (let i = 0; i < total; i++) {
       engine.renderFrames(1)
 
-      if (frameHashes) {
-        frameHashes.push(pixelHash(engine.gpu.gl, opts.width, opts.height))
+      let frameSource: OffscreenCanvas = canvas
+      if (compositeCanvas && compositeCtx && credits) {
+        compositeCtx.clearRect(0, 0, opts.width, opts.height)
+        compositeCtx.drawImage(canvas, 0, 0)
+        const alpha = creditsAlpha(i / opts.fps, durationSec)
+        drawCredits(compositeCtx, opts.width, opts.height, credits.line1, credits.line2, alpha)
+        frameSource = compositeCanvas
       }
 
-      const frame = new VideoFrame(canvas, {
+      if (frameHashes) {
+        // Hash what actually gets ENCODED (review finding): with credits
+        // active that's the composited 2D canvas — hashing the GL buffer
+        // here would blind the determinism check to the overlay entirely.
+        if (compositeCtx) {
+          const img = compositeCtx.getImageData(0, 0, opts.width, opts.height)
+          frameHashes.push(fnv1aHex(new Uint8Array(img.data.buffer, img.data.byteOffset, img.data.byteLength)))
+        } else {
+          frameHashes.push(pixelHash(engine.gpu.gl, opts.width, opts.height))
+        }
+      }
+
+      const frame = new VideoFrame(frameSource, {
         timestamp: Math.round((i * 1e6) / opts.fps),
         duration: Math.round(1e6 / opts.fps),
       })

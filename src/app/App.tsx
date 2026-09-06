@@ -37,6 +37,8 @@ import {
   parseFxNoteByPassId,
   parseMacroCcBySlot,
 } from './midiPersistence'
+import { CREDITS_STORAGE_KEY, parseCreditsLines } from './creditsPersistence'
+import { creditsActive, creditsAlpha } from '../export/credits'
 import './app.css'
 
 // Pads/PERFORM batch: shared guidance copy for the "?" popovers beside the
@@ -350,6 +352,24 @@ function saveDeviceActiveMap(v: Record<string, boolean>): void {
     localStorage.setItem(DEVICE_ACTIVE_STORAGE_KEY, JSON.stringify(v))
   } catch {
     // Ignore, same reasoning as saveMacroCcBySlot.
+  }
+}
+
+// Export-credits persistence (same try/catch shape as the MIDI tables above;
+// parsing lives in creditsPersistence.ts). A user identity setting, so it
+// lives here in localStorage, never in a SessionDoc.
+function loadCreditsLines(): { line1: string; line2: string } {
+  try {
+    return parseCreditsLines(localStorage.getItem(CREDITS_STORAGE_KEY))
+  } catch {
+    return parseCreditsLines(null)
+  }
+}
+function saveCreditsLines(v: { line1: string; line2: string }): void {
+  try {
+    localStorage.setItem(CREDITS_STORAGE_KEY, JSON.stringify(v))
+  } catch {
+    // Ignore — a failed save just means the lines won't survive a reload.
   }
 }
 
@@ -946,7 +966,16 @@ export function App() {
   // and Discard actions; loading/replaying an unrelated saved-take file never
   // touches it.
   const [takeReady, setTakeReady] = useState(false)
-  const [replay, setReplay] = useState<{ frame: number; total: number } | null>(null)
+  const [replay, setReplay] = useState<{ frame: number; total: number; fps: number } | null>(null)
+  // Automatic credits overlay (user-set identity text, SESSION tab near
+  // Export — persisted to localStorage, never into a SessionDoc; see
+  // `creditsPersistence.ts` / `export/credits.ts`). Loaded once on mount
+  // below, alongside the other localStorage-backed panels.
+  const [creditLine1, setCreditLine1] = useState(() => loadCreditsLines().line1)
+  const [creditLine2, setCreditLine2] = useState(() => loadCreditsLines().line2)
+  useEffect(() => {
+    saveCreditsLines({ line1: creditLine1, line2: creditLine2 })
+  }, [creditLine1, creditLine2])
   // Task 3 (audio-synced replay): a one-line hint shown under the replay
   // progress line — "load the track to hear this in sync" (no track loaded
   // for a file-kind doc) or "audio: X (take was recorded with Y)" (a
@@ -2245,7 +2274,7 @@ export function App() {
       restoreLive()
       return
     }
-    setReplay({ frame: 0, total: doc.durationFrames })
+    setReplay({ frame: 0, total: doc.durationFrames, fps: doc.fps })
 
     if (syncAudio && liveAudio) {
       liveAudio.seek(startSeconds)
@@ -2285,7 +2314,7 @@ export function App() {
       // `loadSession` now seeds from `doc.audio.startSeconds` rather than 0) —
       // matches `doc.durationFrames`, which is likewise take-relative.
       const frame = replayEngine.replayFrame
-      setReplay({ frame, total: doc.durationFrames })
+      setReplay({ frame, total: doc.durationFrames, fps: doc.fps })
       if (replayEngine.replayDone && frame >= doc.durationFrames) {
         restoreLive()
         return
@@ -2336,9 +2365,10 @@ export function App() {
       // from the DOC's own recorded format, never the live canvasFormat —
       // an export must reproduce the take exactly as it was performed.
       const { width, height } = exportSize(doc.format ?? '16:9', exportQuality)
+      const credits = creditsActive(creditLine1, creditLine2) ? { line1: creditLine1, line2: creditLine2 } : undefined
       const result = await exportSession(
         doc,
-        { width, height, fps: doc.fps, bitrate: q.bitrate, codec: resolveExportCodec(exportFormat) },
+        { width, height, fps: doc.fps, bitrate: q.bitrate, codec: resolveExportCodec(exportFormat), credits },
         (p: ExportProgress) => setExporting({ frame: p.frame, total: p.total }),
         audio,
       )
@@ -2357,6 +2387,27 @@ export function App() {
     <div className={`app app-${viewMode}`}>
       <div className="stage" ref={stageRef}>
         <canvas ref={canvasRef} />
+        {/* Replay preview parity (best-effort, decided): the same two credit
+           lines the export would bake in, shown as an HTML overlay with
+           matching timing/approximate styling, driven by the replay's own
+           frame/fps/total (which is a take-relative clock — same basis the
+           export loop uses). Live (non-replay) mode never shows this. */}
+        {replay && creditsActive(creditLine1, creditLine2) && (
+          <div className="credits-overlay" aria-hidden="true">
+            <div
+              className="credits-overlay-line1"
+              style={{ opacity: creditsAlpha(replay.frame / replay.fps, replay.total / replay.fps) }}
+            >
+              {creditLine1}
+            </div>
+            <div
+              className="credits-overlay-line2"
+              style={{ opacity: creditsAlpha(replay.frame / replay.fps, replay.total / replay.fps) * 0.8 }}
+            >
+              {creditLine2}
+            </div>
+          </div>
+        )}
       </div>
       {/* Help popover: fixed over the visual (left of the panel) so the controls
          stay visible/usable while reading. Non-blocking — no backdrop. */}
@@ -2653,6 +2704,32 @@ export function App() {
                     </option>
                   ))}
                 </select>
+              </label>
+
+              {/* Automatic credits overlay (user-requested): two optional text
+                 lines, persisted to localStorage (creditsPersistence.ts) —
+                 never into the session doc. Both blank (after trim) means the
+                 export stays byte-identical to before this feature; see
+                 `creditsActive` gating in exportVideo/render.ts. */}
+              <label className="scene-select">
+                Credit line 1
+                <input
+                  type="text"
+                  value={creditLine1}
+                  disabled={replay !== null || exporting !== null}
+                  onChange={(ev) => setCreditLine1(ev.target.value)}
+                  placeholder="(optional)"
+                />
+              </label>
+              <label className="scene-select">
+                Credit line 2
+                <input
+                  type="text"
+                  value={creditLine2}
+                  disabled={replay !== null || exporting !== null}
+                  onChange={(ev) => setCreditLine2(ev.target.value)}
+                  placeholder="(optional)"
+                />
               </label>
 
               {lastSession && (
