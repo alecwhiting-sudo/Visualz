@@ -11,6 +11,15 @@
  * thrown. Only a structurally unusable file (wrong kind, no object) throws.
  */
 
+/** One F1-F8 frame slot (task #35 upgrade): each of the 8 positional
+ * params' normalized value, ALONGSIDE its binding text at store time
+ * (`null` = unbound). Fully defines the 8 controls' state — applying it can
+ * remove a binding the frame didn't have. */
+export interface FrameSlot {
+  values: number[]
+  exprs: (string | null)[]
+}
+
 /** Per-scene override: only what the user CHANGED, at absolute values
  * (sparse-absolute — plan §3/§6 R3). Structurally compatible with the take
  * doc's initial-state block; `frames` is the session-side extension (take
@@ -19,10 +28,9 @@ export interface SceneRigEntry {
   params?: Record<string, number>
   bindings?: Record<string, string>
   shaders?: Record<string, string>
-  /** Per-algorithm F1-F8 banks (user decision, plan §7.2): 8 slots of
-   * normalized controller positions, null = empty slot. Omitted entirely
-   * when every slot is empty. */
-  frames?: (number[] | null)[]
+  /** Per-algorithm F1-F8 banks (user decision, plan §7.2): 8 slots, null =
+   * empty slot. Omitted entirely when every slot is empty. */
+  frames?: (FrameSlot | null)[]
 }
 
 export interface SessionRigGlobal {
@@ -94,17 +102,33 @@ function fxRecord(v: unknown): Record<string, Record<string, number>> | undefine
   return Object.keys(out).length ? out : undefined
 }
 
-function frameBank(v: unknown): (number[] | null)[] | undefined {
+function numberArray01(v: unknown): number[] | undefined {
+  if (!Array.isArray(v) || !v.every((n) => typeof n === 'number' && Number.isFinite(n))) return undefined
+  return v.map((n) => Math.min(1, Math.max(0, n)))
+}
+
+/** Version-tolerant single-slot parse: the OLD shape was a bare
+ * `number[]` (a frame with no expression capture); the NEW shape is
+ * `{ values, exprs }`. A bare array wraps into the new shape with every
+ * `exprs` entry `null` (nothing was ever unbound-vs-bound to remember in
+ * the old format, so treating every param as "was unbound" is the only
+ * sound reading — applying it behaves exactly as the old code did: it
+ * clears any binding and sets the value). */
+function frameSlot(v: unknown): FrameSlot | null {
+  const oldValues = numberArray01(v)
+  if (oldValues) return { values: oldValues, exprs: oldValues.map(() => null) }
+  if (!isRecord(v)) return null
+  const values = numberArray01(v.values)
+  if (!values) return null
+  const exprsRaw = Array.isArray(v.exprs) ? v.exprs : []
+  const exprs = values.map((_, i) => (typeof exprsRaw[i] === 'string' ? (exprsRaw[i] as string) : null))
+  return { values, exprs }
+}
+
+function frameBank(v: unknown): (FrameSlot | null)[] | undefined {
   if (!Array.isArray(v)) return undefined
-  const out: (number[] | null)[] = []
-  for (let i = 0; i < FRAME_SLOTS; i++) {
-    const slot = v[i]
-    out.push(
-      Array.isArray(slot) && slot.every((n) => typeof n === 'number' && Number.isFinite(n))
-        ? slot.map((n) => Math.min(1, Math.max(0, n)))
-        : null,
-    )
-  }
+  const out: (FrameSlot | null)[] = []
+  for (let i = 0; i < FRAME_SLOTS; i++) out.push(frameSlot(v[i]))
   return out.some((s) => s !== null) ? out : undefined
 }
 

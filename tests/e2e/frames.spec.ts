@@ -1,14 +1,16 @@
 import { expect, test, type Page } from '@playwright/test'
 
 /**
- * Frame buttons F1-F8 (task #35): eight snapshot slots below the PERFORM
- * tab's pads, storing the current scene's first-8 param values NORMALIZED
- * (position-relative, like Controls 1-8) so pressing a frame re-applies them
- * to WHATEVER scene is live — instant jump on a plain press, an eased glide
- * over the transition-speed knob's duration on shift+press. Real-app
- * coverage (no `?test=1` harness — see transport-ui.spec.ts for why);
- * `window.__vizLive.setParam` is the seam for moving a param away from its
- * stored position without depending on a specific slider's drag mechanics,
+ * Frame buttons F1-F8 (task #35, upgraded): eight per-scene snapshot slots
+ * below the PERFORM tab's pads. Each slot stores the current scene's
+ * first-8 param values NORMALIZED (position-relative, like Controls 1-8)
+ * ALONGSIDE each param's binding text at store time (null = unbound) — a
+ * frame fully defines the 8 controls' state, bindings included. Applying:
+ * plain press jumps values instantly (and re-binds/clears bindings
+ * instantly, always — never glided); shift+press glides the plain values
+ * over the transition-speed knob's duration. Right-click clears a slot.
+ * Real-app coverage (no `?test=1` harness — see transport-ui.spec.ts for
+ * why); `window.__vizLive.setParam`/`setBinding`/`getBinding` are the seams,
  * mirroring the existing `setInputSignal` seam macros.spec.ts uses for the
  * same reason.
  */
@@ -25,6 +27,18 @@ async function getParam(page: Page, name: string): Promise<number> {
 
 function setParam(page: Page, name: string, value: number): Promise<void> {
   return page.evaluate(({ name: n, value: v }) => window.__vizLive!.setParam(n, v), { name, value })
+}
+
+function setBinding(page: Page, name: string, src: string): Promise<string | null> {
+  return page.evaluate(({ name: n, src: s }) => window.__vizLive!.setBinding(n, s), { name, src })
+}
+
+function clearBinding(page: Page, name: string): Promise<void> {
+  return page.evaluate((n) => window.__vizLive!.clearBinding(n), name)
+}
+
+function getBinding(page: Page, name: string): Promise<string | null> {
+  return page.evaluate((n) => window.__vizLive!.getBinding(n), name)
 }
 
 test('store then press F1 returns a changed param to its stored position', async ({ page }) => {
@@ -44,18 +58,44 @@ test('store then press F1 returns a changed param to its stored position', async
   await expect.poll(() => getParam(page, param0.name)).toBeCloseTo(param0.default, 2)
 })
 
-test('right-click on a frame also stores, bypassing the Store toggle', async ({ page }) => {
+test('right-click on a frame CLEARS the slot (task #35 upgrade — no longer stores)', async ({ page }) => {
   await boot(page)
   const param0 = await page.evaluate(() => window.__vizLive!.sceneParams()[0])
 
-  // Store mode is NOT armed — a right-click still stores (desktop shortcut).
-  await page.getByRole('button', { name: 'F4', exact: true }).click({ button: 'right' })
-
-  const changed = param0.min + (param0.max - param0.min) * 0.9
-  await setParam(page, param0.name, changed)
-
+  // Store the default into F4, confirm it applies.
+  await page.getByRole('button', { name: 'Store' }).click()
+  await page.getByRole('button', { name: 'F4', exact: true }).click()
+  await setParam(page, param0.name, param0.max)
   await page.getByRole('button', { name: 'F4', exact: true }).click()
   await expect.poll(() => getParam(page, param0.name)).toBeCloseTo(param0.default, 2)
+
+  // Right-click clears it — the button loses its "occupied" styling and a
+  // plain press on the (now-empty) slot no longer touches the param.
+  const f4 = page.getByRole('button', { name: 'F4', exact: true })
+  await expect(f4).toHaveClass(/frame-button-occupied/)
+  await f4.click({ button: 'right' })
+  await expect(f4).not.toHaveClass(/frame-button-occupied/)
+
+  await setParam(page, param0.name, param0.max)
+  await f4.click()
+  await page.waitForTimeout(200)
+  expect(await getParam(page, param0.name)).toBeCloseTo(param0.max, 2) // untouched — slot was empty
+})
+
+test('right-click clears even while Store mode is armed, and never applies the slot', async ({ page }) => {
+  await boot(page)
+  const param0 = await page.evaluate(() => window.__vizLive!.sceneParams()[0])
+
+  await page.getByRole('button', { name: 'Store' }).click()
+  await page.getByRole('button', { name: 'F6', exact: true }).click() // stores default into F6, disarms Store
+  await setParam(page, param0.name, param0.max)
+
+  // Arm Store again, then right-click F6: it must CLEAR (not re-store, and
+  // not apply — the param stays at max, untouched).
+  await page.getByRole('button', { name: 'Store' }).click()
+  await page.getByRole('button', { name: 'F6', exact: true }).click({ button: 'right' })
+  expect(await getParam(page, param0.name)).toBeCloseTo(param0.max, 2)
+  await expect(page.getByRole('button', { name: 'F6', exact: true })).not.toHaveClass(/frame-button-occupied/)
 })
 
 test('shift+press glides a param over the transition duration rather than snapping instantly', async ({ page }) => {
@@ -173,4 +213,108 @@ test('the Frames block has its own "?" guidance popover with the spec\'d copy', 
   await expect(infoButton).toBeVisible()
   await infoButton.click()
   await expect(page.locator('.info-popover-content')).toContainText('Frames store the 8 controller positions')
+})
+
+// --- Task #35 upgrade: expression capture ----------------------------------
+
+test('a stored expression round-trips through a frame: bind, change it, apply the frame restores the original', async ({
+  page,
+}) => {
+  await boot(page)
+  const param0 = await page.evaluate(() => window.__vizLive!.sceneParams()[0])
+
+  const err = await setBinding(page, param0.name, '2 + sin(t)')
+  expect(err).toBeNull()
+
+  await page.getByRole('button', { name: 'Store' }).click()
+  await page.getByRole('button', { name: 'F1', exact: true }).click()
+  expect(await getBinding(page, param0.name)).toBe('2 + sin(t)')
+
+  // Change the binding to something else.
+  expect(await setBinding(page, param0.name, '1 + bass')).toBeNull()
+  expect(await getBinding(page, param0.name)).toBe('1 + bass')
+
+  // Applying the frame restores the ORIGINAL binding, instantly (no glide
+  // needed to observe it — a binding set/clear is never glided).
+  await page.getByRole('button', { name: 'F1', exact: true }).click()
+  expect(await getBinding(page, param0.name)).toBe('2 + sin(t)')
+})
+
+test('a frame slot with a null expr CLEARS a live binding on apply', async ({ page }) => {
+  await boot(page)
+  const param0 = await page.evaluate(() => window.__vizLive!.sceneParams()[0])
+
+  // Stored while UNBOUND (default value, no expression).
+  await page.getByRole('button', { name: 'Store' }).click()
+  await page.getByRole('button', { name: 'F1', exact: true }).click()
+  expect(await getBinding(page, param0.name)).toBeNull()
+
+  // Bind an expression AFTER storing — the frame doesn't know about it.
+  expect(await setBinding(page, param0.name, '1 + bass')).toBeNull()
+  expect(await getBinding(page, param0.name)).toBe('1 + bass')
+
+  // Applying the frame must remove the binding (the frame's null expr wins)
+  // and land the param back on its stored (default) value.
+  await page.getByRole('button', { name: 'F1', exact: true }).click()
+  await expect.poll(() => getBinding(page, param0.name)).toBeNull()
+  await expect.poll(() => getParam(page, param0.name)).toBeCloseTo(param0.default, 2)
+})
+
+test('bug regression: clearing a bound expression makes frames affect that param again', async ({ page }) => {
+  // Root cause investigated for the "frames stopped working after removing
+  // expressions" report: `engine.clearBinding` (and the expr-input's clear
+  // path via `useParamBinding.applyExpr`) DO fully delete the binding —
+  // `getBinding` correctly returns undefined afterward, so the OLD
+  // "skip params with a live binding" precedence rule was not literally
+  // leaking a defined-but-empty binding. What WAS silently broken: an
+  // unbound, non-macro-driven Knob's on-screen slider is backed by local
+  // React state that a direct `engine.setParam` (which is exactly how
+  // `applyFrame` writes) never touched — so even though the param's real
+  // value updated correctly, the slider visibly froze, making a frame press
+  // look like a no-op. This test asserts the underlying VALUE moves (the
+  // original report's literal claim); the slider-visibility half of the
+  // same root cause is covered by the visible-slider test below.
+  await boot(page)
+  const param0 = await page.evaluate(() => window.__vizLive!.sceneParams()[0])
+
+  expect(await setBinding(page, param0.name, '1 + bass')).toBeNull()
+
+  // Store while BOUND (this scene had an expression on param0)…
+  await page.getByRole('button', { name: 'Store' }).click()
+  await page.getByRole('button', { name: 'F1', exact: true }).click()
+
+  // …then remove the expression (the user's reported workflow).
+  await clearBinding(page, param0.name)
+  expect(await getBinding(page, param0.name)).toBeNull()
+
+  // Move the now-unbound param away from its stored position.
+  const changed = param0.min + (param0.max - param0.min) * 0.9
+  await setParam(page, param0.name, changed)
+  expect(await getParam(page, param0.name)).toBeCloseTo(changed, 2)
+
+  // F1 was stored while bound, so its expr for this param is non-null —
+  // applying it re-binds the ORIGINAL expression (new task #35 semantics: a
+  // frame fully defines binding state, not just a value).
+  await page.getByRole('button', { name: 'F1', exact: true }).click()
+  await expect.poll(() => getBinding(page, param0.name)).toBe('1 + bass')
+})
+
+test('a frame press visibly moves the on-screen slider for a plain (unbound, non-macro) param', async ({ page }) => {
+  // The second half of the bug-regression root cause above: applyFrame
+  // writes via engine.setParam directly, which an unbound Knob's own local
+  // slider state does not observe on its own. Asserts the actual DOM
+  // input's value attribute, not just the engine's internal getParam.
+  await boot(page)
+  const param0 = await page.evaluate(() => window.__vizLive!.sceneParams()[0])
+  const slider = page.locator('input[type=range]').first()
+
+  await page.getByRole('button', { name: 'Store' }).click()
+  await page.getByRole('button', { name: 'F1', exact: true }).click() // stores default
+
+  await setParam(page, param0.name, param0.max)
+  await expect.poll(async () => Number(await slider.inputValue())).toBeCloseTo(param0.max, 2)
+
+  await page.getByRole('button', { name: 'F1', exact: true }).click()
+  await expect.poll(async () => Number(await slider.inputValue())).toBeCloseTo(param0.default, 2)
+  expect(await getParam(page, param0.name)).toBeCloseTo(param0.default, 2)
 })

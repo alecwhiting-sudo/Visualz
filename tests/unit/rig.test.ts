@@ -17,7 +17,16 @@ function makeRig(): SessionRig {
       lissajous: {
         params: { freqX: 7 },
         bindings: { freqY: '1 + bass * 11' },
-        frames: [[0.5, 0.2], null, null, null, null, null, null, null],
+        frames: [
+          { values: [0.5, 0.2], exprs: [null, '1 + bass'] },
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+        ],
       },
       julia: { shaders: { 'render-fs': '// edited' } },
     },
@@ -31,7 +40,7 @@ describe('session rig', () => {
     expect(warnings).toEqual([])
     expect(rig.scenes.lissajous.params).toEqual({ freqX: 7 })
     expect(rig.scenes.lissajous.bindings).toEqual({ freqY: '1 + bass * 11' })
-    expect(rig.scenes.lissajous.frames?.[0]).toEqual([0.5, 0.2])
+    expect(rig.scenes.lissajous.frames?.[0]).toEqual({ values: [0.5, 0.2], exprs: [null, '1 + bass'] })
     expect(rig.scenes.julia.shaders).toEqual({ 'render-fs': '// edited' })
     expect(rig.global).toEqual({ transitionSpeed: 2, handoffFadeSeconds: 1.5, macroView: 1, switchTargetId: 'julia' })
   })
@@ -59,10 +68,37 @@ describe('session rig', () => {
     })
     const { rig } = parseRig(text, KNOWN)
     expect(rig.scenes.lissajous.params).toEqual({ freqX: 3 })
-    expect(rig.scenes.lissajous.frames?.[0]).toEqual([1, 0, 0.5])
+    expect(rig.scenes.lissajous.frames?.[0]).toEqual({ values: [1, 0, 0.5], exprs: [null, null, null] })
     expect(rig.scenes.lissajous.frames?.[1]).toBeNull()
     expect(rig.global.transitionSpeed).toBe(10) // clamped to the dial's max
     expect(rig.global.macroView).toBeUndefined() // 7 is not a valid view
+  })
+
+  it('version-tolerant: an OLD bare-number[] frame slot (pre-expression-capture) parses as an all-unbound frame', () => {
+    const text = JSON.stringify({
+      kind: 'session',
+      version: 1,
+      scenes: { lissajous: { frames: [[0.5, 0.2], null, null, null, null, null, null, null] } },
+      global: {},
+    })
+    const { rig, warnings } = parseRig(text, KNOWN)
+    expect(warnings).toEqual([])
+    expect(rig.scenes.lissajous.frames?.[0]).toEqual({ values: [0.5, 0.2], exprs: [null, null] })
+  })
+
+  it('a new-shape frame slot with a malformed exprs array falls back to null per-index', () => {
+    const text = JSON.stringify({
+      kind: 'session',
+      version: 1,
+      scenes: {
+        lissajous: {
+          frames: [{ values: [0.5, 0.2], exprs: ['1 + bass', 42] }, null, null, null, null, null, null, null],
+        },
+      },
+      global: {},
+    })
+    const { rig } = parseRig(text, KNOWN)
+    expect(rig.scenes.lissajous.frames?.[0]).toEqual({ values: [0.5, 0.2], exprs: ['1 + bass', null] })
   })
 
   it('untouched scenes cost nothing: empty entries are dropped on serialize', () => {

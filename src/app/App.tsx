@@ -40,7 +40,15 @@ const XY_HELP_TEXT =
   'XY performance pad — writes the pad.x / pad.y signals; bind them to any parameter with an expression like pad.x * 2.'
 // Frame buttons F1-F8 (task #35): guidance copy for the "?" popover beside them.
 const FRAMES_HELP_TEXT =
-  "Frames store the 8 controller positions PER ALGORITHM — each scene keeps its own F1-F8 bank, saved with your session. Press = jump, Shift+press = glide at the transition speed — or latch the Glide toggle so every press glides (handy on touch, where there's no Shift). Grabbing any control mid-glide takes that parameter over; the rest keep gliding."
+  "Frames store the 8 controller positions PER ALGORITHM — each scene keeps its own F1-F8 bank, saved with your session. A frame also remembers which of those 8 controls had an ƒx expression bound and which didn't: applying it restores that too, so it can REMOVE a binding that was live before you pressed it (the un-bound ones just carry a value; the bound ones re-bind their expression instantly, before any glide starts). Press = jump, Shift+press = glide at the transition speed — or latch the Glide toggle so every press glides (handy on touch, where there's no Shift). Glide only applies to the plain numeric controls; expression binds/clears always happen instantly. Grabbing any control mid-glide takes that parameter over; the rest keep gliding. Right-click a frame to clear it (desktop only for now)."
+
+/** A frame slot's stored state (task #35 upgrade): the 8 positional params'
+ * normalized values, PLUS each one's binding text at store time (`null` =
+ * unbound). Apply semantics fully define the 8 controls — see `applyFrame`. */
+interface Frame {
+  values: number[]
+  exprs: (string | null)[]
+}
 
 // Knob-view toggle (docs/DECKS.md trial): guidance for its "?" popover.
 const KNOB_VIEW_HELP_TEXT =
@@ -86,6 +94,15 @@ export interface VizLiveTestApi {
   /** Read a live param value — full-chain MIDI integration assertions
    * (tests/e2e/midiIntegration.spec.ts) verify hardware→router→param. */
   getParam(name: string): number
+  /** Bind/clear a param's expression directly (bypassing the expr input's
+   * DOM) — Frame F1-F8 expression-capture e2e coverage (tests/e2e/frames.spec.ts)
+   * uses this the same way `setParam` lets it move a value without a
+   * slider's drag mechanics. Returns an error message on a bad expression
+   * instead of throwing, mirroring `engine.setBinding`'s own contract. */
+  setBinding(name: string, src: string): string | null
+  clearBinding(name: string): void
+  /** Read a param's live binding text, or null when unbound. */
+  getBinding(name: string): string | null
   /** The live scene's param schemas, for positional macro assertions. */
   sceneParams(): { name: string; min: number; max: number; default: number }[]
   /** `lastSession.durationFrames / lastSession.fps` (seconds), or `null` if no
@@ -424,8 +441,10 @@ const TAB_HELP: Record<StudioTab, { title: string; body: ReactNode }> = {
             <b>Pads &amp; XY</b> — tap the trigger pads or drag the XY pad for hands-on hits (works on touch).
           </li>
           <li>
-            <b>Frames</b> — store the current knob positions to <b>F1–F8</b>, then jump or <b>Glide</b> back
-            to them (<b>Transition</b> sets the glide time).
+            <b>Frames</b> — store the current knob positions (and which have ƒx expressions bound) to{' '}
+            <b>F1–F8</b>, then jump or <b>Glide</b> back to them (<b>Transition</b> sets the glide time).
+            Applying a frame restores its bindings too — a control the frame had unbound comes back
+            unbound, even if you'd bound it since. Right-click a frame to clear it.
           </li>
           <li>
             <b>Blended scenes</b> also add <b>Mix</b>, <b>Blend mode</b>, and A / B / Fader knob views.
@@ -844,14 +863,25 @@ export function App() {
   // --- Frame buttons F1-F8 (task #35; per-algorithm per docs/SESSIONS.md §7.2)
   // Eight snapshot slots PER SCENE ID (user decision: "frames are per
   // algorithm") — each slot holds that scene's first-8 param values
-  // NORMALIZED ((value-min)/(max-min)) at store time. Switching algorithms
-  // swaps the visible bank; an untouched algorithm has an empty bank; banks
-  // are part of the session rig (saved/exported with it).
-  const [framesByScene, setFramesByScene] = useState<Record<string, (number[] | null)[]>>({})
+  // NORMALIZED ((value-min)/(max-min)) at store time, ALONGSIDE each
+  // param's binding text at that moment (`null` when unbound). A frame
+  // therefore fully defines the 8 controls' state, bindings included —
+  // applying one can REMOVE a binding the frame captured as unbound (see
+  // `applyFrame` below). Switching algorithms swaps the visible bank; an
+  // untouched algorithm has an empty bank; banks are part of the session
+  // rig (saved/exported with it).
+  const [framesByScene, setFramesByScene] = useState<Record<string, (Frame | null)[]>>({})
   const frames = useMemo(
-    () => framesByScene[sceneId] ?? new Array<number[] | null>(MACRO_SLOT_COUNT).fill(null),
+    () => framesByScene[sceneId] ?? new Array<Frame | null>(MACRO_SLOT_COUNT).fill(null),
     [framesByScene, sceneId],
   )
+  // Bumped once per `applyFrame` call (docs bug report: a frame press writes
+  // via `engine.setParam`/`setBinding` directly, which an unbound/non-macro
+  // Knob's own local slider state never observes on its own — the knob
+  // looked frozen even though the engine's value genuinely changed). Passed
+  // into every Knob as a prop so its resync effect fires immediately on a
+  // press, rather than waiting for the next 100ms meter-poll tick.
+  const [frameSyncVersion, setFrameSyncVersion] = useState(0)
   // Store mode: click Store, then a frame button captures into that slot;
   // store mode exits after exactly one capture (single-shot, not a toggle
   // you have to remember to turn back off).
@@ -922,54 +952,90 @@ export function App() {
   }
 
   /** Captures the CURRENT scene's first-8 param values, normalized to [0,1]
-   * over each param's own range, into frame slot `index`. Re-storing
-   * overwrites; store mode always exits after exactly one capture. */
+   * over each param's own range, ALONGSIDE each one's binding text (`null`
+   * when unbound), into frame slot `index`. Re-storing overwrites; store
+   * mode always exits after exactly one capture. */
   const storeFrame = (index: number) => {
     const e = engineRef.current
     if (!e) return
-    const snapshot = e.scene.params.slice(0, MACRO_SLOT_COUNT).map((p) => {
+    const params = e.scene.params.slice(0, MACRO_SLOT_COUNT)
+    const values = params.map((p) => {
       const range = p.max - p.min
       const v = e.scene.getParam(p.name)
       return range === 0 ? 0 : Math.min(1, Math.max(0, (v - p.min) / range))
     })
+    const exprs = params.map((p) => e.getBinding(p.name) ?? null)
     // Per-algorithm banks (docs/SESSIONS.md §7.2): write into the CURRENT
     // scene's bank; other algorithms' banks are untouched.
     setFramesByScene((prev) => {
-      const bank = [...(prev[sceneId] ?? new Array<number[] | null>(MACRO_SLOT_COUNT).fill(null))]
-      bank[index] = snapshot
+      const bank = [...(prev[sceneId] ?? new Array<Frame | null>(MACRO_SLOT_COUNT).fill(null))]
+      bank[index] = { values, exprs }
       return { ...prev, [sceneId]: bank }
     })
     setStoreArmed(false)
   }
 
+  /** Clears frame slot `index` for the CURRENT scene (right-click on the
+   * button — task #35 upgrade). Never applies the slot; works regardless of
+   * store-mode. A no-op on an already-empty slot. */
+  const clearFrame = (index: number) => {
+    setFramesByScene((prev) => {
+      const existing = prev[sceneId]
+      if (!existing || !existing[index]) return prev
+      const bank = [...existing]
+      bank[index] = null
+      return { ...prev, [sceneId]: bank }
+    })
+  }
+
   /** Applies a stored frame POSITIONALLY onto whatever scene is currently
    * live (docs/MACROS.md-style positional carry-over, but a one-shot capture
-   * instead of a live-driven signal): slot i's normalized value maps onto the
-   * current scene's i-th param, range-mapped and step-snapped identically to
-   * a manual knob commit. Params with an explicit expression binding are
-   * skipped (bindings outrank, same precedence Controls 1-8 uses). `glide`
-   * interpolates each affected param from its CURRENT value to the target
-   * over `transitionSpeed` seconds (ease-in-out) via `engine.setParam` calls
-   * every tick, so it records like an ordinary CC sweep; a plain press jumps
-   * instantly via one `setParam` call each. Either way, any already-running
-   * glide is cancelled first. */
+   * instead of a live-driven signal): slot i's stored state fully defines
+   * the current scene's i-th param — a frame is not just a value, it's a
+   * value AND a binding state (task #35 upgrade). For each of the 8
+   * positional params: a non-null stored expression is re-applied via
+   * `engine.setBinding` instantly (replaces whatever binding, if any, is
+   * live now); a null stored expression CLEARS any live binding on that
+   * param and applies the stored value — instantly on a plain press, or via
+   * the existing eased glide over `transitionSpeed` seconds on shift+press
+   * (glide targets only ever apply to plain values; a binding set/clear is
+   * never glided — that wouldn't mean anything). Either way any
+   * already-running glide is cancelled first. Bumps `frameSyncVersion` so
+   * the PERFORM knobs (whose local slider state a direct `engine.setParam`
+   * bypasses) resync their displayed position — see the Knob resync effect
+   * below. */
   const applyFrame = (index: number, glide: boolean) => {
     const e = engineRef.current
-    const snapshot = frames[index]
-    if (!e || !snapshot) return
+    const frame = frames[index]
+    if (!e || !frame) return
     cancelGlide()
     const params = e.scene.params
     const glideTargets: { name: string; from: number; to: number }[] = []
-    for (let i = 0; i < snapshot.length && i < params.length; i++) {
+    for (let i = 0; i < frame.values.length && i < params.length; i++) {
       const p = params[i]
-      if (e.getBinding(p.name) !== undefined) continue
-      const target = snapToStep(p.min + snapshot[i] * (p.max - p.min), p.min, p.max, p.step)
+      const expr = frame.exprs[i]
+      if (expr !== null) {
+        try {
+          e.setBinding(p.name, expr)
+        } catch {
+          // Stored expression no longer compiles (param schema/DSL changed
+          // since store) — leave whatever binding/value is live, same
+          // graceful-degradation policy as sceneMemory's applySceneEntry.
+        }
+        continue
+      }
+      // Only clear when a binding is actually live — clearBinding records a
+      // session event, and a blanket call would write 8 no-op events into
+      // the take on every plain press (review nit).
+      if (e.getBinding(p.name) !== undefined) e.clearBinding(p.name)
+      const target = snapToStep(p.min + frame.values[i] * (p.max - p.min), p.min, p.max, p.step)
       if (glide) {
         glideTargets.push({ name: p.name, from: e.scene.getParam(p.name), to: target })
       } else {
         e.setParam(p.name, target)
       }
     }
+    setFrameSyncVersion((v) => v + 1)
     if (glide) startGlide(glideTargets)
   }
 
@@ -1083,7 +1149,7 @@ export function App() {
       return
     }
     sceneMemoryRef.current = {}
-    const banks: Record<string, (number[] | null)[]> = {}
+    const banks: Record<string, (Frame | null)[]> = {}
     for (const [id, entry] of Object.entries(rig.scenes)) {
       const { frames: bank, ...rest } = entry
       if (Object.keys(rest).length) sceneMemoryRef.current[id] = rest
@@ -1289,6 +1355,16 @@ export function App() {
       setInputSignal: (name, value) => e.setInputSignal(name, value),
       setParam: (name, value) => e.setParam(name, value),
       getParam: (name) => e.scene.getParam(name),
+      setBinding: (name, src) => {
+        try {
+          e.setBinding(name, src)
+          return null
+        } catch (err) {
+          return err instanceof Error ? err.message : String(err)
+        }
+      },
+      clearBinding: (name) => e.clearBinding(name),
+      getBinding: (name) => e.getBinding(name) ?? null,
       sceneParams: () =>
         e.scene.params.map((p) => ({ name: p.name, min: p.min, max: p.max, default: p.default })),
       lastTakeDuration: () => {
@@ -2192,6 +2268,7 @@ export function App() {
                     schema={p}
                     slot={engine.macroSlotOf(p.name)}
                     liveValue={paramValues[p.name] ?? p.default}
+                    frameSyncVersion={frameSyncVersion}
                   />
                 ))}
                 <p className="keyboard-hint">{KEYBOARD_HINT}</p>
@@ -2210,7 +2287,7 @@ export function App() {
                   glideLatched={glideLatched}
                   onToggleGlide={() => setGlideLatched((g) => !g)}
                   onFrameClick={onFrameClick}
-                  onFrameStore={storeFrame}
+                  onFrameClear={clearFrame}
                   transitionSpeed={transitionSpeed}
                   onTransitionSpeedChange={setTransitionSpeed}
                 />
@@ -3173,8 +3250,8 @@ function XyPad({ engine }: { engine: Engine }) {
  * dial — all the actual state/logic (frames array, store-armed, glide-latch,
  * glide animator) lives in App itself (session-scoped, must survive scene
  * switches for free); this is purely the render + click wiring. Right-click
- * on a frame is a desktop shortcut that stores directly, bypassing the Store
- * toggle entirely.
+ * on a frame CLEARS that slot (desktop-only; touch has no equivalent yet —
+ * a long-press affordance is a natural follow-up).
  */
 function FramesBlock({
   frames,
@@ -3183,17 +3260,22 @@ function FramesBlock({
   glideLatched,
   onToggleGlide,
   onFrameClick,
-  onFrameStore,
+  onFrameClear,
   transitionSpeed,
   onTransitionSpeedChange,
 }: {
-  frames: (number[] | null)[]
+  frames: (Frame | null)[]
   storeArmed: boolean
   onToggleStore: () => void
   glideLatched: boolean
   onToggleGlide: () => void
   onFrameClick: (index: number, shiftKey: boolean) => void
-  onFrameStore: (index: number) => void
+  /** Right-click on a frame (task #35 upgrade): clears that slot for the
+   * current scene. Never applies it — store-mode/glide are irrelevant here,
+   * it always clears regardless of either. Touch has no right-click
+   * equivalent yet (acceptable for now — a long-press affordance would be
+   * the natural touch parallel, left for later). */
+  onFrameClear: (index: number) => void
   transitionSpeed: number
   onTransitionSpeedChange: (seconds: number) => void
 }) {
@@ -3209,10 +3291,11 @@ function FramesBlock({
             key={i}
             type="button"
             className={`frame-button${frame ? ' frame-button-occupied' : ''}`}
+            title={`Store/apply frame ${i + 1} — right-click to clear`}
             onClick={(ev) => onFrameClick(i, ev.shiftKey)}
             onContextMenu={(ev) => {
               ev.preventDefault()
-              onFrameStore(i)
+              onFrameClear(i)
             }}
           >
             F{i + 1}
@@ -3392,6 +3475,7 @@ function Knob({
   schema,
   slot,
   liveValue,
+  frameSyncVersion,
 }: {
   engine: Engine
   schema: { name: string; label: string; min: number; max: number; default: number; step?: number }
@@ -3410,6 +3494,14 @@ function Knob({
    * than freezing the slider wherever it happened to be when the binding
    * landed. */
   liveValue: number
+  /** Bumped by App on every `applyFrame` call (bug report: a frame press
+   * writes this param via `engine.setParam` directly — a plain, unbound,
+   * non-macro-driven knob's local `value` state never saw that write, so
+   * the slider looked frozen even though the engine's value genuinely
+   * moved). A change here re-seeds `value` straight from the engine — see
+   * the effect below. Not used for anything else; a plain manual drag never
+   * changes it. */
+  frameSyncVersion: number
 }) {
   const [value, setValue] = useState(engine.scene.getParam(schema.name))
   const { bound, macroDriven, exprText, setExprText, applyExpr, error } = useParamBinding(engine, schema.name)
@@ -3426,6 +3518,36 @@ function Knob({
   // prop's CHANGE is what matters there, not its value.)
   const displayValue = bound ? liveValue : macroDriven ? engine.scene.getParam(schema.name) : value
   const macroClass = macroDriven && !bound ? ' knob-macro' : ''
+
+  // Frame-press resync (bug report above): re-seed local `value` from the
+  // engine whenever `frameSyncVersion` changes (an `applyFrame` call just
+  // ran) — a plain jump lands here immediately; a glide's first tick has
+  // usually already landed by the time this effect runs, and the poll-driven
+  // effect below tracks the rest of it. Skipped while `bound`/`macroDriven`,
+  // which already read the engine every render and need no resync.
+  useEffect(() => {
+    if (bound || macroDriven) return
+    setValue(engine.scene.getParam(schema.name))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire only on an actual frame press, not every render
+  }, [frameSyncVersion])
+
+  // Continuous glide resync: while a frame glide is in flight (or any other
+  // out-of-band writer, in principle) it keeps calling `engine.setParam`
+  // every rAF tick, which the single `frameSyncVersion` bump above only
+  // catches at the start. Riding the EXISTING 100ms meter-poll (`liveValue`)
+  // rather than adding new per-frame churn: resync from it whenever it
+  // drifts from the locally-held value, unless the user themselves dragged
+  // this slider in roughly the last poll interval (`lastLocalEditRef`) —
+  // that guard is what keeps an ordinary manual drag from rubber-banding to
+  // a stale polled value between ticks (same rubber-band `macroDriven`
+  // avoids above, just for the plain case, which only needs it now that
+  // frames can write to it from outside).
+  const lastLocalEditRef = useRef(0)
+  useEffect(() => {
+    if (bound || macroDriven) return
+    if (performance.now() - lastLocalEditRef.current < 150) return
+    setValue((v) => (v === liveValue ? v : liveValue))
+  }, [liveValue, bound, macroDriven])
 
   return (
     <label className={`knob${macroClass}`}>
@@ -3451,6 +3573,7 @@ function Knob({
         disabled={bound}
         onChange={(ev) => {
           const v = Number(ev.target.value)
+          lastLocalEditRef.current = performance.now()
           setValue(v)
           engine.setParam(schema.name, v)
         }}
