@@ -3279,6 +3279,17 @@ function FramesBlock({
   transitionSpeed: number
   onTransitionSpeedChange: (seconds: number) => void
 }) {
+  // Clear feedback (user report): the hover style used to look like the
+  // "occupied" style, so a right-click clear under the cursor was invisible.
+  // Alongside the CSS de-confusion, a cleared button flashes briefly so the
+  // removal is unmistakable even mid-hover.
+  const [clearedFlash, setClearedFlash] = useState<number | null>(null)
+  const clearedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const flashClear = (index: number) => {
+    if (clearedTimerRef.current) clearTimeout(clearedTimerRef.current)
+    setClearedFlash(index)
+    clearedTimerRef.current = setTimeout(() => setClearedFlash(null), 450)
+  }
   return (
     <div className="frames-block">
       <div className="frames-header">
@@ -3290,12 +3301,13 @@ function FramesBlock({
           <button
             key={i}
             type="button"
-            className={`frame-button${frame ? ' frame-button-occupied' : ''}`}
+            className={`frame-button${frame ? ' frame-button-occupied' : ''}${clearedFlash === i ? ' frame-button-cleared' : ''}`}
             title={`Store/apply frame ${i + 1} — right-click to clear`}
             onClick={(ev) => onFrameClick(i, ev.shiftKey)}
             onContextMenu={(ev) => {
               ev.preventDefault()
               onFrameClear(i)
+              flashClear(i)
             }}
           >
             F{i + 1}

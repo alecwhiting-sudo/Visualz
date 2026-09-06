@@ -1356,9 +1356,12 @@ body {
   cursor: pointer;
 }
 
+/* Hover deliberately does NOT use the occupied look (user report: with both
+   accent-coloured, a right-click clear under the cursor was invisible — the
+   hover kept the button "lit"). Hover = border brightens only; occupied =
+   filled tint + accent text. An emptied slot visibly dims even mid-hover. */
 .frame-button:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--text-dim);
 }
 
 /* Occupied frames get a lit style so it's visible at a glance which of the
@@ -1367,6 +1370,28 @@ body {
   border-color: var(--accent-dim);
   background: rgba(240, 134, 42, 0.12);
   color: var(--accent);
+}
+.frame-button-occupied:hover {
+  border-color: var(--accent);
+}
+
+/* Right-click clear feedback: a short red-tinted flash (the destructive
+   colour family, matching .record-armed's role) so the removal reads
+   instantly even while the cursor sits on the button. */
+@keyframes frame-cleared-flash {
+  0% {
+    border-color: #e05555;
+    background: rgba(224, 85, 85, 0.35);
+    color: #fff;
+  }
+  100% {
+    border-color: var(--border);
+    background: var(--bg-control);
+    color: #cfcfe0;
+  }
+}
+.frame-button-cleared {
+  animation: frame-cleared-flash 0.45s ease-out;
 }
 
 /* Store toggle: accent-lit (not the red `.record-armed` — storing a frame
