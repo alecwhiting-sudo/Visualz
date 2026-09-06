@@ -47,8 +47,18 @@ function cc(page: Page, num: number, value: number) {
   return page.evaluate(([n, v]) => window.__fakeMidi!.send([0xb0, n, v]), [num, value])
 }
 
+/** Sends a note-on (velocity 100) — the only kind that fires a trigger (see
+ * `decodeMidiMessage`: velocity-0 note-on folds to note-off). */
+function noteOn(page: Page, num: number) {
+  return page.evaluate((n) => window.__fakeMidi!.send([0x90, n, 100]), num)
+}
+
 async function getParam(page: Page, name: string): Promise<number> {
   return page.evaluate((n) => window.__vizLive!.getParam(n), name)
+}
+
+async function getFxParam(page: Page, passId: string, name: string): Promise<number> {
+  return page.evaluate(([p, n]) => window.__vizLive!.getFxParam(p, n), [passId, name])
 }
 
 test('macro-mapped hardware knobs keep driving params across a handoff', async ({ page }) => {
@@ -159,7 +169,10 @@ test('sequential learn remaps over a pre-populated table', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Map controls…' })).toBeVisible()
 
   // All 8 slots still show their (unchanged, since it's the same CCs) rows.
-  const slotCcs = await page.locator('.macro-slot-cc').allTextContents()
+  // Scoped to the Controls 1-8 block — Frame notes / FX notes render their
+  // own `.macro-slot-cc` rows in the same disclosure now.
+  const controlsBlock = page.locator('.macro-controls', { has: page.locator('h3', { hasText: 'Controls 1-8' }) })
+  const slotCcs = await controlsBlock.locator('.macro-slot-cc').allTextContents()
   expect(slotCcs).toEqual(['CC 21', 'CC 22', 'CC 23', 'CC 24', 'CC 25', 'CC 26', 'CC 27', 'CC 28'])
 
   // And the mapping actually drives params: slot 1 (CC 21) engages the
@@ -167,6 +180,96 @@ test('sequential learn remaps over a pre-populated table', async ({ page }) => {
   const param0 = await page.evaluate(() => window.__vizLive!.sceneParams()[0])
   await cc(page, 21, 127)
   await expect.poll(() => getParam(page, param0.name)).toBeCloseTo(param0.max, 1)
+})
+
+/**
+ * Note -> Frame (task): a learned note fires the same `applyFrame` path a
+ * frame button's own click does — pressing the stored PERFORM value while
+ * the param is elsewhere, learning a note for F1, then playing that note
+ * jumps the param straight back to the stored value.
+ */
+test('learning a note for F1 makes that note jump the stored frame', async ({ page }) => {
+  await bootWithFakeMidi(page)
+  const param0 = await page.evaluate(() => window.__vizLive!.sceneParams()[0])
+
+  // Store the current (default) position into F1 from the PERFORM tab.
+  await page.locator('.panel-tabs button', { hasText: 'PERFORM' }).click()
+  await page.getByRole('button', { name: 'Store' }).click()
+  await page.getByRole('button', { name: 'F1', exact: true }).click()
+
+  // Move the param away, back in INPUTS, learn note 60 (C4) for F1.
+  await page.evaluate((n) => window.__vizLive!.setParam(n, 0), param0.name)
+  await page.locator('.panel-tabs button', { hasText: 'INPUTS' }).click()
+  await page.getByRole('button', { name: 'Map frames…' }).click()
+  await noteOn(page, 60)
+  // A single-slot sweep leaves the pass armed at slot 2 (only 8-of-8 auto-
+  // stops) — end it explicitly.
+  await page.getByRole('button', { name: /Stop mapping/ }).click()
+  await expect(page.locator('.macro-slot-cc', { hasText: 'C4' })).toBeVisible()
+
+  // Move the param away again, THEN play the learned note.
+  await page.evaluate((n) => window.__vizLive!.setParam(n, 0), param0.name)
+  expect(await getParam(page, param0.name)).toBeCloseTo(0, 4)
+  await noteOn(page, 60)
+  await expect.poll(() => getParam(page, param0.name)).toBeCloseTo(param0.default, 2)
+})
+
+/**
+ * Note -> FX toggle (task): per-row Learn arms a note for one pass's
+ * `enabled` flag, mirroring the FX tab's own checkbox path
+ * (`engine.setFxParam(passId, 'enabled', …)`) — first press turns it on,
+ * second press turns it off.
+ */
+test('learning a note for an FX pass toggles it on then off', async ({ page }) => {
+  await bootWithFakeMidi(page)
+  const kaleidoRow = page.locator('.macro-slot', { hasText: 'Kaleido' })
+  await kaleidoRow.getByRole('button', { name: 'Learn' }).click()
+  await noteOn(page, 64) // E4
+  await expect(kaleidoRow.locator('.macro-slot-cc')).toHaveText('E4')
+
+  expect(await getFxParam(page, 'kaleido', 'enabled')).toBe(0)
+  await noteOn(page, 64)
+  await expect.poll(() => getFxParam(page, 'kaleido', 'enabled')).toBe(1)
+  await noteOn(page, 64)
+  await expect.poll(() => getFxParam(page, 'kaleido', 'enabled')).toBe(0)
+})
+
+/**
+ * Re-learn over a populated table (task: "re-learn over an existing table
+ * must work — apply the same pass-scoped dedup rule as the CC learn fix").
+ * Seeds F1<-note 40 via localStorage, then a fresh sequential "Map frames…"
+ * sweep over the SAME note for F1 must still complete (not deadlock on the
+ * "already mapped" guard) and land the table unchanged.
+ */
+test('sequential frame-note re-learn remaps over a pre-populated table', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('visualz.midi.frameNotes.v1', JSON.stringify([40, null, null, null, null, null, null, null]))
+  })
+  await bootWithFakeMidi(page)
+  await expect(page.locator('.macro-slot-cc', { hasText: 'E2' })).toBeVisible() // midiNoteName(40) === 'E2'
+
+  await page.getByRole('button', { name: 'Map frames…' }).click()
+  await noteOn(page, 40) // re-claims slot 1 with the SAME note it already held
+  await page.getByRole('button', { name: /Stop mapping/ }).click()
+  await expect(page.locator('.macro-slot-cc', { hasText: 'E2' })).toBeVisible()
+})
+
+/** A note claims at most one target across BOTH tables: learning it for an
+ * FX pass after it was already a Frame note steals it away from the frame. */
+test('learning a note already mapped to a frame steals it for the FX pass', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('visualz.midi.frameNotes.v1', JSON.stringify([60, null, null, null, null, null, null, null]))
+  })
+  await bootWithFakeMidi(page)
+  await expect(page.locator('.macro-slot-cc', { hasText: 'C4' })).toBeVisible()
+
+  const mirrorRow = page.locator('.macro-slot', { hasText: 'Mirror' })
+  await mirrorRow.getByRole('button', { name: 'Learn' }).click()
+  await noteOn(page, 60)
+  await expect(mirrorRow.locator('.macro-slot-cc')).toHaveText('C4')
+  // F1's row no longer shows it.
+  const f1Row = page.locator('.macro-slot', { hasText: 'F1' }).first()
+  await expect(f1Row.locator('.macro-slot-cc')).toHaveText('—')
 })
 
 test('"Clear mapping" resets all 8 slots, and the reset itself persists across a reload', async ({ page }) => {
@@ -177,7 +280,10 @@ test('"Clear mapping" resets all 8 slots, and the reset itself persists across a
   await page.getByRole('button', { name: /Stop mapping/ }).click()
   await expect(page.getByText('CC 50')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Clear mapping' }).click()
+  // Scoped to the Controls 1-8 block — Frame notes / FX notes have their own
+  // "Clear mapping" button in the same disclosure now.
+  const controlsBlock = page.locator('.macro-controls', { has: page.locator('h3', { hasText: 'Controls 1-8' }) })
+  await controlsBlock.getByRole('button', { name: 'Clear mapping' }).click()
   await expect(page.getByText('CC 50')).toHaveCount(0)
 
   await page.reload()

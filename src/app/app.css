@@ -912,6 +912,14 @@ body {
   color: var(--text-dim);
 }
 
+/* FX notes rows: pass names ("RGB Shift", "Zoom Pulse") are wider than the
+   plain numeric slot column, so let this variant size to content. */
+.macro-slot-label {
+  width: auto;
+  min-width: 62px;
+  text-align: left;
+}
+
 .macro-slot-cc {
   width: 46px;
   font-family: var(--mono);

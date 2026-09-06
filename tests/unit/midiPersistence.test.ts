@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { blankMacroCcBySlot, parseDeviceActiveMap, parseMacroCcBySlot } from '../../src/app/midiPersistence'
+import {
+  blankFrameNoteBySlot,
+  blankFxNoteByPassId,
+  blankMacroCcBySlot,
+  FX_NOTE_PASS_IDS,
+  midiNoteName,
+  parseDeviceActiveMap,
+  parseFrameNoteBySlot,
+  parseFxNoteByPassId,
+  parseMacroCcBySlot,
+} from '../../src/app/midiPersistence'
 
 describe('parseMacroCcBySlot', () => {
   it('returns a blank (all-null) table for null/absent input', () => {
@@ -81,5 +91,90 @@ describe('LAUNCHKEY_MACRO_CC', () => {
   it('maps Controls 1..8 to CC 21..28', () => {
     expect(LAUNCHKEY_MACRO_CC).toEqual([21, 22, 23, 24, 25, 26, 27, 28])
     expect(LAUNCHKEY_MACRO_CC.length).toBe(MACRO_SLOT_COUNT)
+  })
+})
+
+describe('parseFrameNoteBySlot', () => {
+  it('returns a blank (all-null) table for null/absent input', () => {
+    expect(parseFrameNoteBySlot(null)).toEqual(blankFrameNoteBySlot())
+  })
+
+  it('parses a valid stored table back out unchanged', () => {
+    const stored = [36, null, 38, null, null, null, null, null]
+    expect(parseFrameNoteBySlot(JSON.stringify(stored))).toEqual(stored)
+  })
+
+  it('falls back to blank for malformed JSON', () => {
+    expect(parseFrameNoteBySlot('{not json')).toEqual(blankFrameNoteBySlot())
+  })
+
+  it('falls back to blank for the wrong length', () => {
+    expect(parseFrameNoteBySlot(JSON.stringify([1, 2, 3]))).toEqual(blankFrameNoteBySlot())
+  })
+
+  it('falls back to blank for non-array JSON', () => {
+    expect(parseFrameNoteBySlot(JSON.stringify({ a: 1 }))).toEqual(blankFrameNoteBySlot())
+  })
+
+  it('falls back to blank if any element is neither a number nor null', () => {
+    const bad = [1, 2, 3, 4, 5, 6, 7, 'not-a-number']
+    expect(parseFrameNoteBySlot(JSON.stringify(bad))).toEqual(blankFrameNoteBySlot())
+  })
+
+  it('falls back to blank for NaN entries', () => {
+    expect(parseFrameNoteBySlot('[NaN,null,null,null,null,null,null,null]')).toEqual(blankFrameNoteBySlot())
+  })
+})
+
+describe('parseFxNoteByPassId', () => {
+  it('returns an all-null map for null/absent input', () => {
+    expect(parseFxNoteByPassId(null)).toEqual(blankFxNoteByPassId())
+  })
+
+  it('parses a valid stored map back out unchanged', () => {
+    const stored = { kaleido: 40, mirror: null, rgbshift: 41, pixelate: null, posterize: null, zoompulse: null }
+    expect(parseFxNoteByPassId(JSON.stringify(stored))).toEqual(stored)
+  })
+
+  it('falls back to all-null for malformed JSON', () => {
+    expect(parseFxNoteByPassId('{not json')).toEqual(blankFxNoteByPassId())
+  })
+
+  it('falls back to all-null for a non-object (array/primitive) JSON value', () => {
+    expect(parseFxNoteByPassId(JSON.stringify([1, 2, 3]))).toEqual(blankFxNoteByPassId())
+    expect(parseFxNoteByPassId(JSON.stringify('hello'))).toEqual(blankFxNoteByPassId())
+  })
+
+  it('drops unknown keys and non-number/non-null entries individually', () => {
+    const raw = JSON.stringify({ kaleido: 40, mirror: 'yes', bogus: 99 })
+    expect(parseFxNoteByPassId(raw)).toEqual({
+      ...blankFxNoteByPassId(),
+      kaleido: 40,
+    })
+  })
+
+  it('falls back an entry to null for a NaN value', () => {
+    expect(parseFxNoteByPassId('{"kaleido":NaN}')).toEqual(blankFxNoteByPassId())
+  })
+})
+
+describe('FX_NOTE_PASS_IDS', () => {
+  it('is the 6 built-in FX pass ids, in chain order', () => {
+    expect(FX_NOTE_PASS_IDS).toEqual(['kaleido', 'mirror', 'rgbshift', 'pixelate', 'posterize', 'zoompulse'])
+  })
+})
+
+describe('midiNoteName', () => {
+  it('names standard notes using MIDI octave convention (60 = C4)', () => {
+    expect(midiNoteName(60)).toBe('C4')
+    expect(midiNoteName(69)).toBe('A4')
+    expect(midiNoteName(36)).toBe('C2')
+    expect(midiNoteName(0)).toBe('C-1')
+  })
+
+  it('falls back to "note N" for out-of-range/non-integer input', () => {
+    expect(midiNoteName(-1)).toBe('note -1')
+    expect(midiNoteName(128)).toBe('note 128')
+    expect(midiNoteName(1.5)).toBe('note 1.5')
   })
 })

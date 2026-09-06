@@ -22,12 +22,19 @@ import { SHADER_DOCS } from '../scenes/shaderDocs'
 import { easedValue } from './frameGlide'
 import { TransitionSpeedKnob } from './TransitionSpeedKnob'
 import {
+  blankFrameNoteBySlot,
+  blankFxNoteByPassId,
   blankMacroCcBySlot,
   DEVICE_ACTIVE_STORAGE_KEY,
+  FRAME_NOTE_STORAGE_KEY,
+  FX_NOTE_STORAGE_KEY,
   isLaunchkeyMini,
   LAUNCHKEY_MACRO_CC,
   MACRO_CC_STORAGE_KEY,
+  midiNoteName,
   parseDeviceActiveMap,
+  parseFrameNoteBySlot,
+  parseFxNoteByPassId,
   parseMacroCcBySlot,
 } from './midiPersistence'
 import './app.css'
@@ -121,6 +128,10 @@ export interface VizLiveTestApi {
    * resets between rehearsal and the take, unlike every existing render-mode
    * fixture which always records from a fresh engine at frame 0. */
   lastSessionDoc(): unknown | null
+  /** Read a live FX pass param (or its `'enabled'` flag) — Note->FX-toggle
+   * e2e coverage (tests/e2e/midiIntegration.spec.ts) asserts a learned note
+   * actually toggles the pass via `engine.setFxParam`. */
+  getFxParam(passId: string, name: string): number
 }
 
 declare global {
@@ -296,6 +307,37 @@ function saveLaunchkeyAsked(): void {
     // Ignore — worst case it asks again next launch.
   }
 }
+// Note -> Frame / FX-toggle persistence (same shape/reasoning as the CC->slot
+// table above): frameNoteBySlot lives in the SAME localStorage-quota try/catch
+// pattern, fxNoteByPassId likewise.
+function loadFrameNoteBySlot(): (number | null)[] {
+  try {
+    return parseFrameNoteBySlot(localStorage.getItem(FRAME_NOTE_STORAGE_KEY))
+  } catch {
+    return parseFrameNoteBySlot(null)
+  }
+}
+function saveFrameNoteBySlot(v: (number | null)[]): void {
+  try {
+    localStorage.setItem(FRAME_NOTE_STORAGE_KEY, JSON.stringify(v))
+  } catch {
+    // Ignore — a failed save just means the mapping won't survive a reload.
+  }
+}
+function loadFxNoteByPassId(): Record<string, number | null> {
+  try {
+    return parseFxNoteByPassId(localStorage.getItem(FX_NOTE_STORAGE_KEY))
+  } catch {
+    return parseFxNoteByPassId(null)
+  }
+}
+function saveFxNoteByPassId(v: Record<string, number | null>): void {
+  try {
+    localStorage.setItem(FX_NOTE_STORAGE_KEY, JSON.stringify(v))
+  } catch {
+    // Ignore, same reasoning as saveFrameNoteBySlot.
+  }
+}
 function loadDeviceActiveMap(): Record<string, boolean> {
   try {
     return parseDeviceActiveMap(localStorage.getItem(DEVICE_ACTIVE_STORAGE_KEY))
@@ -411,6 +453,15 @@ const TAB_HELP: Record<StudioTab, { title: string; body: ReactNode }> = {
             <b>Controls 1–8</b> — the eight macro knobs that drive scene parameters. Press{' '}
             <b>Map controls…</b> then turn a hardware knob to bind each in turn (or <b>Learn</b> a single
             row); each shows its CC and a live level. <b>Clear mapping</b> resets them.
+          </li>
+          <li>
+            <b>Frame notes</b> — map a MIDI note to each of <b>F1–F8</b>: press <b>Map frames…</b> then
+            play a note for each slot in turn (or <b>Learn</b> a single row); a mapped note jumps that frame
+            exactly like clicking it (glides instead if the <b>Glide</b> latch is on). <b>FX notes</b> maps a
+            note to each FX pass's on/off switch — pressing it toggles that pass, same as its checkbox. A
+            note can only do one job at a time: mapping it here steals it away from wherever it was mapped
+            before, including the plain T1–T4 pad space (a low note number, 0–3) — a Frame/FX mapping always
+            wins over a pad hit.
           </li>
           <li>
             <b>Signals</b> — live meters for the audio features (<code>rms</code>, <code>bass</code>,{' '}
@@ -714,6 +765,116 @@ export function App() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [macroLearn])
+
+  // Note -> Frame (F1-F8) and Note -> FX-toggle tables (task: "map MIDI notes
+  // to frame presses and FX pass enable/disable"). Same shape/reasoning as
+  // `macroCcBySlot` above: App-level, scene-independent, localStorage-backed,
+  // and mirrored into a ref for the MIDI note handler (set up once per
+  // `attachLiveEngine` call) to read live.
+  //
+  // `frameNoteBySlot[i]` is the learned note number for F(i+1), or `null`.
+  const [frameNoteBySlot, setFrameNoteBySlot] = useState<(number | null)[]>(() => loadFrameNoteBySlot())
+  const frameNoteBySlotRef = useRef(frameNoteBySlot)
+  useEffect(() => {
+    frameNoteBySlotRef.current = frameNoteBySlot
+    saveFrameNoteBySlot(frameNoteBySlot)
+  }, [frameNoteBySlot])
+  // `fxNoteByPassId[id]` is the learned note number for that FX pass's
+  // enabled toggle, or `null`.
+  const [fxNoteByPassId, setFxNoteByPassId] = useState<Record<string, number | null>>(() => loadFxNoteByPassId())
+  const fxNoteByPassIdRef = useRef(fxNoteByPassId)
+  useEffect(() => {
+    fxNoteByPassIdRef.current = fxNoteByPassId
+    saveFxNoteByPassId(fxNoteByPassId)
+  }, [fxNoteByPassId])
+
+  /** Clears `note` out of BOTH tables (whichever slot/pass currently holds
+   * it, if any) — a note can be claimed by at most one target across the two
+   * tables, and learning steals it (same "learning steals it" rule the
+   * Controls 1-8 CC learn already follows), so every claim path routes
+   * through this first. Returns the updated tables (callers still need to
+   * write their own new claim into whichever one they're targeting). */
+  const stealNoteFromNoteTables = (note: number): { frames: (number | null)[]; fx: Record<string, number | null> } => {
+    const frames = frameNoteBySlotRef.current.map((n) => (n === note ? null : n))
+    const fx = { ...fxNoteByPassIdRef.current }
+    for (const id of Object.keys(fx)) if (fx[id] === note) fx[id] = null
+    return { frames, fx }
+  }
+
+  // Non-null while "Map frames…" (sequential) or a per-row relearn (single)
+  // is in progress; `slot` (1-8) is the next (or only) frame slot a matching
+  // note will claim. Mirrors `macroLearn`/`armMacroLearn` exactly, including
+  // the ref-write-before-setState rule (a midimessage can arrive before React
+  // flushes the mirroring effect).
+  const [frameNoteLearn, setFrameNoteLearn] = useState<{ mode: 'sequential' | 'single'; slot: number } | null>(null)
+  const frameNoteLearnRef = useRef(frameNoteLearn)
+  useEffect(() => {
+    frameNoteLearnRef.current = frameNoteLearn
+  }, [frameNoteLearn])
+  const armFrameNoteLearn = (v: { mode: 'sequential' | 'single'; slot: number } | null) => {
+    frameNoteLearnRef.current = v
+    setFrameNoteLearn(v)
+    // Mutually exclusive with the FX-row learn (review finding): arming one
+    // silently shadowed the other — the interceptor checks frame learn
+    // first, so an armed FX "Waiting…" would eat the NEXT note instead.
+    if (v !== null && fxNoteLearnRef.current !== null) {
+      fxNoteLearnRef.current = null
+      setFxNoteLearn(null)
+    }
+  }
+  /** Claims `note` for frame slot `slot` (1-based): steals it out of both
+   * tables first, then writes it in. Called synchronously from the MIDI note
+   * handler, so both the ref and state are updated together (same rule as
+   * `armMacroLearn`). Returns the new frame table for the caller to chain
+   * sequential-learn's own advance/stop logic off of. */
+  const claimNoteForFrame = (note: number, slot: number): (number | null)[] => {
+    const { frames, fx } = stealNoteFromNoteTables(note)
+    frames[slot - 1] = note
+    frameNoteBySlotRef.current = frames
+    setFrameNoteBySlot(frames)
+    fxNoteByPassIdRef.current = fx
+    setFxNoteByPassId(fx)
+    return frames
+  }
+
+  // Non-null (a pass id) while that FX row's "Learn" button is armed —
+  // per-row learn (6 rows; sequential would be overkill for a flat list with
+  // no natural order to sweep). Mirrors `frameNoteLearn` for the ref rule.
+  const [fxNoteLearn, setFxNoteLearn] = useState<string | null>(null)
+  const fxNoteLearnRef = useRef(fxNoteLearn)
+  useEffect(() => {
+    fxNoteLearnRef.current = fxNoteLearn
+  }, [fxNoteLearn])
+  const armFxNoteLearn = (v: string | null) => {
+    fxNoteLearnRef.current = v
+    setFxNoteLearn(v)
+    // See armFrameNoteLearn: the two learn flows are mutually exclusive.
+    if (v !== null && frameNoteLearnRef.current !== null) {
+      frameNoteLearnRef.current = null
+      setFrameNoteLearn(null)
+    }
+  }
+  /** Claims `note` for FX pass `passId`: steals it out of both tables first,
+   * then writes it in. Mirrors `claimNoteForFrame`. */
+  const claimNoteForFx = (note: number, passId: string): void => {
+    const { frames, fx } = stealNoteFromNoteTables(note)
+    fx[passId] = note
+    frameNoteBySlotRef.current = frames
+    setFrameNoteBySlot(frames)
+    fxNoteByPassIdRef.current = fx
+    setFxNoteByPassId(fx)
+  }
+  // Esc ends an in-progress frame-note or FX-note learn early, same as macro-learn.
+  useEffect(() => {
+    if (!frameNoteLearn && !fxNoteLearn) return
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Escape') return
+      armFrameNoteLearn(null)
+      armFxNoteLearn(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [frameNoteLearn, fxNoteLearn])
 
   const [sceneId, setSceneId] = useState(DEFAULT_SCENE_ID)
   // Canvas format (16:9 / 9:16 / 1:1, src/core/format.ts): construction-time
@@ -1038,11 +1199,22 @@ export function App() {
     setFrameSyncVersion((v) => v + 1)
     if (glide) startGlide(glideTargets)
   }
+  // Always-fresh ref onto the function above (same pattern as `buildRigRef`
+  // below): the MIDI note handler is built once per `attachLiveEngine` call
+  // and must still call the CURRENT `applyFrame` (closing over the current
+  // scene's `frames`), not whatever was live at attach time.
+  const applyFrameRef = useRef(applyFrame)
+  applyFrameRef.current = applyFrame
 
   // Glide latch (user request): Shift+press is unreachable on touch devices,
   // so a UI toggle makes PLAIN presses glide while latched. Shift still
   // glides regardless — the latch adds a mode, it doesn't replace the key.
   const [glideLatched, setGlideLatched] = useState(false)
+  // Mirrors `applyFrameRef` above — a note-triggered frame press (unlike a
+  // button click's always-fresh closure) needs the CURRENT latch state, not
+  // whatever it was when the MIDI handle was last (re)built.
+  const glideLatchedRef = useRef(glideLatched)
+  glideLatchedRef.current = glideLatched
 
   // Knob-view toggle (docs/DECKS.md trial): which deck the 8 macro slots
   // address on a composite (blend-*) scene — 0 A, 1 B, 2 fader-follows,
@@ -1372,6 +1544,7 @@ export function App() {
         return doc ? doc.durationFrames / doc.fps : null
       },
       lastSessionDoc: () => lastSessionRef.current,
+      getFxParam: (passId, name) => e.getFxParam(passId, name),
     }
     meterIntervalRef.current = window.setInterval(() => {
       setLevels(e.bus.snapshot())
@@ -1444,7 +1617,62 @@ export function App() {
     // at the mapping-layer, and there's nothing for a future non-MIDI macro
     // source (a future OSC/gamepad frontend, say) to have to route through.
     const midiSink: MidiSink = {
-      queueInput: (event) => e.queueInput(event),
+      // Note -> Frame / Note -> FX-toggle (task): intercept a note-on
+      // trigger event (mapping/midi.ts's `sink.queueInput({type:'trigger',
+      // index: <note number>})` — a note number IS a trigger index there)
+      // BEFORE it reaches `e.queueInput`/the T1-T4 pad rules. Learned frame
+      // and FX notes take precedence over the pad trigger space (spec: a
+      // clash is only possible for note numbers 0-3, which the pads treat as
+      // T1-T4): when a note matches a learned target (or a learn pass is
+      // armed), this swallows the raw trigger — the frame/FX action fires
+      // instead, via the SAME seam its on-screen control uses (`applyFrame`
+      // / `e.setFxParam`), so its downstream `setParam`/`setBinding`/
+      // `clearBinding`/`fxParam` writes get recorded individually exactly
+      // like a button press, and the raw note-press itself is never
+      // recorded as a trigger event — no double-apply on replay (mirrors
+      // how `onFrameClick`/the FX checkbox already work; queueInput itself
+      // is the one thing intentionally NOT in that chain). An unmapped note
+      // falls through to `e.queueInput` unchanged — existing T1-T4-via-MIDI
+      // behavior is untouched.
+      queueInput: (event) => {
+        if (event.type !== 'trigger') {
+          e.queueInput(event)
+          return
+        }
+        const note = event.index
+        const frameLearn = frameNoteLearnRef.current
+        if (frameLearn) {
+          // DISTINCT-note guard, same pass-scoped dedup rule as the Controls
+          // 1-8 CC learn fix: a note already claimed EARLIER in this pass
+          // (below the armed slot) is a no-op rather than re-advancing.
+          const already = frameNoteBySlotRef.current.indexOf(note)
+          if (frameLearn.mode === 'sequential' && already >= 0 && already < frameLearn.slot - 1) return
+          claimNoteForFrame(note, frameLearn.slot)
+          if (frameLearn.mode === 'single' || frameLearn.slot >= MACRO_SLOT_COUNT) {
+            armFrameNoteLearn(null)
+          } else {
+            armFrameNoteLearn({ mode: 'sequential', slot: frameLearn.slot + 1 })
+          }
+          return
+        }
+        const fxLearn = fxNoteLearnRef.current
+        if (fxLearn) {
+          claimNoteForFx(note, fxLearn)
+          armFxNoteLearn(null)
+          return
+        }
+        const frameSlot = frameNoteBySlotRef.current.indexOf(note)
+        if (frameSlot >= 0) {
+          applyFrameRef.current(frameSlot, glideLatchedRef.current)
+          return
+        }
+        const fxPassId = Object.keys(fxNoteByPassIdRef.current).find((id) => fxNoteByPassIdRef.current[id] === note)
+        if (fxPassId) {
+          e.setFxParam(fxPassId, 'enabled', e.getFxParam(fxPassId, 'enabled') ? 0 : 1)
+          return
+        }
+        e.queueInput(event)
+      },
       setInputSignal: (name, value) => {
         e.setInputSignal(name, value)
         const m = /^midi\.cc\.(\d+)$/.exec(name)
@@ -1548,6 +1776,10 @@ export function App() {
     // CC->slot hardware mapping is scene-independent app state that must
     // survive even a cold scene-dropdown swap (docs/MACROS.md §1/§3).
     armMacroLearn(null)
+    // Same reasoning, same non-reset of the underlying tables, for the two
+    // note-learn flows.
+    armFrameNoteLearn(null)
+    armFxNoteLearn(null)
   }
 
   useEffect(() => {
@@ -2748,6 +2980,111 @@ export function App() {
                                   onClick={() => armMacroLearn({ mode: 'single', slot })}
                                 >
                                   Learn
+                                </button>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </div>
+                    )}
+                    {/* Note -> Frame (F1-F8) (task): a note fires the same
+                       `applyFrame` a frame button's own click does — see the
+                       midiSink.queueInput wrapper in attachLiveEngine. */}
+                    {midiSupported && (
+                      <div className="macro-controls">
+                        <div className="macro-controls-header">
+                          <h3>Frame notes</h3>
+                          <div className="macro-controls-header-buttons">
+                            <button
+                              type="button"
+                              className={`session-button${frameNoteLearn?.mode === 'sequential' ? ' midi-learning' : ''}`}
+                              onClick={() => {
+                                if (frameNoteLearn?.mode === 'sequential') {
+                                  armFrameNoteLearn(null)
+                                } else {
+                                  armFrameNoteLearn({ mode: 'sequential', slot: 1 })
+                                }
+                              }}
+                            >
+                              {frameNoteLearn?.mode === 'sequential' ? 'Stop mapping' : 'Map frames…'}
+                            </button>
+                            <button
+                              type="button"
+                              className="session-button"
+                              onClick={() => {
+                                // Ref first (review finding): the MIDI handler
+                                // reads the ref synchronously — clearing via
+                                // setState alone left a window where a note
+                                // still fired the cleared mapping.
+                                frameNoteBySlotRef.current = blankFrameNoteBySlot()
+                                setFrameNoteBySlot(frameNoteBySlotRef.current)
+                              }}
+                            >
+                              Clear mapping
+                            </button>
+                          </div>
+                        </div>
+                        {frameNoteLearn?.mode === 'sequential' && (
+                          <p className="session-status">
+                            press the pad/key/note for F{frameNoteLearn.slot} next — each new note claims the next
+                            slot (Esc to stop)
+                          </p>
+                        )}
+                        <ul className="macro-slots">
+                          {MACRO_SLOTS.map((slot) => {
+                            const note = frameNoteBySlot[slot - 1]
+                            const armedHere = frameNoteLearn !== null && frameNoteLearn.slot === slot
+                            return (
+                              <li key={slot} className={`macro-slot${armedHere ? ' macro-slot-armed' : ''}`}>
+                                <span className="macro-slot-num">F{slot}</span>
+                                <span className="macro-slot-cc">{note != null ? midiNoteName(note) : '—'}</span>
+                                <button
+                                  type="button"
+                                  className="macro-slot-learn"
+                                  onClick={() => armFrameNoteLearn({ mode: 'single', slot })}
+                                >
+                                  Learn
+                                </button>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </div>
+                    )}
+                    {/* Note -> FX toggle (task): a note toggles that pass's
+                       `enabled` flag via the same `engine.setFxParam` the FX
+                       tab's checkbox uses. Per-row learn (flat 6-pass list,
+                       no natural sweep order to make sequential worthwhile). */}
+                    {midiSupported && engine && (
+                      <div className="macro-controls">
+                        <div className="macro-controls-header">
+                          <h3>FX notes</h3>
+                          <button
+                            type="button"
+                            className="session-button"
+                            onClick={() => {
+                              // Ref first — see the Frame notes Clear button.
+                              fxNoteByPassIdRef.current = blankFxNoteByPassId()
+                              setFxNoteByPassId(fxNoteByPassIdRef.current)
+                            }}
+                          >
+                            Clear mapping
+                          </button>
+                        </div>
+                        <ul className="macro-slots">
+                          {engine.fx.passes.map((pass) => {
+                            const note = fxNoteByPassId[pass.meta.id] ?? null
+                            const armedHere = fxNoteLearn === pass.meta.id
+                            return (
+                              <li key={pass.meta.id} className={`macro-slot${armedHere ? ' macro-slot-armed' : ''}`}>
+                                <span className="macro-slot-num macro-slot-label">{pass.meta.name}</span>
+                                <span className="macro-slot-cc">{note != null ? midiNoteName(note) : '—'}</span>
+                                <button
+                                  type="button"
+                                  className={`macro-slot-learn${armedHere ? ' midi-learning' : ''}`}
+                                  onClick={() => armFxNoteLearn(armedHere ? null : pass.meta.id)}
+                                >
+                                  {armedHere ? 'Waiting…' : 'Learn'}
                                 </button>
                               </li>
                             )
