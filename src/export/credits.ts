@@ -55,7 +55,8 @@ const PADDING_FRAC = 0.035
 /** Line 1 font size, as a fraction of frame height. */
 const LINE1_SIZE_FRAC = 0.032
 /** Line 2 font size, as a fraction of frame height. */
-const LINE2_SIZE_FRAC = 0.024
+// Equal to line 1 (user request) — the lines differ by dimness, not size.
+const LINE2_SIZE_FRAC = 0.032
 /** Vertical gap between the two lines' baselines, as a multiple of line 2's
  * font size. */
 const LINE_GAP_FACTOR = 1.5

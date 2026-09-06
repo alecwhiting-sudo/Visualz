@@ -2715,6 +2715,7 @@ export function App() {
                 Credit line 1
                 <input
                   type="text"
+                  className="credits-input"
                   value={creditLine1}
                   disabled={replay !== null || exporting !== null}
                   onChange={(ev) => setCreditLine1(ev.target.value)}
@@ -2725,6 +2726,7 @@ export function App() {
                 Credit line 2
                 <input
                   type="text"
+                  className="credits-input"
                   value={creditLine2}
                   disabled={replay !== null || exporting !== null}
                   onChange={(ev) => setCreditLine2(ev.target.value)}

@@ -99,7 +99,7 @@ body {
 }
 
 .credits-overlay-line2 {
-  font-size: 2.4vh;
+  font-size: 3.2vh; /* equal to line 1 (user request) — dimness is the only difference */
   line-height: 1.2;
 }
 
@@ -231,6 +231,29 @@ body {
 .help-popover-body li {
   margin-bottom: 6px;
 }
+/* Credit line 1/2 inputs (SESSION tab): app-themed instead of browser-default
+   white, sized to match their labels, with a one-character gap after the
+   label (user request). */
+.credits-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 0.6em;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-control);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.credits-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.credits-input:disabled {
+  opacity: 0.4;
+}
+
 .help-popover-body code {
   background: rgba(255, 255, 255, 0.08);
   padding: 1px 4px;
