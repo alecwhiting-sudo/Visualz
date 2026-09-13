@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Analytics } from '@vercel/analytics/react'
 import { Engine } from '../engine/engine'
 import { SCENES } from '../scenes/registry'
 import { attachKeyboard } from '../mapping/keyboard'
@@ -637,6 +638,12 @@ function exitFullscreenIfActive(): Promise<void> {
   }
   return Promise.resolve()
 }
+
+// Vercel Analytics: ships on the production build (Vercel, deployed from
+// `main`) only. The GitHub Pages "audition" deploy
+// (.github/workflows/pages.yml) sets VITE_DISABLE_ANALYTICS=true at build
+// time to opt out.
+const ANALYTICS_ENABLED = import.meta.env.VITE_DISABLE_ANALYTICS !== 'true'
 
 export function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -2385,6 +2392,7 @@ export function App() {
 
   return (
     <div className={`app app-${viewMode}`}>
+      {ANALYTICS_ENABLED && <Analytics />}
       <div className="stage" ref={stageRef}>
         <canvas ref={canvasRef} />
         {/* Replay preview parity (best-effort, decided): the same two credit
