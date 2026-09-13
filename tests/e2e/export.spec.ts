@@ -177,12 +177,12 @@ test('explicit h264 request on a non-supporting browser throws a clear error', a
   expect(message!.toLowerCase()).toMatch(/h264|h\.264|avc/)
 })
 
-test('credits overlay: lit bottom-right pixels near the end, none at an early frame', async ({ page }) => {
+test('credits overlay: lit upper-third pixels near the end, none at an early frame', async ({ page }) => {
   // Frame-level readback of the actual MUXED/encoded video isn't reachable
   // from Playwright here (no in-suite VideoDecoder verification, per the
   // existing "decoded a real export with ffmpeg" note above) — so this
   // asserts directly on `drawCredits`'s pure canvas-2D output via the
-  // `sampleCreditsCorner` test hook, at the exact alpha `creditsAlpha` would
+  // `sampleCreditsRegion` test hook, at the exact alpha `creditsAlpha` would
   // compute for an early frame vs the last frame of a short (3s) export —
   // shorter than the default 5s window, exercising the clamp-to-0 case too.
   await boot(page, 42)
@@ -198,8 +198,8 @@ test('credits overlay: lit bottom-right pixels near the end, none at an early fr
     ({ width, height }) => {
       const regionFrac = 0.2
       return [
-        window.__viz!.sampleCreditsCorner(width, height, 'Alec Whiting', 'divurj.com', 0, regionFrac),
-        window.__viz!.sampleCreditsCorner(width, height, 'Alec Whiting', 'divurj.com', 1, regionFrac),
+        window.__viz!.sampleCreditsRegion(width, height, 'Alec Whiting', 'divurj.com', 0, regionFrac),
+        window.__viz!.sampleCreditsRegion(width, height, 'Alec Whiting', 'divurj.com', 1, regionFrac),
       ]
     },
     { width, height },

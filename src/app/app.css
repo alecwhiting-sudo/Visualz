@@ -77,16 +77,19 @@ body {
 /* Replay preview parity for the automatic credits overlay (approximate —
    the export's canvas-2D draw is the source of truth). Percent-based sizing
    mirrors export/credits.ts's frame-height fractions closely enough for a
-   best-effort live preview. */
+   best-effort live preview. top: 33.34% + translateY(-100%) puts the block's
+   bottom edge at the upper-third boundary, matching drawCredits' line2Y
+   anchor (UPPER_THIRD_Y_FRAC). */
 .credits-overlay {
   position: absolute;
-  right: 3.5%;
-  bottom: 3.5%;
+  left: 50%;
+  top: 33.34%;
+  transform: translate(-50%, -100%);
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
   pointer-events: none;
-  text-align: right;
+  text-align: center;
   font-family: system-ui, -apple-system, Helvetica, Arial, sans-serif;
   font-weight: 400;
   color: #fff;

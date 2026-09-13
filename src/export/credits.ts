@@ -50,8 +50,9 @@ export function creditsAlpha(timeSec: number, durationSec: number, opts: Credits
 const LINE2_ALPHA_FACTOR = 0.8
 
 const FONT_STACK = "system-ui, -apple-system, Helvetica, Arial, sans-serif"
-/** Padding from the bottom-right corner, as a fraction of frame height. */
-const PADDING_FRAC = 0.035
+/** Side margin used for the overflow-guard `maxWidth`, as a fraction of
+ * frame width. */
+const SIDE_MARGIN_FRAC = 0.08
 /** Line 1 font size, as a fraction of frame height. */
 const LINE1_SIZE_FRAC = 0.032
 /** Line 2 font size, as a fraction of frame height. */
@@ -60,12 +61,18 @@ const LINE2_SIZE_FRAC = 0.032
 /** Vertical gap between the two lines' baselines, as a multiple of line 2's
  * font size. */
 const LINE_GAP_FACTOR = 1.5
+/** Line 2's baseline sits this fraction of the way down the frame — the
+ * boundary of the upper third, so both lines render inside it. Exported so
+ * the credits-region test probe (`src/testing/hooks.ts`) can target the same
+ * anchor without duplicating the constant. */
+export const UPPER_THIRD_Y_FRAC = 1 / 3
 
 /**
- * Draws the two credit lines bottom-right onto `ctx`, at `alpha` (the overall
- * fade-in progress from `creditsAlpha`). White text with a dark shadow for
- * legibility on bright ink, right-aligned, normal weight. A no-op for a blank
- * (post-trim) line, and entirely a no-op when `alpha <= 0`.
+ * Draws the two credit lines centered in the upper third of `ctx`, at
+ * `alpha` (the overall fade-in progress from `creditsAlpha`). White text
+ * with a dark shadow for legibility on bright ink, center-aligned, normal
+ * weight. A no-op for a blank (post-trim) line, and entirely a no-op when
+ * `alpha <= 0`.
  */
 export function drawCredits(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -80,22 +87,21 @@ export function drawCredits(
   const l2 = line2.trim()
   if (!l1 && !l2) return
 
-  const padding = height * PADDING_FRAC
   const size1 = height * LINE1_SIZE_FRAC
   const size2 = height * LINE2_SIZE_FRAC
-  const x = width - padding
+  const x = width / 2
   // Overflow guard (review finding): fillText's maxWidth condenses a too-long
-  // line to fit between the left frame edge (mirror padding) and the anchor,
-  // instead of silently clipping off-frame at narrow aspects (9:16).
-  const maxWidth = width - padding * 2
+  // line to fit within the side margins, instead of silently clipping
+  // off-frame at narrow aspects (9:16).
+  const maxWidth = width * (1 - 2 * SIDE_MARGIN_FRAC)
 
   ctx.save()
-  ctx.textAlign = 'right'
+  ctx.textAlign = 'center'
   ctx.textBaseline = 'alphabetic'
   ctx.shadowColor = 'rgba(0, 0, 0, 0.65)'
 
-  // Bottom line (line2) anchors to the padding; line1 sits above it.
-  const line2Y = height - padding
+  // Bottom line (line2) anchors to the upper-third boundary; line1 sits above it.
+  const line2Y = height * UPPER_THIRD_Y_FRAC
   const line1Y = line2Y - size2 * LINE_GAP_FACTOR
 
   if (l1) {
