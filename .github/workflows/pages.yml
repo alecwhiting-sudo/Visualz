@@ -41,6 +41,9 @@ jobs:
       - run: npm run build
         env:
           VIZ_BASE: /Visualz/
+          # Vercel Analytics (src/app/App.tsx) is production-only — the
+          # audition deploy opts out so it never reports dev/demo traffic.
+          VITE_DISABLE_ANALYTICS: 'true'
       - uses: actions/configure-pages@v5
         with:
           # Attempts to enable Pages (source: GitHub Actions) automatically;
