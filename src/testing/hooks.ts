@@ -6,7 +6,7 @@ import { pixelHash, bandCoverage } from '../gpu/readback'
 import { exportSession } from '../export/client'
 import type { ExportVideoOpts } from '../export/render'
 import type { ExportAudio } from '../export/encode'
-import { drawCredits } from '../export/credits'
+import { drawCredits, UPPER_THIRD_Y_FRAC } from '../export/credits'
 import { analyzeAudio } from '../audio/analysis'
 import { serializeTimeline } from '../audio/timeline'
 import { mulberry32 } from '../core/prng'
@@ -107,13 +107,13 @@ export interface VizTestApi {
   /**
    * Credits-overlay probe (export/credits.ts). Draws `drawCredits` onto a
    * fresh `width`x`height` OffscreenCanvas at the given `alpha` and returns
-   * the brightest pixel (max of r/g/b, 0-255) found in the bottom-right
-   * corner region (last `regionFrac` of both width and height) — used where
-   * reading back the actual encoded video frame isn't reachable from
-   * Playwright, so the spec instead asserts on this pure canvas-2D draw
-   * directly (documented in tests/e2e/export.spec.ts).
+   * the brightest pixel (max of r/g/b, 0-255) found in a `regionFrac`-sized
+   * region centered on the upper-third anchor (width/2, height *
+   * UPPER_THIRD_Y_FRAC) — used where reading back the actual encoded video
+   * frame isn't reachable from Playwright, so the spec instead asserts on
+   * this pure canvas-2D draw directly (documented in tests/e2e/export.spec.ts).
    */
-  sampleCreditsCorner(
+  sampleCreditsRegion(
     width: number,
     height: number,
     line1: string,
@@ -347,14 +347,21 @@ export function bootTestMode(root: HTMLElement): void {
         events: [],
       }
     },
-    sampleCreditsCorner: (width, height, line1, line2, alpha, regionFrac) => {
+    sampleCreditsRegion: (width, height, line1, line2, alpha, regionFrac) => {
       const canvas = new OffscreenCanvas(width, height)
       const ctx = canvas.getContext('2d')
       if (!ctx) throw new Error('Could not get 2D context for credits probe canvas')
       drawCredits(ctx, width, height, line1, line2, alpha)
       const rw = Math.max(1, Math.round(width * regionFrac))
       const rh = Math.max(1, Math.round(height * regionFrac))
-      const { data } = ctx.getImageData(width - rw, height - rh, rw, rh)
+      // Centered on drawCredits' anchor (width/2, height*UPPER_THIRD_Y_FRAC)
+      // rather than a fixed corner, so this tracks wherever the credits are
+      // actually drawn.
+      const cx = width / 2
+      const cy = height * UPPER_THIRD_Y_FRAC
+      const sx = Math.max(0, Math.min(width - rw, Math.round(cx - rw / 2)))
+      const sy = Math.max(0, Math.min(height - rh, Math.round(cy - rh / 2)))
+      const { data } = ctx.getImageData(sx, sy, rw, rh)
       let maxChannel = 0
       for (let i = 0; i < data.length; i += 4) {
         maxChannel = Math.max(maxChannel, data[i], data[i + 1], data[i + 2])
